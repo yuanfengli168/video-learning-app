@@ -56,7 +56,7 @@ pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
 
-> **Current status:** 198 tests passing, 96% backend coverage.
+> **Current status:** 206 tests passing, 96% backend coverage.
 
 ### Sidebar Search
 
@@ -115,7 +115,7 @@ video-learning-app/
 │       ├── login.html       # AuthKit login page
 │       ├── error.html       # Error page
 │       └── redirect.html    # Redirect helper
-├── tests/                   # 198 pytest tests (96% coverage)
+├── tests/                   # 206 pytest tests (96% coverage)
 │   ├── conftest.py          # Fixtures: test DB, client
 │   ├── test_config.py
 │   ├── test_database.py
