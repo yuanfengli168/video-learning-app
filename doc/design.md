@@ -7,10 +7,15 @@ The application is designed to scale from a local single-user environment (MVP1)
 
 ### MVP1 (Local Foundation)
 *   **API:** FastAPI running locally.
-*   **Database:** SQLite (using SQLAlchemy ORM) for easy local setup.
-*   **Storage:** Local file system for video uploads and generated assets.
+*   **Frontend:** Jinja2 server-rendered templates + HTMX for partial updates (SPA-like feel without a JS framework). Tailwind CSS for styling with dark/light theme support.
+*   **Database:** SQLite (using SQLAlchemy ORM) for easy local setup. Schema managed via `Base.metadata.create_all()` (Alembic deferred to MVP2).
+*   **Storage:** Local file system for video uploads (`uploads/`, gitignored) and generated assets (`storage/`, gitignored).
 *   **Processing:** Synchronous execution for transcription and LLM generation (acceptable for single-user local use).
-*   **Authentication:** Integration with [yuanfengli168/authkit](https://github.com/yuanfengli168/authkit) for local JWT-based authentication.
+*   **Authentication:** [yuanfengli168/authkit](https://github.com/yuanfengli168/authkit) on the frontend (Firebase Auth UI — Google + email/password). Backend verifies Firebase ID tokens via Firebase Admin SDK as JWT middleware.
+*   **Transcription:** Faster-Whisper with model selectable on the web UI (`base`, `small`, `medium`). Models auto-download on first use.
+*   **LLM:** Ollama running locally at `http://localhost:11434` with the `glm-5.2:cloud` model.
+*   **Testing:** pytest + pytest-asyncio + httpx for API tests. Whisper and Ollama are mocked in unit tests; integration tests run against real services (marked as slow). Target ≥90% coverage on backend logic.
+*   **Dependency Management:** `requirements.txt` (no Poetry for MVP1).
 
 ### MVP2 (Cloud Scalable)
 *   **Deployment:** Docker & Kubernetes (K8s).
