@@ -201,3 +201,33 @@ def test_permissions_policy_disables_dangerous_features(client: TestClient):
     # Every dangerous feature should be empty parens (i.e. disabled)
     for feature in ("camera", "microphone", "geolocation", "payment", "usb"):
         assert f"{feature}=()" in pp, f"Permissions-Policy should disable {feature}"
+
+
+# ── CSP: Google Sign-In must not be blocked ──────────────────────────────────
+# Symptom: clicking "Continue with Google" caused Firebase to throw
+# `auth/internal-error` because the browser blocked
+# `https://apis.google.com/js/api.js` (and the Google OAuth popup frame)
+# under our previous CSP. The script-src/frame-src/child-src must
+# whitelist the Google auth domains.
+
+
+def test_csp_allows_google_signin_script(client: TestClient):
+    """script-src must include apis.google.com so the Google Sign-In
+    SDK can load. Removing it makes the popup return auth/internal-error."""
+    response = client.get("/login")
+    csp = response.headers["content-security-policy"]
+    assert "https://apis.google.com" in csp, (
+        f"script-src/connect-src must include https://apis.google.com for "
+        f"Google Sign-In. Current CSP:\n{csp}"
+    )
+
+
+def test_csp_allows_google_oauth_popup_frames(client: TestClient):
+    """frame-src/child-src must include accounts.google.com so the OAuth
+    popup can render. Without this, Google Sign-In silently fails."""
+    response = client.get("/login")
+    csp = response.headers["content-security-policy"]
+    assert "https://accounts.google.com" in csp, (
+        f"frame-src/child-src must include https://accounts.google.com for "
+        f"the Google OAuth popup. Current CSP:\n{csp}"
+    )

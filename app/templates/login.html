@@ -138,6 +138,78 @@
             window.location.href = '/';
         }
     });
+
+    // ── Friendly auth error handler ──
+    //
+    // Firebase errors are cryptic ("auth/internal-error") and the SDK
+    // appends them as raw text into the auth-anchor. We watch for new
+    // text nodes matching `Firebase: Error (...)` and rewrite them
+    // into actionable messages. The MutationObserver covers both
+    // Google popup and email/password failure paths because both use
+    // the same anchor element.
+    const ERROR_TRANSLATIONS = {
+        'auth/internal-error':
+            'Sign-in failed. If you used Google, check that popups are allowed for localhost. If you used email/password, ask the admin to enable Email/Password in Firebase Console → Authentication → Sign-in method.',
+        'auth/popup-blocked':
+            'Your browser blocked the Google sign-in popup. Please allow popups for localhost and try again.',
+        'auth/popup-closed-by-user':
+            'Google sign-in was cancelled. Please try again.',
+        'auth/network-request-failed':
+            'Network error during sign-in. Check your connection and try again.',
+        'auth/invalid-email':
+            'That email address is not valid.',
+        'auth/missing-password':
+            'Please enter a password.',
+        'auth/weak-password':
+            'Password must be at least 6 characters.',
+        'auth/invalid-credential':
+            'Wrong email or password. Please try again.',
+        'auth/user-not-found':
+            'No account exists for that email. Try Sign Up instead.',
+        'auth/email-already-in-use':
+            'That email is already registered. Try Sign In instead.',
+        'auth/too-many-requests':
+            'Too many failed attempts. Please wait a moment and try again.',
+        'auth/cancelled-popup-request':
+            'Sign-in was interrupted. Please try again.',
+        'auth/unauthorized-domain':
+            'This domain is not authorized for sign-in. Add localhost to the authorized domains in Firebase Console → Authentication → Settings.',
+    };
+
+    function translateAuthErrors(root) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        const toFix = [];
+        let node;
+        while ((node = walker.nextNode())) {
+            const m = node.nodeValue && node.nodeValue.match(/Firebase: Error \((auth\/[a-z0-9-]+)\)/);
+            if (m) toFix.push({node, code: m[1]});
+        }
+        for (const {node, code} of toFix) {
+            node.nodeValue = ERROR_TRANSLATIONS[code] || `Sign-in failed (${code}). Please try again or contact support.`;
+        }
+    }
+
+    const errorObserver = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+            for (const n of m.addedNodes) {
+                if (n.nodeType === Node.TEXT_NODE) {
+                    translateAuthErrors(n.parentNode || document.body);
+                } else if (n.nodeType === Node.ELEMENT_NODE) {
+                    translateAuthErrors(n);
+                }
+            }
+            // Also re-check the parent — some SDKs update an existing
+            // text node's value rather than inserting a new one.
+            if (m.type === 'characterData' && m.target.parentNode) {
+                translateAuthErrors(m.target.parentNode);
+            }
+        }
+    });
+    errorObserver.observe(document.getElementById('auth-anchor'), {
+        childList: true,
+        subtree: true,
+        characterData: true,
+    });
 </script>
 {% endblock %}
 {% endblock %}
