@@ -1,0 +1,213 @@
+# Deployment Guide
+
+This guide covers deploying the Video Learning App to free-tier cloud services.
+
+## Architecture Overview
+
+```
+User Browser
+    │
+    ├──> Render.com (FastAPI backend + Jinja2 templates)
+    │       ├──> Neon/Supabase (PostgreSQL database)
+    │       ├──> Ollama (on Oracle Cloud VM or tunnel)
+    │       └──> Firebase Auth (Google + Email/Password)
+    │
+    └──> Firebase Auth (via AuthKit in browser)
+```
+
+**Key point:** Our frontend is Jinja2 templates rendered by the backend — there is no separate frontend to deploy. Deploying the backend = deploying the whole app.
+
+---
+
+## Prerequisites Checklist
+
+- [ ] Firebase project created with Google + Email auth enabled
+- [ ] `.env` filled with real Firebase config
+- [ ] `firebase-service-account.json` downloaded and placed in project root
+- [ ] GitHub repo pushed and up to date
+- [ ] Ollama running somewhere accessible (local tunnel or remote VM)
+
+---
+
+## Step 1: Remote Database (Neon — Free PostgreSQL)
+
+SQLite gets wiped on every Render deploy (ephemeral filesystem). We need a remote PostgreSQL.
+
+1. Go to [neon.tech](https://neon.tech) → Sign up (free, GitHub login)
+2. Create a new project → copy the connection string
+3. It looks like: `postgresql://user:password@ep-xxx.region.aws.neon.tech/dbname?sslmode=require`
+4. Save this — you'll set it as `DATABASE_URL` on Render
+
+> **Alternative:** [Supabase](https://supabase.com) also offers free PostgreSQL (500MB).
+
+---
+
+## Step 2: Deploy Backend to Render.com
+
+1. Go to [render.com](https://render.com) → Sign in
+2. **New** → **Web Service**
+3. Connect your GitHub repo: `yuanfengli168/video-learning-app`
+4. Configure:
+   - **Name:** `video-learning-app` (or any name)
+   - **Region:** Choose closest to you
+   - **Branch:** `main`
+   - **Runtime:** Python 3
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - **Plan:** Free
+5. Add Environment Variables (see below)
+6. Click **Create Web Service**
+7. Wait for build + deploy (~2-3 min first time)
+8. Your app will be at `https://video-learning-app.onrender.com`
+
+### Environment Variables for Render
+
+| Key | Value | Notes |
+|-----|-------|-------|
+| `APP_NAME` | `Video Learning App` | |
+| `DEBUG` | `false` | |
+| `DATABASE_URL` | `postgresql://...` | From Neon (Step 1) |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Change to remote URL (Step 3) |
+| `OLLAMA_MODEL` | `glm-5.2:cloud` | |
+| `FIREBASE_API_KEY` | `AIzaSy...` | From Firebase Console |
+| `FIREBASE_AUTH_DOMAIN` | `your-project.firebaseapp.com` | |
+| `FIREBASE_PROJECT_ID` | `your-project-id` | |
+| `FIREBASE_STORAGE_BUCKET` | `your-project.appspot.com` | |
+| `FIREBASE_MESSAGING_SENDER_ID` | `123456789012` | |
+| `FIREBASE_APP_ID` | `1:123456789012:web:abcdef` | |
+| `FIREBASE_SERVICE_ACCOUNT_KEY_PATH` | `/etc/secrets/firebase-service-account.json` | See Step 4 below |
+| `UPLOAD_DIR` | `/tmp/uploads` | Render's writable temp directory |
+| `STORAGE_DIR` | `/tmp/storage` | Render's writable temp directory |
+
+> ⚠️ **Render free tier:** Sleeps after 15 min idle, ~30s to wake up. Uploaded video files in `/tmp` will be lost on sleep/redeploy. For persistent file storage, use S3/MinIO in MVP2.
+
+---
+
+## Step 3: Host Ollama Remotely
+
+Ollama can't run on Render's free tier (needs too much RAM). Options:
+
+### Option A: Local Tunnel (Easiest for testing)
+```bash
+# On your Mac:
+ollama serve                          # Start Ollama
+npx localtunnel --port 11434          # Get a public URL like https://xxx.loca.lt
+# Or use cloudflare tunnel:
+cloudflared tunnel --url http://localhost:11434
+```
+Set `OLLAMA_BASE_URL` on Render to the tunnel URL.
+
+> ⚠️ Tunnel must be running whenever you want to use the app. Not suitable for production.
+
+### Option B: Oracle Cloud Free Tier (Always-on, recommended)
+Oracle Cloud offers **always-free** ARM VMs (4 cores, 24GB RAM) — perfect for Ollama.
+
+1. Sign up at [oracle.com/cloud/free](https://www.oracle.com/cloud/free/)
+2. Create a VM instance (Ampere A1, Ubuntu 22.04)
+3. SSH into the VM and install Ollama:
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull glm-5.2:cloud
+ollama serve  # runs on port 11434
+```
+4. Open port 11434 in Oracle's security list / firewall
+5. Set `OLLAMA_BASE_URL` on Render to `http://YOUR_VM_IP:11434`
+
+---
+
+## Step 4: Firebase Service Account Key on Render
+
+The backend needs the Firebase service account JSON to verify tokens.
+
+1. You have `firebase-service-account.json` locally (from Firebase setup)
+2. On Render, go to your web service → **Environment** tab
+3. Add a **Secret File**:
+   - **Filename:** `/etc/secrets/firebase-service-account.json`
+   - **Content:** paste the entire JSON content of your service account key
+4. Set environment variable:
+   - `FIREBASE_SERVICE_ACCOUNT_KEY_PATH` = `/etc/secrets/firebase-service-account.json`
+
+---
+
+## Step 5: Firebase Authorized Domains
+
+After deploying, add your Render domain to Firebase:
+
+1. Go to [Firebase Console](https://console.firebase.google.com/) → your project
+2. **Authentication** → **Settings** → **Authorized domains**
+3. Click **Add domain**
+4. Add: `video-learning-app.onrender.com` (your Render URL)
+5. `localhost` should already be there for local dev
+
+---
+
+## Step 6: Test the Deployment
+
+1. Visit `https://your-app.onrender.com` — should show the dashboard
+2. Click **Sign in** — should show AuthKit login with Google + Email
+3. Sign in — should redirect back to dashboard
+4. Create a course → add a section → upload a video
+5. Transcribe → Generate materials → try chat
+
+> ⚠️ First visit may take ~30s (free tier wake-up). Subsequent requests are fast.
+
+---
+
+## Troubleshooting
+
+### App won't start
+- Check Render logs: Dashboard → your service → **Logs** tab
+- Common issue: missing environment variable
+
+### Auth not working
+- Verify Firebase authorized domains include your Render URL
+- Check browser console for Firebase errors
+- Ensure `FIREBASE_*` env vars are correct
+
+### Transcription fails
+- Whisper `base` model needs ~1GB RAM; Render free tier has 512MB
+- Fix: add `tiny` to available models, or use `tiny` as default
+- Or: run transcription locally only
+
+### Ollama connection failed
+- Verify `OLLAMA_BASE_URL` is correct and accessible
+- If using tunnel: ensure the tunnel is running
+- If using Oracle VM: verify port 11434 is open in firewall
+
+### Database errors
+- Verify `DATABASE_URL` is the Neon/Supabase connection string
+- Ensure it includes `?sslmode=require` for Neon
+
+### Uploaded files disappear
+- Render free tier has ephemeral filesystem — files in `/tmp` don't persist across deploys
+- For MVP1: acceptable (re-upload after deploys)
+- For MVP2: use S3/MinIO for persistent storage
+
+---
+
+## Cost Summary (All Free Tier)
+
+| Service | Free Tier | Limits |
+|---------|-----------|--------|
+| Render.com | 1 web service | 512MB RAM, sleeps after 15 min |
+| Neon (PostgreSQL) | 1 project | 0.5GB storage, 1 compute |
+| Oracle Cloud (Ollama VM) | Always-free ARM | 4 cores, 24GB RAM |
+| Firebase Auth | 50k auth requests/month | More than enough |
+| **Total cost** | **$0** | |
+
+---
+
+## Local Testing (Alternative)
+
+If remote deployment is too complex for now, you can test everything locally:
+
+```bash
+# Terminal 1: Start Ollama
+ollama serve
+
+# Terminal 2: Start the app
+source venv/bin/activate
+uvicorn app.main:app --reload
+```
+
+Visit `http://localhost:8000` — everything works on your machine without any deployment.
