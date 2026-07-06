@@ -33,8 +33,11 @@
         <!-- Logo -->
         <div class="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
             <a href="/" class="text-xl font-bold text-indigo-600 dark:text-indigo-400">📚 {{ app_name }}</a>
-            <button onclick="toggleSidebar()" class="md:hidden text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            <button id="sidebar-toggle-btn" onclick="toggleSidebar()" aria-label="Toggle sidebar" title="Toggle sidebar" class="md:hidden text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+                <!-- Hamburger icon (☰) — shown when sidebar is CLOSED -->
+                <svg id="sidebar-icon-hamburger" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                <!-- Close icon (✕) — shown when sidebar is OPEN -->
+                <svg id="sidebar-icon-close" class="w-6 h-6 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
         <!-- Search -->
@@ -138,8 +141,18 @@
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebar-overlay');
+            const hamburger = document.getElementById('sidebar-icon-hamburger');
+            const closeIcon = document.getElementById('sidebar-icon-close');
             sidebar.classList.toggle('-translate-x-full');
             overlay.classList.toggle('hidden');
+            // Toggle the icon: hamburger (☰) when closed, close (✕) when open.
+            // The sidebar starts in the "open" state on mobile (because the
+            // toggle flips -translate-x-full) — so we toggle both icons and
+            // mirror the sidebar's actual visibility.
+            if (hamburger && closeIcon) {
+                hamburger.classList.toggle('hidden');
+                closeIcon.classList.toggle('hidden');
+            }
         }
         async function logout() {
             // Clear the backend session cookie

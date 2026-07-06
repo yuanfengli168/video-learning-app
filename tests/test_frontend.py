@@ -359,3 +359,35 @@ def test_base_template_defines_escapeHtml_for_search_highlight(client: TestClien
     # transitively via highlightMatch which only runs at call time).
     # Practically: the function definition must exist in the page.
     assert escape_pos > 0, "escapeHtml must be defined in base.html"
+
+
+def test_sidebar_toggle_button_has_both_icons(client: TestClient):
+    """The mobile sidebar toggle button must have BOTH the hamburger
+    icon (shown when closed) and the close icon (shown when open),
+    so the user always sees an appropriate icon for the current state.
+    """
+    response = client.get("/")
+    assert response.status_code == 200
+    # Hamburger (3 horizontal lines) — should be visible by default
+    assert 'id="sidebar-icon-hamburger"' in response.text
+    assert "M4 6h16M4 12h16M4 18h16" in response.text
+    # Close (X) — should start hidden
+    assert 'id="sidebar-icon-close"' in response.text
+    assert "M6 18L18 6M6 6l12 12" in response.text
+    # The wrapper button has a label for accessibility
+    assert 'id="sidebar-toggle-btn"' in response.text
+    assert 'aria-label="Toggle sidebar"' in response.text
+
+
+def test_toggle_sidebar_function_toggles_both_icons(client: TestClient):
+    """toggleSidebar() should toggle the visibility of both the
+    hamburger and the close icons so the user sees the right one."""
+    response = client.get("/")
+    assert response.status_code == 200
+    # Find the toggleSidebar function and verify it touches both icons
+    start = response.text.find("function toggleSidebar")
+    end = response.text.find("function logout", start) if start > 0 else -1
+    body = response.text[start:end] if end > 0 else ""
+    assert "sidebar-icon-hamburger" in body
+    assert "sidebar-icon-close" in body
+    assert body.count(".classList.toggle('hidden'") >= 3  # overlay + 2 icons
