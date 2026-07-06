@@ -16,6 +16,11 @@ build/
 .env.local
 .env.*.local
 
+# Firebase service account key (NEVER commit this!)
+firebase-service-account.json
+*-firebase-*.json
+service-account*.json
+
 # Uploads (user video files — do not commit)
 uploads/
 
