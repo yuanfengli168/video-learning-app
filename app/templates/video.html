@@ -558,17 +558,19 @@ function renderMindmap(markdown) {
                 } catch (e) {
                     fitMindmapSVG(container);
                 }
+                // Attach both click AND drag/pan/scroll-zoom so the user
+                // can pan around the inline mindmap the same way they can
+                // in fullscreen. Previously only fullscreen had pan.
+                attachMindmapInteraction(container);
                 attachMindmapClickHandler(container);
             }));
-            // Retry: Markmap sometimes paints nodes after first frame
+            // Markmap sometimes paints nodes after the first frame, so
+            // retry the click handler attachment a couple of times.
             setTimeout(() => attachMindmapClickHandler(container), 500);
             setTimeout(() => attachMindmapClickHandler(container), 1500);
-            // Final safety net: re-fit after a short delay in case the
-            // first fit was computed against stale dimensions.
-            setTimeout(() => {
-                try { mm.fit(); } catch (e) { fitMindmapSVG(container); }
-            }, 300);
-
+            // DO NOT call mm.fit() again here — doing so would re-center
+            // the mindmap and blow away any pan/zoom the user did in the
+            // first 300ms. The initial fit is already done above.
             return;
         } catch (e) {
             console.error('Direct Markmap render failed, falling back to autoloader:', e);
@@ -780,30 +782,35 @@ function mindmapResetView() {
     fitMindmapSVG(container);
 }
 
-// Attach drag-to-pan and scroll-to-zoom to a mindmap container
+// Attach drag-to-pan and scroll-to-zoom to a mindmap container.
+// Each container gets its OWN drag state (stored on the DOM node via
+// a .__mindmapDrag property) so the inline and fullscreen views can
+// be interacted with independently without interfering with each other.
 function attachMindmapInteraction(container) {
     if (!container) return;
     const svg = container.querySelector('svg.markmap');
     if (!svg) return;
-
-    let isDragging = false;
-    let startX, startY;
+    // Don't double-attach if this container already has the interaction
+    if (container.__mindmapDrag) return;
+    container.__mindmapDrag = {isDragging: false, startX: 0, startY: 0};
 
     // Drag to pan
     container.addEventListener('mousedown', (e) => {
         if (e.target.closest('button')) return;  // Don't drag when clicking buttons
-        isDragging = true;
-        startX = e.clientX;
-        startY = e.clientY;
+        const state = container.__mindmapDrag;
+        state.isDragging = true;
+        state.startX = e.clientX;
+        state.startY = e.clientY;
         container.style.cursor = 'grabbing';
     });
 
     document.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-        startX = e.clientX;
-        startY = e.clientY;
+        const state = container.__mindmapDrag;
+        if (!state || !state.isDragging) return;
+        const dx = e.clientX - state.startX;
+        const dy = e.clientY - state.startY;
+        state.startX = e.clientX;
+        state.startY = e.clientY;
         const groups = svg.querySelectorAll(':scope > g');
         groups.forEach(g => {
             const t = g.getAttribute('transform') || '';
@@ -818,7 +825,8 @@ function attachMindmapInteraction(container) {
     });
 
     document.addEventListener('mouseup', () => {
-        isDragging = false;
+        const state = container.__mindmapDrag;
+        if (state) state.isDragging = false;
         container.style.cursor = 'grab';
     });
 
@@ -847,9 +855,11 @@ function attachMindmapInteraction(container) {
         });
     }, { passive: false });
 
-    // Ctrl+0 to reset
+    // Ctrl+0 to reset — only when this container's mindmap is focused
+    // (so we don't reset fullscreen when the user is in the inline tab
+    // or vice versa).
     document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === '0') {
+        if (e.ctrlKey && e.key === '0' && container.contains(document.activeElement)) {
             e.preventDefault();
             fitMindmapSVG(container);
         }
@@ -1183,19 +1193,27 @@ loadTranscript();
 // renders instantly when the user clicks it (saves ~1-2s CDN fetch time).
 preloadMarkmapScript();
 
-// Re-fit the inline mindmap when the window is resized (Tailwind
-// breakpoints change the layout, e.g., lg -> md, which can change
-// the container's width).
+// Re-fit the inline mindmap when the window is resized — but ONLY
+// when the container's actual pixel size changed. Otherwise scrolling
+// or scrollbar appearance triggers the listener and blows away the
+// user's pan/zoom.
+let _lastInlineSize = {w: 0, h: 0};
 let _resizeTimer;
 window.addEventListener('resize', () => {
     clearTimeout(_resizeTimer);
     _resizeTimer = setTimeout(() => {
         if (mindmapInstances['inline']) {
             const container = document.getElementById('mindmap-container');
-            if (container) {
-                try { mindmapInstances['inline'].fit(); }
-                catch (e) { fitMindmapSVG(container); }
-            }
+            if (!container) return;
+            const w = container.offsetWidth;
+            const h = container.offsetHeight;
+            // Skip the re-fit if the container size hasn't actually
+            // changed (e.g. mobile address bar show/hide, scrollbar
+            // appearing/disappearing).
+            if (w === _lastInlineSize.w && h === _lastInlineSize.h) return;
+            _lastInlineSize = {w, h};
+            try { mindmapInstances['inline'].fit(); }
+            catch (e) { fitMindmapSVG(container); }
         }
     }, 150);
 });

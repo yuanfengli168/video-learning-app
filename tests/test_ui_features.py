@@ -604,3 +604,180 @@ def test_mindmap_refits_on_window_resize(client: TestClient):
     assert response.status_code == 200
     # The page should have a window resize listener that re-fits the mindmap
     assert "addEventListener('resize'" in response.text
+
+
+def test_inline_mindmap_attach_interaction_for_pan_and_zoom(client: TestClient):
+    """The inline mindmap tab must attach the drag/pan/scroll-zoom
+    interaction (not just the click handler). Previously only the
+    fullscreen view had pan, so users couldn't drag the inline mindmap
+    to see off-screen nodes."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Find the renderMindmap function body and verify it calls
+    # attachMindmapInteraction (not just attachMindmapClickHandler).
+    import re
+    m = re.search(
+        r"function renderMindmap\(markdown\).*?\n(.*?)\nfunction fitMindmapSVG",
+        response.text,
+        re.DOTALL,
+    )
+    assert m, "renderMindmap function not found"
+    body = m.group(1)
+    # The inline render path must call attachMindmapInteraction so the
+    # user can pan and zoom the inline mindmap (previously only the
+    # fullscreen view had this).
+    assert "attachMindmapInteraction(container)" in body, (
+        "renderMindmap should call attachMindmapInteraction for the "
+        "inline mindmap so users can pan/zoom it"
+    )
+
+
+def test_render_mindmap_does_not_refit_after_300ms(client: TestClient):
+    """renderMindmap used to call mm.fit() again at 300ms as a safety
+    net, which would re-center the mindmap and blow away any pan/zoom
+    the user did in the first 300ms. That safety net has been removed."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    import re
+    m = re.search(
+        r"function renderMindmap\(markdown\).*?\n(.*?)\nfunction fitMindmapSVG",
+        response.text,
+        re.DOTALL,
+    )
+    assert m
+    body = m.group(1)
+    # The old safety-net re-fit at 300ms should be gone.
+    assert "setTimeout(() => {" not in body or "}, 300)" not in body, (
+        "renderMindmap should not have a 300ms safety-net re-fit that "
+        "blows away the user's pan/zoom"
+    )
+
+
+def test_attach_mindmap_interaction_uses_per_container_state(client: TestClient):
+    """attachMindmapInteraction must use per-container state (stored on
+    the DOM node), so the inline and fullscreen views have independent
+    drag state. Previously they shared module-level variables, which
+    caused the two views to interfere with each other when both open."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    import re
+    m = re.search(
+        r"function attachMindmapInteraction\(container\)(.*?)\nfunction fitMindmapFullscreen",
+        response.text,
+        re.DOTALL,
+    )
+    assert m, "attachMindmapInteraction not found"
+    body = m.group(1)
+    # Must use container.__mindmapDrag (per-container state)
+    assert "container.__mindmapDrag" in body, (
+        "attachMindmapInteraction should use container.__mindmapDrag "
+        "for per-container state"
+    )
+    # Must not have module-level isDragging/startX/startY variables
+    assert "let isDragging" not in body
+    assert "let startX" not in body
+    assert "let startY" not in body
+
+
+def test_resize_listener_skips_when_size_unchanged(client: TestClient):
+    """The window resize listener should skip the re-fit if the
+    inline mindmap container's size hasn't actually changed. Otherwise
+    every scrollbar appearance triggers a re-fit that blows away the
+    user's pan/zoom."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Find the resize handler
+    import re
+    m = re.search(
+        r"window\.addEventListener\('resize'.*?\}\);",
+        response.text,
+        re.DOTALL,
+    )
+    assert m, "resize listener not found"
+    body = m.group(0)
+    # Must track the last size and skip if unchanged
+    assert "_lastInlineSize" in body, (
+        "resize listener should track _lastInlineSize and skip if "
+        "the size hasn't actually changed"
+    )
+    assert "w === _lastInlineSize.w && h === _lastInlineSize.h" in body
