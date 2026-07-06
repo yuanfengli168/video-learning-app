@@ -10,6 +10,10 @@ This document serves as a guide for developers taking over or contributing to th
 
 ## 2. Environment Setup
 ```bash
+# Quick setup (recommended)
+./scripts/setup.sh
+
+# Manual setup
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -20,12 +24,12 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ## 3. Tech Stack Decisions (MVP1)
 | Concern | Decision | Rationale |
 |---------|----------|-----------|
-| Frontend rendering | Jinja2 + HTMX | SPA-like UX with server-side simplicity; no JS framework needed |
+| Frontend rendering | Jinja2 + HTMX + vanilla JS | SPA-like UX with server-side simplicity; vanilla JS for interactive widgets (mindmap, search, chat) |
 | Styling | Tailwind CSS | Utility-first, responsive; dark + light themes via `class` strategy |
 | Database | SQLite + SQLAlchemy | `Base.metadata.create_all()` for MVP1; Alembic deferred to MVP2 |
 | Auth (frontend) | AuthKit (Firebase Auth UI) | Drop-in Google + email/password login |
-| Auth (backend) | Firebase Admin SDK | Verify Firebase ID tokens as JWT middleware on protected routes |
-| Transcription | Faster-Whisper | Model selectable on web UI (`base`/`small`/`medium`); auto-downloads |
+| Auth (backend) | Firebase Admin SDK + session cookie | Frontend exchanges Firebase ID token for an httpOnly session cookie via `POST /api/auth/session`; subsequent API calls authenticate via the cookie (no tokens in JS) |
+| Transcription | Faster-Whisper | Model selectable on web UI (`tiny`/`base`/`small`/`medium`); auto-downloads |
 | LLM | Ollama (`glm-5.2:cloud`) | Local inference at `localhost:11434` |
 | Testing | pytest + pytest-asyncio + httpx | Mock Whisper/Ollama in unit tests; integration tests marked slow |
 | Coverage target | ≥90% backend logic | 100% coverage is not required; focus on core logic |
@@ -35,18 +39,24 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 Each phase produces 3 commits: (A) implementation, (B) tests, (C) fix failing tests.
 
 1. **Project scaffold + config + DB models** — FastAPI app structure, SQLAlchemy models (Course → Section → Video → Asset), config via `.env`.
-2. **Auth** — AuthKit frontend integration + Firebase Admin SDK backend token verification middleware.
+2. **Auth** — AuthKit frontend integration + Firebase Admin SDK backend token verification + session cookie flow.
 3. **Video upload + Whisper transcription** — Upload endpoint, model selection, Faster-Whisper pipeline, timestamped transcript storage.
-4. **LLM generation** — Ollama integration; prompt engineering for JSON output (summary, mindmap, quiz, flashcards).
-5. **Frontend views** — Jinja2 + HTMX + Tailwind; all views from spec (dashboard, course, video player, tabs); dark/light themes.
+4. **LLM generation** — Ollama integration; prompt engineering for JSON output (summary, mindmap, quiz, flashcards, topic_timestamps).
+5. **Frontend views** — Jinja2 + HTMX + Tailwind; all views from spec (dashboard, course, video player, tabs); dark/light themes; transcript search with highlight + navigation; mindmap zoom/pan/fit + fullscreen.
 6. **Chat interface** — ChatGPT-style chat triggered by flashcard "Teach me real-world usage" button; persisted history.
 
 ## 5. Running Tests
 ```bash
+# Recommended
+./scripts/test.sh
+
+# Manual
 pytest                    # unit tests (Whisper/Ollama mocked)
 pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
+
+> **Current status:** 159 tests passing, 96% backend coverage.
 
 ## 6. Project Structure
 ```
@@ -58,37 +68,39 @@ video-learning-app/
 │   ├── database.py          # SQLAlchemy engine + session + init_db
 │   ├── models/              # ORM models
 │   │   ├── __init__.py
-│   │   ├── asset.py         # Asset (summary, transcript, flashcards, quiz, mindmap)
+│   │   ├── asset.py         # Asset (summary, transcript, flashcards, quiz, mindmap, topic_timestamps)
 │   │   ├── chat.py          # ChatSession + ChatMessage
 │   │   ├── course.py        # Course
 │   │   ├── section.py       # Section
 │   │   └── video.py         # Video
 │   ├── routers/             # API route modules
 │   │   ├── __init__.py
-│   │   ├── auth.py          # /api/auth/me, /api/auth/verify
+│   │   ├── auth.py          # /api/auth/me — returns current user
+│   │   ├── session.py       # /api/auth/session — issue/clear httpOnly session cookie
 │   │   ├── chat.py          # /api/chat/sessions (CRUD + send message)
 │   │   ├── courses.py       # /api/courses (CRUD + sections)
 │   │   ├── frontend.py      # Jinja2 template routes (/, /course, /video, /login)
-│   │   ├── generation.py    # /api/generate (LLM materials + get assets)
+│   │   ├── generation.py    # /api/generate (LLM materials + get assets incl. topic_timestamps)
 │   │   └── videos.py        # /api/videos (upload, transcribe, file serving)
 │   ├── services/            # Business logic
 │   │   ├── __init__.py
 │   │   ├── chat.py          # Ollama chat integration
-│   │   ├── llm.py           # Ollama LLM generation + JSON extraction
+│   │   ├── llm.py           # Ollama LLM generation + JSON extraction (incl. topic_timestamps prompt)
 │   │   └── transcription.py # Faster-Whisper transcription
 │   ├── auth/                # Auth middleware
 │   │   ├── __init__.py
-│   │   ├── dependencies.py  # get_current_user, get_current_user_optional
-│   │   └── firebase_admin.py # Firebase Admin SDK init + token verification
+│   │   ├── dependencies.py  # get_current_user, get_current_user_optional (cookie + Bearer fallback)
+│   │   ├── firebase_admin.py # Firebase Admin SDK init + token verification
+│   │   └── session.py       # Session cookie helpers (COOKIE_NAME, set/clear)
 │   └── templates/           # Jinja2 HTML templates
 │       ├── base.html        # Layout: sidebar, header, dark/light theme toggle
 │       ├── dashboard.html   # Home: upload zone, courses grid
 │       ├── course.html      # Course: sections accordion, video upload
-│       ├── video.html      # Video player + tabs (summary, flashcards, quiz, mindmap, chat)
+│       ├── video.html       # Video player + tabs + clickable mindmap nodes + topic banner
 │       ├── login.html       # AuthKit login page
 │       ├── error.html       # Error page
 │       └── redirect.html    # Redirect helper
-├── tests/                   # 140 pytest tests (96% coverage)
+├── tests/                   # 159 pytest tests (96% coverage)
 │   ├── conftest.py          # Fixtures: test DB, client
 │   ├── test_config.py
 │   ├── test_database.py
@@ -96,21 +108,30 @@ video-learning-app/
 │   ├── test_model_*.py      # Model tests (course, section, video, asset, chat)
 │   ├── test_firebase_admin.py
 │   ├── test_auth.py
+│   ├── test_session.py
 │   ├── test_transcription.py
 │   ├── test_courses.py
 │   ├── test_videos.py
 │   ├── test_llm.py
 │   ├── test_generation.py
 │   ├── test_frontend.py
+│   ├── test_ui_features.py  # Frontend template feature tests (banner, click handlers, etc.)
 │   ├── test_chat_service.py
 │   └── test_chat_router.py
+├── scripts/                 # Helper shell scripts
+│   ├── setup.sh             # Initial setup (venv, deps, .env)
+│   ├── setup_firebase_key.sh # Place Firebase service account JSON in the right spot
+│   ├── start.sh             # Start Ollama + uvicorn for local dev
+│   └── test.sh              # Run the full test suite
 ├── doc/
 │   ├── design.md
-│   └── handover.md
+│   ├── handover.md
+│   └── deployment.md
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
 └── Readme.md
+```
 
 ## 7. Deployment Guide
 

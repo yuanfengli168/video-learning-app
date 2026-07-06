@@ -29,7 +29,7 @@ To handle large classes (100+ videos) neatly, the data is structured hierarchica
 *   `Course`: The overarching topic (e.g., "Machine Learning").
 *   `Section`: A module or week (e.g., "Week 1: Neural Networks").
 *   `Video`: The individual class file.
-*   `Asset`: Generated materials (Summary, Flashcards, Quiz, Mindmap, Transcript) linked to a Video.
+*   `Asset`: Generated materials (Summary, Flashcards, Quiz, Mindmap, Transcript, Topic Timestamps) linked to a Video. `topic_timestamps` is a list of `{topic, start, end}` objects used by the clickable mindmap.
 *   `ChatSession`: A chat session triggered by a flashcard's "Teach me real-world usage" button. Linked to a Video and User.
 *   `ChatMessage`: Individual messages (user/assistant) within a ChatSession.
 
@@ -41,10 +41,14 @@ To handle large classes (100+ videos) neatly, the data is structured hierarchica
     *   Mindmap data (rendered via Markmap).
     *   Quiz questions and answers.
     *   Flashcard terms and definitions.
+    *   `topic_timestamps` — for each major mindmap topic, the start/end seconds (derived from the transcript) where that topic is discussed. Used by the clickable mindmap to navigate the video.
 4.  **Storage:** Saved to the local database and file system.
 
 ## 5. Features Scope
 *   **Chat Interface:** A ChatGPT-like UI. Flashcards have a "Teach me real-world usage" button. Clicking it creates a ChatSession with a specific system prompt to teach real-world examples. Chat history is persisted in the database (ChatSession → ChatMessage).
-*   **Transcript Viewer:** A Coursera-style UI where clicking a timestamp (e.g., 00:05:32) seeks the video player to that exact second. Includes a search bar to find keywords in the transcript. (Implemented in MVP1.)
+*   **Transcript Viewer:** A Coursera-style UI where clicking a timestamp (e.g., 00:05:32) seeks the video player to that exact second. Includes a search bar with live highlighting, match count, and prev/next navigation.
+*   **Clickable Mindmap:** Markmap nodes are interactive. Clicking a node jumps the video to that topic's start time, displays a topic banner (name + time range), and highlights the matching transcript lines. Works in both inline and fullscreen mindmap views.
+*   **Mindmap Controls:** Inline and fullscreen views support zoom (+/–), fit-to-screen, drag-to-pan, scroll-to-zoom, and Ctrl+0 to reset.
+*   **Session-based Auth:** AuthKit issues a Firebase ID token on login; the frontend exchanges it for an httpOnly session cookie via `POST /api/auth/session`. All subsequent API calls authenticate via the cookie — the JS code never needs to handle tokens.
 *   **Video Downloader (Future):** `yt-dlp` integration to download videos directly from URLs, documented for future implementation.
 EOF

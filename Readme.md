@@ -25,10 +25,12 @@ bash scripts/test.sh                     # Run tests with coverage
 
 ## Features
 *   **Course Hierarchy:** Organize videos into Courses → Sections → Videos (like Google Drive folders).
-*   **AI Processing:** Automatically generate markdown summaries, Markmap mindmaps, quizzes, and flashcards from video transcripts.
+*   **AI Processing:** Automatically generate markdown summaries, Markmap mindmaps, quizzes, flashcards, and per-topic timestamps from video transcripts.
+*   **Clickable Mindmap:** Click any node in the mindmap to jump the video to that topic, show a topic banner, and highlight the matching transcript lines. Inline and fullscreen views both support zoom/pan/fit.
 *   **Interactive Chat:** Click "Teach me real-world usage" on a flashcard to open a chatroom where the AI teaches real-world examples. Chat history is persisted.
-*   **Transcript Viewer:** Timestamped transcript with click-to-seek video player integration and keyword search.
-*   **Whisper Model Selection:** Choose between `base`, `small`, `medium` (and more) on the web UI. Models auto-download.
+*   **Transcript Viewer:** Timestamped transcript with click-to-seek video player integration, keyword search with live highlighting, and prev/next match navigation.
+*   **Whisper Model Selection:** Choose between `tiny`, `base`, `small`, `medium` on the web UI. Models auto-download.
+*   **Session-based Auth:** Firebase ID tokens are exchanged for httpOnly session cookies — no tokens in JavaScript.
 
 ## Quick Start
 ```bash
@@ -46,8 +48,9 @@ uvicorn app.main:app --reload   # http://localhost:8000
 
 ## Testing
 ```bash
-pytest                    # 140 unit tests (Whisper/Ollama mocked)
-pytest --cov=app          # 96% coverage report
+bash scripts/test.sh        # full test suite with coverage
+pytest                      # 159 unit tests (Whisper/Ollama mocked)
+pytest --cov=app            # 96% coverage report
 ```
 
 ## Project Structure
@@ -57,12 +60,13 @@ app/
 ├── config.py            # Settings via pydantic-settings
 ├── database.py          # SQLAlchemy engine + session
 ├── models/              # ORM: Course, Section, Video, Asset, ChatSession, ChatMessage
-├── routers/             # API routes: auth, courses, videos, generation, chat, frontend
+├── routers/             # API routes: auth, session, courses, videos, generation, chat, frontend
 ├── services/            # Business logic: transcription, llm, chat
-├── auth/                # Firebase Admin SDK token verification
+├── auth/                # Firebase Admin SDK + session cookie helpers
 └── templates/           # Jinja2 HTML templates (base, dashboard, course, video, login)
-tests/                   # 140 pytest tests (96% coverage)
-doc/                     # Design + handover docs
+scripts/                 # setup.sh, setup_firebase_key.sh, start.sh, test.sh
+tests/                   # 159 pytest tests (96% coverage)
+doc/                     # design.md, handover.md, deployment.md
 ```
 
 ## License
