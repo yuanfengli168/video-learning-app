@@ -144,31 +144,18 @@ def test_login_page_forces_signout_before_subscribing(client: TestClient):
         "stale cookie can't be reused."
     )
 
-    # 3) Must guard the post-signin redirect so it only happens after
-    #    a real user interaction, not on the initial cache re-hydration.
-    #    The current implementation handles this by:
-    #    - Calling signInWithPopup() against AuthKit's own Firebase app
-    #      (named 'authkit') via getApp('authkit'). This means we use
-    #      THE SAME auth instance AuthKit uses, so there's no popup
-    #      collision or "popup-closed-by-user" race.
-    #    - Capturing the user synchronously from the resolved promise.
-    #    - Gating the onAuthStateChanged safety net behind a signInHandled
-    #      flag that only flips inside that click handler.
-    assert "getApp('authkit')" in text, (
-        "login.html must call getApp('authkit') to use AuthKit's own "
-        "Firebase app. Using a second app (initializeApp with a unique "
-        "name) causes a popup-closed-by-user race because two popups "
-        "fight for the same OAuth flow."
-    )
-    assert "signInWithPopup" in text, (
-        "login.html must call signInWithPopup() directly in the Google "
-        "button click handler, not wait for onAuthStateChanged. The "
-        "popup's result doesn't reliably round-trip to the parent window."
-    )
-    assert "signInHandled" in text, (
-        "login.html must guard the post-signin redirect with a "
-        "signInHandled flag so onAuthStateChanged can't double-fire "
-        "after the direct Google flow."
+    # 3) Must track a user-initiated sign-in flag, so the redirect
+    #    to '/' only happens after a real click on a sign-in button,
+    #    not on the initial cache re-hydration.
+    #    We use a simple click listener (NOT stopImmediatePropagation or
+    #    direct signInWithPopup interception — those create a race with
+    #    AuthKit's own popup handler and cause auth/cancelled-popup-request).
+    assert "userInitiatedSignIn" in text, (
+        "login.html must gate the post-signin redirect behind a flag "
+        "that only flips on an explicit user click. "
+        "Do NOT intercept the click with stopImmediatePropagation or "
+        "call signInWithPopup directly — that races with AuthKit's own "
+        "popup flow and causes auth/cancelled-popup-request."
     )
 
 
