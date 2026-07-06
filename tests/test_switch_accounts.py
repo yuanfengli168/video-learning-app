@@ -146,17 +146,28 @@ def test_login_page_forces_signout_before_subscribing(client: TestClient):
 
     # 3) Must guard the post-signin redirect so it only happens after
     #    a real user interaction, not on the initial cache re-hydration.
-    #    The current implementation handles this by performing
-    #    signInWithPopup() directly in the click handler (capturing the
-    #    user synchronously from the resolved promise) and gating the
-    #    onAuthStateChanged safety net behind a `signInHandled` flag
-    #    that only flips inside that click handler.
-    assert "signInHandled" in text and "signInWithPopup" in text, (
-        "login.html must guard the post-signin redirect so the previous "
-        "account can't be silently re-hydrated. The current approach is "
-        "to do signInWithPopup() directly in the click handler and gate "
-        "the onAuthStateChanged safety net with a signInHandled flag. "
-        "If you change the auth flow, keep this property."
+    #    The current implementation handles this by:
+    #    - Initializing its OWN Firebase app (named "video-learning-app-login")
+    #      with a unique name so it doesn't collide with AuthKit's internal one.
+    #    - Performing signInWithPopup() directly in the click handler
+    #      (capturing the user synchronously from the resolved promise).
+    #    - Gating the onAuthStateChanged safety net behind a signInHandled
+    #      flag that only flips inside that click handler.
+    assert "video-learning-app-login" in text, (
+        "login.html must initialize its own Firebase app with a unique "
+        "name (e.g. 'video-learning-app-login'). AuthKit keeps its own "
+        "auth instance internal, so we need a second app to call "
+        "signInWithPopup directly."
+    )
+    assert "signInWithPopup" in text, (
+        "login.html must call signInWithPopup() directly in the Google "
+        "button click handler, not wait for onAuthStateChanged. The "
+        "popup's result doesn't reliably round-trip to the parent window."
+    )
+    assert "signInHandled" in text, (
+        "login.html must guard the post-signin redirect with a "
+        "signInHandled flag so onAuthStateChanged can't double-fire "
+        "after the direct Google flow."
     )
 
 

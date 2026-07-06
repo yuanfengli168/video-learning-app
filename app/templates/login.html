@@ -127,18 +127,28 @@
         clickEvent.stopImmediatePropagation();
 
         try {
-            // Get the Firebase Auth instance. AuthKit initialises
-            // Firebase internally; we need the same auth object it
-            // uses. Try a few common locations.
-            const auth = window.auth || (window.firebase && window.firebase.auth)
-                || (AuthKit && AuthKit.auth) || (AuthKit && AuthKit._auth);
-            if (!auth) {
-                throw new Error('Firebase auth instance not found on window');
+            // We need our own Firebase app instance because AuthKit
+            // keeps the auth object internal. We give ours a unique
+            // name so it doesn't collide with AuthKit's "default" app.
+            const fb = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js');
+            const fba = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
+            const appName = 'video-learning-app-login';
+            let app;
+            try {
+                app = fb.getApp(appName);
+            } catch {
+                app = fb.initializeApp({
+                    apiKey: "{{ firebase_config.apiKey }}",
+                    authDomain: "{{ firebase_config.authDomain }}",
+                    projectId: "{{ firebase_config.projectId }}",
+                    storageBucket: "{{ firebase_config.storageBucket }}",
+                    messagingSenderId: "{{ firebase_config.messagingSenderId }}",
+                    appId: "{{ firebase_config.appId }}",
+                }, appName);
             }
-            const { GoogleAuthProvider, signInWithPopup } =
-                await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
-            const provider = new GoogleAuthProvider();
-            const result = await signInWithPopup(auth, provider);
+            const auth = fba.getAuth(app);
+            const provider = new fba.GoogleAuthProvider();
+            const result = await fba.signInWithPopup(auth, provider);
             const idToken = await result.user.getIdToken();
             const resp = await fetch('/api/auth/session', {
                 method: 'POST',
