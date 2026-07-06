@@ -50,14 +50,20 @@
 
     AuthKit.onAuthStateChanged(async (user) => {
         if (user) {
-            // Get the Firebase ID token and exchange it for a session cookie
+            // Get the Firebase ID token from AuthKit's serialized user
+            // AuthKit stores the raw Firebase user object in user._raw
             try {
-                const idToken = await user.getIdToken();
-                await fetch('/api/auth/session', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({id_token: idToken}),
-                });
+                let idToken = null;
+                if (user._raw && typeof user._raw.getIdToken === 'function') {
+                    idToken = await user._raw.getIdToken();
+                }
+                if (idToken) {
+                    await fetch('/api/auth/session', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({id_token: idToken}),
+                    });
+                }
             } catch (e) {
                 console.error('Failed to create session:', e);
             }
