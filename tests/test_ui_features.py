@@ -191,3 +191,70 @@ def test_course_page_has_upload_function(client: TestClient):
     assert response.status_code == 200
     assert "uploadVideo" in response.text
     assert "createSection" in response.text
+
+def test_video_page_has_topic_banner(client: TestClient):
+    """Video page should have a topic notification banner (hidden by default)."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Banner element
+    assert "topic-banner" in response.text
+    assert "topic-banner-name" in response.text
+    assert "topic-banner-time" in response.text
+
+
+def test_video_page_has_topic_click_functions(client: TestClient):
+    """Video page should have JS functions for clicking mindmap topics."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Required functions for the topic click flow
+    assert "function jumpToTopic" in response.text
+    assert "function showTopicBanner" in response.text
+    assert "function closeTopicBanner" in response.text
+    assert "function highlightTranscriptRange" in response.text
+    assert "function findTopicTimestamp" in response.text
+    assert "function attachMindmapClickHandler" in response.text
+    # Should fetch topic_timestamps asset
+    assert "/assets/topic_timestamps" in response.text
+    assert "topicTimestamps" in response.text

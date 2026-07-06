@@ -14,6 +14,18 @@
 <div class="flex flex-col lg:flex-row gap-6">
     <!-- Left: Video Player + Transcript -->
     <div class="lg:w-3/5 space-y-4">
+        <!-- Topic notification banner (hidden by default, shown when clicking a mindmap node) -->
+        <div id="topic-banner" class="hidden bg-red-50 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded-lg p-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <span class="text-red-500 text-xl">📍</span>
+                <div>
+                    <p class="text-sm font-medium text-red-700 dark:text-red-300" id="topic-banner-name">Topic</p>
+                    <p class="text-xs text-red-600 dark:text-red-400" id="topic-banner-time">00:00 – 00:00</p>
+                </div>
+            </div>
+            <button onclick="closeTopicBanner()" class="text-red-500 hover:text-red-700 px-2 text-lg">✕</button>
+        </div>
+
         <!-- Video Player -->
         <div class="bg-black rounded-lg overflow-hidden">
             <video controls class="w-full" src="/api/videos/{{ video.id }}/file"></video>
@@ -428,15 +440,26 @@ function checkAnswer(btn, selected, correct) {
 // ── Load mindmap (cached) ──
 let mindmapData = null;
 let mindmapInstances = {};  // Store the Markmap instances for zoom/pan control
+let topicTimestamps = [];    // Map of topic -> {start, end}
 
 async function loadMindmap() {
     if (contentCache.mindmap) return;
     try {
-        const resp = await fetch(`/api/generate/${videoId}/assets/mindmap`);
-        if (!resp.ok) return;
-        const data = await resp.json();
+        // Fetch mindmap and topic_timestamps in parallel
+        const [mindmapResp, timestampsResp] = await Promise.all([
+            fetch(`/api/generate/${videoId}/assets/mindmap`),
+            fetch(`/api/generate/${videoId}/assets/topic_timestamps`),
+        ]);
+        if (!mindmapResp.ok) return;
+        const data = await mindmapResp.json();
         mindmapData = data.data;
         contentCache.mindmap = true;
+        // Load topic timestamps if available
+        if (timestampsResp.ok) {
+            const tsData = await timestampsResp.json();
+            topicTimestamps = tsData.data || [];
+            contentCache.topicTimestamps = topicTimestamps;
+        }
         // Load Markmap
         if (!document.getElementById('markmap-script')) {
             const script = document.createElement('script');
@@ -481,6 +504,7 @@ function renderMindmap(markdown) {
                 } catch(e) {
                     fitMindmapSVG(container);
                 }
+                attachMindmapClickHandler(container);
             }, 100);
 
             return;
@@ -618,6 +642,7 @@ function openMindmapFullscreen() {
             const container = document.getElementById('mindmap-fullscreen-container');
             fitMindmapSVG(container);
             attachMindmapInteraction(container);
+            attachMindmapClickHandler(container);
         }));
     }
 }
@@ -739,6 +764,99 @@ function closeMindmapFullscreen() {
     const modal = document.getElementById('mindmap-modal');
     if (modal) modal.remove();
     document.body.style.overflow = '';
+}
+
+// ── Topic click → jump video + highlight transcript ──
+function findTopicTimestamp(topicName) {
+    // Exact match first
+    let match = topicTimestamps.find(t => t.topic === topicName);
+    if (match) return match;
+    // Fuzzy match (case-insensitive, partial)
+    const lower = topicName.toLowerCase();
+    match = topicTimestamps.find(t => t.topic.toLowerCase() === lower);
+    if (match) return match;
+    // Partial match
+    match = topicTimestamps.find(t => t.topic.toLowerCase().includes(lower) || lower.includes(t.topic.toLowerCase()));
+    return match || null;
+}
+
+function showTopicBanner(topicName, start, end) {
+    const banner = document.getElementById('topic-banner');
+    document.getElementById('topic-banner-name').textContent = topicName;
+    document.getElementById('topic-banner-time').textContent =
+        `${formatTime(start)} – ${formatTime(end)}`;
+    banner.classList.remove('hidden');
+    // Scroll to top so the user sees the video and banner
+    window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function closeTopicBanner() {
+    document.getElementById('topic-banner').classList.add('hidden');
+}
+
+function highlightTranscriptRange(start, end) {
+    // Remove previous highlights
+    document.querySelectorAll('.transcript-line').forEach(line => {
+        line.classList.remove('bg-red-50', 'dark:bg-red-900/30', 'border-l-4', 'border-red-500');
+    });
+    if (!transcriptData || !transcriptData.segments) return;
+    // Find segments in the time range (with small buffer)
+    const buffer = 2;
+    const targetLines = [];
+    document.querySelectorAll('.transcript-line').forEach((line, i) => {
+        const seg = transcriptData.segments[i];
+        if (seg && seg.start >= (start - buffer) && seg.start <= (end + buffer)) {
+            line.classList.add('bg-red-50', 'dark:bg-red-900/30', 'border-l-4', 'border-red-500');
+            targetLines.push(line);
+        }
+    });
+    // Scroll to the first matching line
+    if (targetLines.length > 0) {
+        targetLines[0].scrollIntoView({behavior: 'smooth', block: 'center'});
+    }
+}
+
+function jumpToTopic(topicName) {
+    const ts = findTopicTimestamp(topicName);
+    if (!ts) {
+        alert(`No timestamp info for "${topicName}".\nThe video wasn't generated with topic timestamps yet — try regenerating materials.`);
+        return;
+    }
+    // Jump the video
+    const video = document.querySelector('video');
+    if (video) {
+        video.currentTime = ts.start;
+        video.pause();  // Pause at start so user can read the banner
+    }
+    // Show the banner
+    showTopicBanner(topicName, ts.start, ts.end);
+    // Highlight transcript
+    highlightTranscriptRange(ts.start, ts.end);
+}
+
+function attachMindmapClickHandler(container) {
+    if (!container) return;
+    // Use event delegation on the SVG to catch clicks on any node
+    const svg = container.querySelector('svg.markmap');
+    if (!svg) return;
+    svg.addEventListener('click', (e) => {
+        // Find the clicked node's text
+        let target = e.target;
+        while (target && target !== svg) {
+            if (target.classList && target.classList.contains('markmap-node')) {
+                // Get the node text
+                const foreignObject = target.querySelector('foreignObject');
+                if (foreignObject) {
+                    const text = foreignObject.textContent.trim();
+                    if (text) {
+                        jumpToTopic(text);
+                        return;
+                    }
+                }
+            }
+            target = target.parentElement;
+        }
+    });
 }
 
 // ── Chat ──
