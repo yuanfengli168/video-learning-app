@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI — runs the full pytest suite with coverage on every push and PR
+#
+# Why this exists:
+#   - Catches regressions before they hit main
+#   - Documents the minimum supported Python version
+#   - Gives a green ✓ / red ✗ on every PR
+#
+# Note: tests mock Firebase Admin and Ollama, so CI does NOT need real
+# services. Just Python + the requirements.txt deps.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs when a new commit lands on the same branch.
+# Saves CI minutes on rapid-fire PR pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          # Speed up subsequent runs by caching the pip download cache
+          # keyed on requirements.txt — invalidated automatically when
+          # the file changes.
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Coverage plugin isn't in requirements.txt (it's a dev tool)
+          pip install pytest pytest-cov pytest-asyncio httpx
+
+      - name: Run tests with coverage
+        # Equivalent to `bash scripts/test.sh` but with coverage as an
+        # artifact for the GitHub summary. We don't fail the build on
+        # coverage % — the test count gate is strict enough.
+        run: |
+          pytest tests/ \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --junitxml=test-results.xml \
+            -v
+
+      - name: Upload coverage to Codecov
+        # Optional — only runs if the CODECOV_TOKEN secret is set in
+        # the repo settings. Comment out this step if you don't want
+        # Codecov integration; coverage still shows in the job log.
+        if: matrix.python-version == '3.14'
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          flags: unittests
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload test results
+        # Makes the JUnit XML available as a build artifact so you can
+        # drill into per-test results from the GitHub Actions UI.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: test-results.xml
+          retention-days: 14
