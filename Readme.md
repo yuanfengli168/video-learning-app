@@ -1,6 +1,10 @@
 # Video Learning App
 
+![MVP1 Status](https://img.shields.io/badge/MVP1-shipped-brightgreen) ![Tests](https://img.shields.io/badge/tests-213%20passing-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-96%25-brightgreen) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Jinja2%20%7C%20SQLite%20%7C%20Ollama-blue)
+
 An open-source, AI-powered web application designed to help users learn from online video classes. The app transcribes local video files, generates interactive learning materials (summaries, mindmaps, quizzes, flashcards), and provides a ChatGPT-style interface to chat with an AI about real-world applications of the concepts.
+
+> **MVP1 is finished.** See [`doc/MVP1.0-successfullyFinished.md`](doc/MVP1.0-successfullyFinished.md) for the full scorecard (architecture checklist, data model coverage, AI pipeline verification, feature scorecard, and bug-fix history).
 
 ## Quick Commands
 ```
@@ -51,7 +55,7 @@ uvicorn app.main:app --reload   # http://localhost:8000
 ## Testing
 ```bash
 bash scripts/test.sh        # full test suite with coverage
-pytest                      # 211 unit tests (Whisper/Ollama mocked)
+pytest                      # 213 unit tests (Whisper/Ollama mocked)
 pytest --cov=app            # 96% coverage report
 ```
 
@@ -67,8 +71,8 @@ app/
 ├── auth/                # Firebase Admin SDK + session cookie helpers
 └── templates/           # Jinja2 HTML templates (base, dashboard, course, video, login)
 scripts/                 # setup.sh, setup_firebase_key.sh, start.sh, test.sh
-tests/                   # 211 pytest tests (96% coverage)
-doc/                     # design.md, handover.md, deployment.md
+tests/                   # 213 pytest tests (96% coverage)
+doc/                     # design.md, handover.md, deployment.md, MVP1.0-successfullyFinished.md
 ```
 
 ## License

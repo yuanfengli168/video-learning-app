@@ -56,7 +56,7 @@ pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
 
-> **Current status:** 211 tests passing, 96% backend coverage.
+> **Current status:** 213 tests passing, 96% backend coverage. MVP1 is signed off — see [`doc/MVP1.0-successfullyFinished.md`](MVP1.0-successfullyFinished.md).
 
 ### Sidebar Search
 
@@ -115,7 +115,7 @@ video-learning-app/
 │       ├── login.html       # AuthKit login page
 │       ├── error.html       # Error page
 │       └── redirect.html    # Redirect helper
-├── tests/                   # 211 pytest tests (96% coverage)
+├── tests/                   # 213 pytest tests (96% coverage)
 │   ├── conftest.py          # Fixtures: test DB, client
 │   ├── test_config.py
 │   ├── test_database.py
@@ -142,7 +142,8 @@ video-learning-app/
 ├── doc/
 │   ├── design.md
 │   ├── handover.md
-│   └── deployment.md
+│   ├── deployment.md
+│   └── MVP1.0-successfullyFinished.md # MVP1 sign-off doc with full scorecard
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
