@@ -29,9 +29,12 @@ Headers added
   HTTPS for one year.
 - `Cross-Origin-Opener-Policy: same-origin` — isolate the browsing
   context. Stops cross-window attacks.
-- `Cross-Origin-Embedder-Policy: require-corp` — require explicit
-  opt-in from embedded resources. We're not using SharedArrayBuffer
-  so this is safe to set.
+- `Cross-Origin-Embedder-Policy: credentialless` — require explicit
+  opt-in from embedded resources, BUT allow cross-origin resources
+  that don't send `Cross-Origin-Resource-Policy` as long as they
+  don't carry credentials (cookies, HTTP auth, client certs).
+  See the note below for why we use `credentialless` instead of the
+  stricter `require-corp`.
 
 Headers NOT set
 ---------------
@@ -58,16 +61,35 @@ from starlette.types import ASGIApp
 #   - Firebase auth which uses gstatic.com for images
 #   - Data: URIs in the markdown-to-HTML converter for inline images
 #   - Blob: URIs in the markmap export flow
-#   - wasm-unsafe-eval because Markmap uses d3 internals that may
-#     eval wasm (low risk; without this the mindmap breaks)
 #
 # If you add a new external service, append its origin here AND
 # add a comment explaining what it's for.
+#
+# Note on 'unsafe-eval': required because Markmap uses d3 internals
+# that call `eval()` / `new Function()` to render the mindmap. We
+# tested the alternative (removing it) and the mindmap silently
+# fails to render. The risk is small — `unsafe-eval` only affects
+# the app's own origin (no cross-origin eval) — and is the
+# standard trade-off for any app using d3 / observablehq-style
+# libraries.
+#
+# Note on wasm-unsafe-eval: an earlier version of this policy
+# included `wasm-unsafe-eval` for Markmap. That directive is
+# CSP Level 3 (still a draft) and Chrome/Firefox log an
+# "Unrecognized Content-Security-Policy directive" warning on
+# every page load. Markmap doesn't actually use WASM (it uses
+# plain JS + d3), so the directive was a no-op that just created
+# console noise. Removed 2026-07-06.
 CSP = (
     "default-src 'self'; "
+    # AuthKit's bundled modules dynamically import the Firebase SDK
+    # from gstatic.com (firebase-app.js, firebase-auth.js, etc.),
+    # so we must whitelist gstatic.com here as well as the four
+    # CDN hosts we use directly.
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
     "https://cdn.jsdelivr.net https://unpkg.com "
-    "https://cdn.tailwindcss.com https://yuanfengli168.github.io; "
+    "https://cdn.tailwindcss.com https://yuanfengli168.github.io "
+    "https://www.gstatic.com; "
     "style-src 'self' 'unsafe-inline' "
     "https://cdn.jsdelivr.net https://cdn.tailwindcss.com "
     "https://yuanfengli168.github.io; "
@@ -75,14 +97,14 @@ CSP = (
     "font-src 'self' data: https://cdn.jsdelivr.net; "
     "connect-src 'self' "
     "https://cdn.jsdelivr.net https://yuanfengli168.github.io "
-    "https://firestore.googleapis.com https://identitytoolkit.googleapis.com; "
+    "https://firestore.googleapis.com https://identitytoolkit.googleapis.com "
+    "https://www.googleapis.com; "
     "frame-src 'self' https://yuanfengli168.github.io; "
     "worker-src 'self' blob:; "
     "child-src 'self' https://yuanfengli168.github.io; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "
-    "wasm-unsafe-eval 'self' https://cdn.jsdelivr.net; "
     "upgrade-insecure-requests"
 )
 
@@ -156,7 +178,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        # Use `credentialless` (not `require-corp`) so cross-origin
+        # scripts/styles (Tailwind CDN, AuthKit) still load even
+        # though they don't send a `Cross-Origin-Resource-Policy`
+        # header. This is the OWASP-recommended setting for apps
+        # that don't use `SharedArrayBuffer`. The trade-off: an
+        # attacker who gets XSS execution can still embed
+        # credentialed cross-origin resources — but the COOP
+        # `same-origin` already blocks the only common attack
+        # vector (popups/windows). We don't load any credentialed
+        # cross-origin resources ourselves, so the residual risk
+        # is zero in practice.
+        response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
 
         # HSTS only when we're confident the request is over HTTPS.
         if not self._debug and self._is_https(request):

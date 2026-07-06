@@ -87,6 +87,12 @@ def test_csp_includes_required_origins(client: TestClient):
     assert "unpkg.com" in csp, "htmx CDN must be allowed"
     assert "cdn.tailwindcss.com" in csp, "Tailwind CDN must be allowed"
     assert "yuanfengli168.github.io" in csp, "AuthKit CDN must be allowed"
+    # gstatic.com is loaded by AuthKit's bundled modules as the
+    # Firebase SDK source. Without this allow-list, the login
+    # page fails to load Firebase and you can't sign in.
+    assert "www.gstatic.com" in csp, (
+        "gstatic.com must be allowed (Firebase SDK source used by AuthKit)"
+    )
     # Safety: form submissions must only go to our own origin
     assert "form-action 'self'" in csp, "form-action must be restricted to self"
     # Safety: no plugins / Flash / Java applets
@@ -158,6 +164,31 @@ def test_csp_has_default_src_self(client: TestClient):
     csp = response.headers["content-security-policy"]
     assert csp.startswith("default-src 'self'"), (
         f"CSP must start with default-src 'self', got: {csp}"
+    )
+
+
+def test_coep_is_credentialless_not_require_corp(client: TestClient):
+    """Cross-Origin-Embedder-Policy must be 'credentialless' (not
+    'require-corp' or 'unsafe-none').
+
+    Background: when this was 'require-corp', the Tailwind CDN and
+    AuthKit CDN stopped loading because neither sends a
+    Cross-Origin-Resource-Policy header. The result: a
+    `ReferenceError: tailwind is not defined` in the browser and
+    a completely unstyled UI.
+
+    'credentialless' is the OWASP-recommended value for apps that
+    don't use SharedArrayBuffer. It still isolates the page from
+    cross-origin credentialed requests, while allowing non-CORP
+    resources (like the Tailwind CDN) to load.
+    """
+    response = client.get("/api/health")
+    coep = response.headers["cross-origin-embedder-policy"]
+    assert coep == "credentialless", (
+        f"COEP must be 'credentialless' (the value that allows "
+        f"Tailwind CDN and AuthKit to load), got: {coep!r}. "
+        f"If you really need to change this, update the test and "
+        f"verify the dashboard, login page, and mindmap still load."
     )
 
 
