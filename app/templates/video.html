@@ -14,7 +14,14 @@
 <div class="flex flex-col lg:flex-row gap-6">
     <!-- Left: Video Player + Transcript -->
     <div class="lg:w-3/5 space-y-4">
-        <!-- Topic notification banner (hidden by default, shown when clicking a mindmap node) -->
+        <!-- Video Player -->
+        <div class="bg-black rounded-lg overflow-hidden">
+            <video controls class="w-full" src="/api/videos/{{ video.id }}/file"></video>
+        </div>
+
+        <!-- Topic notification banner (hidden by default, shown when clicking a mindmap node).
+             Placed between the video and transcript so the user can see it without
+             scrolling to the top of the page on small screens. -->
         <div id="topic-banner" class="hidden bg-red-50 dark:bg-red-900/30 border border-red-300 dark:border-red-700 rounded-lg p-3 flex items-center justify-between">
             <div class="flex items-center gap-3">
                 <span class="text-red-500 text-xl">📍</span>
@@ -24,11 +31,6 @@
                 </div>
             </div>
             <button onclick="closeTopicBanner()" class="text-red-500 hover:text-red-700 px-2 text-lg">✕</button>
-        </div>
-
-        <!-- Video Player -->
-        <div class="bg-black rounded-lg overflow-hidden">
-            <video controls class="w-full" src="/api/videos/{{ video.id }}/file"></video>
         </div>
 
         <!-- Transcript -->
@@ -518,31 +520,51 @@ function renderMindmap(markdown) {
             const transformer = new Transformer();
             const { root } = transformer.transform(markdown);
 
-            // Create SVG element
+            // Create SVG element with explicit pixel dimensions (markmap
+            // needs to know the SVG size up front so it can compute the
+            // initial transform — without this it often renders the
+            // content at scale ~0, leaving a tiny blob in the corner).
+            const w = container.offsetWidth || 400;
+            const h = container.offsetHeight || 300;
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.classList.add('markmap');
-            svg.style.width = '100%';
-            svg.style.height = '100%';
+            svg.style.width = w + 'px';
+            svg.style.height = h + 'px';
+            svg.setAttribute('width', w);
+            svg.setAttribute('height', h);
             container.appendChild(svg);
 
             // Create the markmap
             const mm = Markmap.create(svg, null, root);
             mindmapInstances['inline'] = mm;
 
-            // Fit the mindmap to the container after render, and attach the
-            // click handler. Retry the click handler a few times because
-            // Markmap creates the .markmap-node <g> elements asynchronously.
-            setTimeout(() => {
+            // Auto-fit after two animation frames so the SVG has its real
+            // layout dimensions (offsetWidth/Height at this point reflect
+            // the actual rendered size, not the just-set style).
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const w2 = container.offsetWidth;
+                const h2 = container.offsetHeight;
+                if (w2 > 0 && h2 > 0) {
+                    svg.style.width = w2 + 'px';
+                    svg.style.height = h2 + 'px';
+                    svg.setAttribute('width', w2);
+                    svg.setAttribute('height', h2);
+                }
                 try {
                     mm.fit();
-                } catch(e) {
+                } catch (e) {
                     fitMindmapSVG(container);
                 }
                 attachMindmapClickHandler(container);
-            }, 100);
+            }));
             // Retry: Markmap sometimes paints nodes after first frame
             setTimeout(() => attachMindmapClickHandler(container), 500);
             setTimeout(() => attachMindmapClickHandler(container), 1500);
+            // Final safety net: re-fit after a short delay in case the
+            // first fit was computed against stale dimensions.
+            setTimeout(() => {
+                try { mm.fit(); } catch (e) { fitMindmapSVG(container); }
+            }, 300);
 
             return;
         } catch (e) {
@@ -663,25 +685,65 @@ function openMindmapFullscreen() {
                 </button>
             </div>
         </div>
-        <div id="mindmap-fullscreen-container" class="flex-1 overflow-hidden p-4 relative" style="cursor: grab;">
-            <div class="markmap w-full h-full"><script type="text/template">${mindmapData}<\/script></div>
-        </div>
+        <div id="mindmap-fullscreen-container" class="flex-1 overflow-hidden p-4 relative" style="cursor: grab; min-height: 0;"></div>
         <div class="px-4 py-2 text-xs text-gray-500 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-            💡 Drag to pan • Scroll to zoom • Ctrl+0 to reset
+            💡 Drag to pan • Scroll to zoom • Ctrl+0 to reset • Click a node to jump
         </div>
     `;
     document.body.appendChild(modal);
     document.body.style.overflow = 'hidden';
-    // Render markmap in the modal
-    if (window.markmap && window.markmap.autoLoader) {
-        window.markmap.autoLoader.renderAll();
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-            const container = document.getElementById('mindmap-fullscreen-container');
-            fitMindmapSVG(container);
-            attachMindmapInteraction(container);
-            attachMindmapClickHandler(container);
-        }));
+
+    // Use the same Markmap class direct approach as the inline view. The
+    // previous autoloader-template approach was unreliable because we
+    // couldn't wait for the SVG to be created before fitting.
+    const container = document.getElementById('mindmap-fullscreen-container');
+    if (window.markmap && window.markmap.Markmap) {
+        try {
+            const { Markmap, Transformer } = window.markmap;
+            const transformer = new Transformer();
+            const { root } = transformer.transform(mindmapData);
+
+            // Create the SVG inside the modal container
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.classList.add('markmap');
+            svg.style.width = '100%';
+            svg.style.height = '100%';
+            container.appendChild(svg);
+
+            const mm = Markmap.create(svg, null, root);
+            mindmapInstances['fullscreen'] = mm;
+
+            // Auto-fit: wait two animation frames so the SVG has its
+            // real layout dimensions, then call mm.fit() so the user
+            // sees the full mindmap immediately (not the top-left corner).
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const w = container.offsetWidth;
+                const h = container.offsetHeight;
+                if (w > 0 && h > 0) {
+                    svg.style.width = w + 'px';
+                    svg.style.height = h + 'px';
+                    svg.setAttribute('width', w);
+                    svg.setAttribute('height', h);
+                }
+                try {
+                    mm.fit();
+                } catch (e) {
+                    fitMindmapSVG(container);
+                }
+                attachMindmapInteraction(container);
+                attachMindmapClickHandler(container);
+            }));
+            // Retry the click handler in case nodes are added later
+            setTimeout(() => attachMindmapClickHandler(container), 500);
+            setTimeout(() => attachMindmapClickHandler(container), 1500);
+            return;
+        } catch (e) {
+            console.error('Fullscreen Markmap render failed:', e);
+        }
     }
+
+    // Fallback: show a message if Markmap isn't ready
+    container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-gray-400">Failed to render fullscreen mindmap. Please close and try again.</div>';
 }
 
 // Zoom in/out (multiplies the current scale)
@@ -801,6 +863,22 @@ function closeMindmapFullscreen() {
     const modal = document.getElementById('mindmap-modal');
     if (modal) modal.remove();
     document.body.style.overflow = '';
+    // Re-fit the inline mindmap in case the body layout shifted (e.g.,
+    // the scrollbar appeared/disappeared). The inline SVG dimensions
+    // may now be stale relative to its container.
+    if (mindmapInstances['inline']) {
+        const inlineContainer = document.getElementById('mindmap-container');
+        if (inlineContainer) {
+            // Wait one frame for layout to settle, then refit.
+            requestAnimationFrame(() => {
+                try {
+                    mindmapInstances['inline'].fit();
+                } catch (e) {
+                    fitMindmapSVG(inlineContainer);
+                }
+            });
+        }
+    }
 }
 
 // ── Topic click → jump video + highlight transcript ──
@@ -895,8 +973,11 @@ function showTopicBanner(topicName, start, end) {
     document.getElementById('topic-banner-time').textContent =
         `${formatTime(start)} – ${formatTime(end)}`;
     banner.classList.remove('hidden');
-    // Scroll to top so the user sees the video and banner
-    window.scrollTo({top: 0, behavior: 'smooth'});
+    // Scroll the banner into view (it's now placed between the video and
+    // transcript). The video stays visible above the banner, and the
+    // transcript highlights appear below it — no need to scroll to the
+    // top of the page.
+    banner.scrollIntoView({behavior: 'smooth', block: 'center'});
 }
 
 function closeTopicBanner() {
@@ -1098,5 +1179,22 @@ loadTranscript();
 // Pre-load the Markmap script in the background so the mindmap tab
 // renders instantly when the user clicks it (saves ~1-2s CDN fetch time).
 preloadMarkmapScript();
+
+// Re-fit the inline mindmap when the window is resized (Tailwind
+// breakpoints change the layout, e.g., lg -> md, which can change
+// the container's width).
+let _resizeTimer;
+window.addEventListener('resize', () => {
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+        if (mindmapInstances['inline']) {
+            const container = document.getElementById('mindmap-container');
+            if (container) {
+                try { mindmapInstances['inline'].fit(); }
+                catch (e) { fitMindmapSVG(container); }
+            }
+        }
+    }, 150);
+});
 </script>
 {% endblock %}

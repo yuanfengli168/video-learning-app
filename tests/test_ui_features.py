@@ -400,3 +400,207 @@ def test_video_page_has_graceful_toast_not_alert(client: TestClient):
     assert "showToast(" in response.text
     # Old alert() with 'No timestamp info' should be gone
     assert "alert(`No timestamp info" not in response.text
+
+
+def test_topic_banner_is_between_video_and_transcript(client: TestClient):
+    """The topic banner should be placed BELOW the video player and
+    ABOVE the transcript, so the user can see it without scrolling to
+    the top of the page on small screens.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    text = response.text
+    # The video player element appears before the topic banner
+    video_pos = text.find('<video controls')
+    banner_pos = text.find('id="topic-banner"')
+    transcript_pos = text.find('id="transcript-container"')
+    assert video_pos > 0, "video player not found"
+    assert banner_pos > 0, "topic banner not found"
+    assert transcript_pos > 0, "transcript container not found"
+    # The banner must be BETWEEN the video and the transcript
+    assert video_pos < banner_pos < transcript_pos, (
+        f"topic banner must be between video ({video_pos}) and transcript "
+        f"({transcript_pos}), but is at position {banner_pos}"
+    )
+
+
+def test_show_topic_banner_does_not_scroll_to_top(client: TestClient):
+    """When a mindmap node is clicked, the banner appears between the
+    video and transcript, so we should scroll the BANNER into view (not
+    the top of the page)."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # showTopicBanner should scrollIntoView on the banner itself, not the window
+    assert "banner.scrollIntoView" in response.text
+    # And the old "window.scrollTo({top: 0" should be gone from showTopicBanner
+    # (it's only used elsewhere, e.g. for chat).
+    # Find the showTopicBanner function body and verify it doesn't scroll window to top
+    import re
+    m = re.search(
+        r"function showTopicBanner\(.*?\n(.*?)\n}",
+        response.text,
+        re.DOTALL,
+    )
+    assert m, "showTopicBanner function not found"
+    body = m.group(1)
+    assert "scrollIntoView" in body
+    # Verify it doesn't scroll the window to top
+    assert "window.scrollTo({top: 0" not in body
+
+
+def test_open_mindmap_fullscreen_auto_fits(client: TestClient):
+    """The fullscreen mindmap should auto-fit on open so the user sees
+    the full mindmap immediately (not the top-left corner)."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # The fullscreen function should use the same Markmap class direct
+    # approach (not the autoloader template pattern) so we can wait for
+    # the SVG to be created and then fit it.
+    import re
+    m = re.search(
+        r"function openMindmapFullscreen\(\).*?\n(.*?)\nfunction ",
+        response.text,
+        re.DOTALL,
+    )
+    assert m, "openMindmapFullscreen function not found"
+    body = m.group(1)
+    # It should use Markmap.create directly (not autoloader template)
+    assert "Markmap.create(svg, null, root)" in body, "should use Markmap.create directly"
+    # It should call mm.fit() to auto-fit
+    assert "mm.fit()" in body, "should auto-fit the mindmap"
+    # It should NOT use the autoloader template pattern in the fullscreen
+    assert 'type="text/template"' not in body, "should not use autoloader template"
+
+
+def test_close_mindmap_fullscreen_refits_inline(client: TestClient):
+    """When the user closes the fullscreen mindmap, the inline mindmap
+    should be re-fit in case the body layout shifted (e.g., scrollbar
+    appeared/disappeared)."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # The closeMindmapFullscreen function should refit the inline mindmap
+    import re
+    m = re.search(
+        r"function closeMindmapFullscreen\(\).*?\n(.*?)\nfunction ",
+        response.text,
+        re.DOTALL,
+    )
+    assert m, "closeMindmapFullscreen function not found"
+    body = m.group(1)
+    # It should reference the inline mindmap instance and fit it
+    assert "mindmapInstances['inline']" in body, "should refit inline mindmap on close"
+    assert ".fit()" in body, "should call .fit() on the inline mindmap"
+
+
+def test_mindmap_refits_on_window_resize(client: TestClient):
+    """The inline mindmap should re-fit when the window is resized,
+    because Tailwind breakpoints can change the container's width."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # The page should have a window resize listener that re-fits the mindmap
+    assert "addEventListener('resize'" in response.text
