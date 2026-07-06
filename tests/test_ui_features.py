@@ -979,3 +979,51 @@ def test_dashboard_upload_status_element_exists(client: TestClient):
         response = client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert 'id="dashboard-upload-status"' in response.text
+
+
+# ── Progress bar + ETA UI (background jobs) ──
+
+
+def test_video_page_has_progress_bar_html(client: TestClient):
+    """Video page should define renderProgressBar() and pollJobStatus() JS helpers.
+
+    These are wired to the /api/videos/{id}/status endpoint, which is
+    polled every 1.5s while transcribe/generate jobs run in the background.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # JS function definitions are present
+    assert "function renderProgressBar" in response.text
+    assert "function pollJobStatus" in response.text
+    assert "function renderJobProgress" in response.text
+    # The transcribe + generate flows call the new helpers
+    assert "pollJobStatus('transcribe'" in response.text
+    assert "pollJobStatus('generate'" in response.text
+    # The poll loop hits the new /status endpoint
+    assert "/api/videos/${videoId}/status" in response.text
+    # The progress bar is rendered for both job types
+    assert "renderProgressBar('transcribe')" in response.text
+    assert "renderProgressBar('generate')" in response.text
+    # ETA text is wired in
+    assert "data.eta_text" in response.text

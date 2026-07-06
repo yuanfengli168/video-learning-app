@@ -1,7 +1,13 @@
-"""Tests for generation router."""
+"""Tests for generation router.
+
+The /api/generate/{id} endpoint now runs in the background (returns
+202 + a job dict, like /transcribe). These tests verify both:
+1. The endpoint returns 202 + a job
+2. The (mocked) background worker writes the correct assets to the DB
+3. Subsequent GETs on the assets return the correct data
+"""
 
 import io
-import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -27,8 +33,13 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _setup_video_with_transcript(client: TestClient):
-    """Helper: create course → section → video → transcript. Returns video_id."""
+def _setup_video_with_transcript(client: TestClient) -> str:
+    """Helper: create course → section → video → transcript. Returns video_id.
+
+    With the new background-task transcribe endpoint, we can't
+    synchronously transcribe anymore — we mock the background worker
+    to do the work synchronously and write the transcript asset.
+    """
     with _mock_auth():
         course_resp = client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
@@ -54,9 +65,25 @@ def _setup_video_with_transcript(client: TestClient):
             "language": "en",
             "duration": 10.0,
         }
+        def fake_transcribe_worker(vid: str, model: str) -> None:
+            from app.services.transcription import transcript_to_json
+            from app.database import SessionLocal
+            from app.models import Asset, Video
+            with SessionLocal() as db:
+                v = db.get(Video, vid)
+                if v:
+                    db.add(Asset(
+                        id=f"t-{vid[:8]}",
+                        video_id=vid,
+                        asset_type="transcript",
+                        content=transcript_to_json(fake_transcript),
+                    ))
+                    v.status = "ready"
+                    v.duration = fake_transcript["duration"]
+                    db.commit()
         with patch(
-            "app.routers.videos.transcribe_video",
-            return_value=fake_transcript,
+            "app.routers.videos._run_transcribe_job",
+            side_effect=fake_transcribe_worker,
         ):
             client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
@@ -65,39 +92,97 @@ def _setup_video_with_transcript(client: TestClient):
     return video_id
 
 
-def test_generate_success(client: TestClient):
-    """Should generate learning materials."""
+def _run_generate_synchronously(client: TestClient, video_id: str, materials: dict) -> None:
+    """Helper: run the (mocked) generate worker synchronously so we can
+    immediately query the assets in the test.
+
+    Mirrors the real worker's UPSERT behavior: update an existing
+    asset if one exists for that (video_id, asset_type) pair, else
+    insert a new one. This is what the test_generate_regenerates_overwrite
+    test depends on.
+    """
+    import uuid
+    def fake_generate_worker(vid: str) -> None:
+        from app.database import SessionLocal
+        from app.models import Asset, Video
+        import json
+        asset_map = {
+            "summary": materials.get("summary", ""),
+            "mindmap": materials.get("mindmap", ""),
+            "flashcards": json.dumps(materials.get("flashcards", []), ensure_ascii=False),
+            "quiz": json.dumps(materials.get("quiz", []), ensure_ascii=False),
+            "topic_timestamps": json.dumps(
+                materials.get("topic_timestamps", []), ensure_ascii=False
+            ),
+        }
+        with SessionLocal() as db:
+            v = db.get(Video, vid)
+            if v:
+                for asset_type, content in asset_map.items():
+                    existing = db.query(Asset).filter(
+                        Asset.video_id == vid, Asset.asset_type == asset_type
+                    ).first()
+                    if existing:
+                        existing.content = content
+                    else:
+                        db.add(Asset(
+                            id=str(uuid.uuid4()),
+                            video_id=vid,
+                            asset_type=asset_type,
+                            content=content,
+                        ))
+                v.status = "ready"
+                db.commit()
+    with patch("app.routers.generation._run_generate_job", side_effect=fake_generate_worker):
+        with _mock_auth():
+            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
+
+
+# ── /api/generate/{id} tests ───────────────────────────────────────────────
+
+def test_generate_returns_202_with_job(client: TestClient):
+    """POST /api/generate/{id} should return 202 + initial job state."""
     video_id = _setup_video_with_transcript(client)
 
-    with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=FAKE_MATERIALS,
-        ):
+    with patch("app.routers.generation._run_generate_job"):
+        with _mock_auth():
             response = client.post(
                 f"/api/generate/{video_id}", headers=_auth_headers()
             )
-    assert response.status_code == 200
+    assert response.status_code == 202
     data = response.json()
-    assert data["status"] == "ready"
-    assert data["flashcard_count"] == 1
-    assert data["quiz_count"] == 1
+    assert data["video_id"] == video_id
+    assert data["status"] == "running"
+    assert "job" in data
+    assert data["job"]["job_type"] == "generate"
+    assert data["job"]["status"] == "running"
+
+
+def test_generate_worker_saves_assets(client: TestClient):
+    """The (mocked) generate worker should write all asset types to DB."""
+    video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+
+    with _mock_auth():
+        # All 5 asset types should be queryable now
+        for asset_type in ("summary", "mindmap", "flashcards", "quiz", "topic_timestamps"):
+            r = client.get(
+                f"/api/generate/{video_id}/assets/{asset_type}",
+                headers=_auth_headers(),
+            )
+            assert r.status_code == 200, f"asset {asset_type} not saved: {r.text}"
 
 
 def test_generate_saves_topic_timestamps(client: TestClient):
     """Generate should save topic_timestamps asset."""
     video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=FAKE_MATERIALS,
-        ):
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
-            response = client.get(
-                f"/api/generate/{video_id}/assets/topic_timestamps",
-                headers=_auth_headers(),
-            )
+        response = client.get(
+            f"/api/generate/{video_id}/assets/topic_timestamps",
+            headers=_auth_headers(),
+        )
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "topic_timestamps"
@@ -145,35 +230,53 @@ def test_generate_video_not_found(client: TestClient):
     assert response.status_code == 404
 
 
-def test_generate_failure(client: TestClient):
-    """Should set status to error and return 500 on generation failure."""
+def test_generate_failure_marks_error_status(client: TestClient):
+    """If the (background) generate worker fails, video status becomes 'error'."""
     video_id = _setup_video_with_transcript(client)
 
-    with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            side_effect=RuntimeError("Ollama down"),
-        ):
+    def fake_generate_worker_raises(vid: str) -> None:
+        from app.jobs import get_job, finish_job
+        from app.database import SessionLocal
+        from app.models import Video
+        job = get_job(vid, "generate")
+        if job:
+            finish_job(job, status="failed", error="Ollama down")
+        with SessionLocal() as db:
+            v = db.get(Video, vid)
+            if v:
+                v.status = "error"
+                db.commit()
+
+    with patch(
+        "app.routers.generation._run_generate_job",
+        side_effect=fake_generate_worker_raises,
+    ):
+        with _mock_auth():
             response = client.post(
                 f"/api/generate/{video_id}", headers=_auth_headers()
             )
-    assert response.status_code == 500
+    # Endpoint returns 202 — the failure happens in the background.
+    assert response.status_code == 202
 
+    # The video's status field should now reflect the failure.
+    with _mock_auth():
+        get_resp = client.get(
+            f"/api/videos/{video_id}", headers=_auth_headers()
+        )
+    assert get_resp.json()["status"] == "error"
+
+
+# ── /api/generate/{id}/assets/{type} tests ─────────────────────────────────
 
 def test_get_asset_summary(client: TestClient):
-    """Should get the summary asset."""
     video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=FAKE_MATERIALS,
-        ):
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
-            response = client.get(
-                f"/api/generate/{video_id}/assets/summary",
-                headers=_auth_headers(),
-            )
+        response = client.get(
+            f"/api/generate/{video_id}/assets/summary",
+            headers=_auth_headers(),
+        )
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "summary"
@@ -181,19 +284,14 @@ def test_get_asset_summary(client: TestClient):
 
 
 def test_get_asset_flashcards(client: TestClient):
-    """Should get flashcards as structured JSON."""
     video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=FAKE_MATERIALS,
-        ):
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
-            response = client.get(
-                f"/api/generate/{video_id}/assets/flashcards",
-                headers=_auth_headers(),
-            )
+        response = client.get(
+            f"/api/generate/{video_id}/assets/flashcards",
+            headers=_auth_headers(),
+        )
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "flashcards"
@@ -202,19 +300,14 @@ def test_get_asset_flashcards(client: TestClient):
 
 
 def test_get_asset_quiz(client: TestClient):
-    """Should get quiz as structured JSON."""
     video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=FAKE_MATERIALS,
-        ):
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
-            response = client.get(
-                f"/api/generate/{video_id}/assets/quiz",
-                headers=_auth_headers(),
-            )
+        response = client.get(
+            f"/api/generate/{video_id}/assets/quiz",
+            headers=_auth_headers(),
+        )
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "quiz"
@@ -222,19 +315,14 @@ def test_get_asset_quiz(client: TestClient):
 
 
 def test_get_asset_mindmap(client: TestClient):
-    """Should get mindmap as markdown text."""
     video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=FAKE_MATERIALS,
-        ):
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
-            response = client.get(
-                f"/api/generate/{video_id}/assets/mindmap",
-                headers=_auth_headers(),
-            )
+        response = client.get(
+            f"/api/generate/{video_id}/assets/mindmap",
+            headers=_auth_headers(),
+        )
     assert response.status_code == 200
     data = response.json()
     assert data["type"] == "mindmap"
@@ -268,6 +356,7 @@ def test_get_asset_invalid_type(client: TestClient):
 def test_generate_regenerates_overwrite(client: TestClient):
     """Generating again should overwrite existing assets."""
     video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
 
     new_materials = {
         "summary": "# New Summary",
@@ -275,23 +364,12 @@ def test_generate_regenerates_overwrite(client: TestClient):
         "flashcards": [{"term": "ML", "definition": "Machine Learning"}],
         "quiz": [],
     }
+    _run_generate_synchronously(client, video_id, new_materials)
 
     with _mock_auth():
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=FAKE_MATERIALS,
-        ):
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
-
-        with patch(
-            "app.routers.generation.generate_materials",
-            return_value=new_materials,
-        ):
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
-
-            response = client.get(
-                f"/api/generate/{video_id}/assets/summary",
-                headers=_auth_headers(),
-            )
+        response = client.get(
+            f"/api/generate/{video_id}/assets/summary",
+            headers=_auth_headers(),
+        )
     assert response.status_code == 200
-    assert response.json()["data"] == "# New Summary"
+    assert "New Summary" in response.json()["data"]

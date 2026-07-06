@@ -266,62 +266,177 @@ function clearSearch() {
     searchTranscript();
 }
 
-// ── Transcribe ──
+// ── Transcribe (with progress bar + ETA) ──
+//
+// Background-job flow:
+//   1. POST /api/videos/{id}/transcribe  → returns 202 + initial job
+//   2. UI shows a progress bar and polls /api/videos/{id}/status every 1.5s
+//   3. When the job completes, the page reloads to show the transcript
 async function transcribeVideo() {
     const modelName = document.getElementById('whisper-model').value;
     const btn = document.getElementById('transcribe-btn');
+    const container = document.getElementById('transcript-container');
+
     btn.disabled = true;
-    btn.textContent = '⏳ Transcribing... (this may take a few minutes)';
-    document.getElementById('transcript-container').innerHTML =
-        '<p class="text-gray-400 py-4 text-center">⏳ Transcribing with Whisper (' + modelName + ')... please wait</p>';
+    btn.textContent = '⏳ Starting…';
+    container.innerHTML = renderProgressBar('transcribe');
 
     try {
         const resp = await fetch(`/api/videos/${videoId}/transcribe?model_name=${modelName}`, {
             method: 'POST',
         });
-        const data = await resp.json();
-        if (resp.ok) {
-            btn.textContent = '✅ Transcribed';
-            // Reload to load the transcript
-            setTimeout(() => location.reload(), 1500);
+        if (resp.status === 202) {
+            // Background job started. Poll for status.
+            const data = await resp.json();
+            await pollJobStatus('transcribe', data.job, () => location.reload());
         } else {
+            const err = await resp.json().catch(() => ({}));
             btn.textContent = '❌ Failed';
             btn.disabled = false;
-            document.getElementById('transcript-container').innerHTML =
-                '<p class="text-red-500 py-4 text-center">Error: ' + (data.detail || 'Unknown error') + '</p>';
+            container.innerHTML =
+                '<p class="text-red-500 py-4 text-center">Error: ' + (err.detail || 'Unknown error') + '</p>';
         }
     } catch (e) {
         btn.textContent = '❌ Error';
         btn.disabled = false;
-        document.getElementById('transcript-container').innerHTML =
+        container.innerHTML =
             '<p class="text-red-500 py-4 text-center">Error: ' + e.message + '</p>';
     }
 }
 
-// ── Generate materials ──
+// ── Generate materials (with progress bar + ETA) ──
 async function generateMaterials() {
     const token = await getAuthToken();
     const btn = event.target;
+    const summary = document.getElementById('content-summary');
+
     btn.disabled = true;
-    btn.textContent = '⏳ Generating...';
+    btn.textContent = '⏳ Starting…';
+    // Show a progress bar above the button so the user sees the LLM working
+    const progressEl = document.createElement('div');
+    progressEl.id = 'generate-progress';
+    progressEl.className = 'mt-2';
+    progressEl.innerHTML = renderProgressBar('generate');
+    btn.parentElement.insertBefore(progressEl, btn.nextSibling);
+
     try {
         const resp = await fetch(`/api/generate/${videoId}`, {
             method: 'POST',
             headers: {'Authorization': 'Bearer ' + token},
         });
-        if (resp.ok) {
-            btn.textContent = '✅ Done! Switch tabs to view.';
-            // Clear cache so tabs reload fresh content
-            Object.keys(contentCache).forEach(k => delete contentCache[k]);
-            setTimeout(() => location.reload(), 1500);
+        if (resp.status === 202) {
+            // Background job started. Poll for status.
+            const data = await resp.json();
+            await pollJobStatus('generate', data.job, () => {
+                // Job done — clear cache, reset button, show success toast
+                Object.keys(contentCache).forEach(k => delete contentCache[k]);
+                btn.disabled = false;
+                btn.textContent = '🔄 Regenerate';
+                const progress = document.getElementById('generate-progress');
+                if (progress) progress.remove();
+                showToast('✓ Materials generated! Switch tabs to view.', 'info');
+                // Reload summary tab so the new content shows immediately
+                if (document.getElementById('content-summary').classList.contains('hidden') === false) {
+                    loadSummary();
+                }
+            });
         } else {
-            const err = await resp.json();
-            btn.textContent = '❌ ' + err.detail;
+            const err = await resp.json().catch(() => ({}));
+            btn.textContent = '❌ ' + (err.detail || 'Failed');
             btn.disabled = false;
+            const progress = document.getElementById('generate-progress');
+            if (progress) progress.remove();
         }
     } catch (e) {
         btn.textContent = '❌ Error';
         btn.disabled = false;
+        const progress = document.getElementById('generate-progress');
+        if (progress) progress.remove();
+    }
+}
+
+// ── Progress bar + polling helpers ──
+
+/**
+ * Render the HTML for a progress bar for a given job type.
+ * The element IDs are namespaced so transcribe and generate can be
+ * shown side by side without colliding.
+ */
+function renderProgressBar(jobType) {
+    const id = `progress-${jobType}`;
+    return `
+        <div id="${id}" class="py-3">
+            <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+                <span class="job-message-${jobType}">Starting…</span>
+                <span>
+                    <span class="job-pct-${jobType}">0%</span>
+                    <span class="job-eta-${jobType} text-gray-400 ml-1">Estimating…</span>
+                </span>
+            </div>
+            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                <div class="job-bar-${jobType} bg-indigo-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Poll /api/videos/{id}/status every 1.5s until the named job completes
+ * or fails, then call onComplete().
+ *
+ * Exits early if the user navigates away (pollJobStatus is a closure
+ * on the request's fetch, so it won't fire after the page unloads —
+ * but we also clear the interval on completion).
+ */
+async function pollJobStatus(jobType, _initialJob, onComplete) {
+    let interval = null;
+    const cleanup = () => { if (interval) clearInterval(interval); };
+
+    const tick = async () => {
+        try {
+            const resp = await fetch(`/api/videos/${videoId}/status`);
+            if (!resp.ok) return;  // transient error, keep polling
+            const data = await resp.json();
+            const job = data[`${jobType}_job`];
+            if (!job) return;  // shouldn't happen but be defensive
+            renderJobProgress(jobType, job, data.eta_text[jobType]);
+            if (job.status === 'completed') {
+                cleanup();
+                onComplete();
+            } else if (job.status === 'failed') {
+                cleanup();
+                showJobError(jobType, job.error || 'Job failed');
+            }
+        } catch (e) {
+            // Network blip — keep polling
+            console.warn('Status poll failed:', e);
+        }
+    };
+
+    // Poll immediately, then every 1.5s
+    await tick();
+    interval = setInterval(tick, 1500);
+}
+
+/**
+ * Update the progress bar DOM elements for a given job.
+ */
+function renderJobProgress(jobType, job, etaText) {
+    const bar = document.querySelector(`.job-bar-${jobType}`);
+    const pctEl = document.querySelector(`.job-pct-${jobType}`);
+    const etaEl = document.querySelector(`.job-eta-${jobType}`);
+    const msgEl = document.querySelector(`.job-message-${jobType}`);
+    if (bar) bar.style.width = `${job.pct}%`;
+    if (pctEl) pctEl.textContent = `${job.pct}%`;
+    if (etaEl) etaEl.textContent = etaText || '';
+    if (msgEl) msgEl.textContent = job.message || '';
+}
+
+function showJobError(jobType, message) {
+    const id = `progress-${jobType}`;
+    const el = document.getElementById(id);
+    if (el) {
+        el.innerHTML = `<p class="text-red-500 text-sm py-2">❌ ${escapeHtml(message)}</p>`;
     }
 }
 

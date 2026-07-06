@@ -16,33 +16,68 @@ os.environ.setdefault("DEBUG", "false")
 os.environ.setdefault("UPLOAD_DIR", tempfile.mkdtemp())
 os.environ.setdefault("STORAGE_DIR", tempfile.mkdtemp())
 
+import app.database as app_database  # noqa: E402
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
+
+# Module-level TestSessionLocal — initialized by the db_session fixture.
+# Workers (BackgroundTasks) that use SessionLocal() directly need this
+# to talk to the same in-memory test DB that the test client uses.
+TestSessionLocal: sessionmaker | None = None
 
 
 @pytest.fixture(scope="function")
 def db_session() -> Generator[Session, None, None]:
-    """Provide a fresh in-memory SQLite database for each test."""
+    """Provide a fresh in-memory SQLite database for each test.
+
+    Also monkey-patches app.database.SessionLocal to point at the
+    test DB, so any BackgroundTask worker (which can't use the
+    request-scoped FastAPI get_db dependency) still writes to the
+    same DB the test client is reading from.
+    """
+    global TestSessionLocal
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    session = TestingSessionLocal()
+    testing_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    TestSessionLocal = testing_local
+
+    # Monkey-patch app.database.SessionLocal so background workers
+    # that call `SessionLocal()` use the test DB.
+    original_session_local = app_database.SessionLocal
+    app_database.SessionLocal = testing_local
+    # Also patch the imports inside the routers (they import the
+    # name directly, so the patch on app.database doesn't reach them).
+    import app.routers.videos as videos_module
+    import app.routers.generation as generation_module
+    original_videos_session = videos_module.SessionLocal
+    original_generation_session = generation_module.SessionLocal
+    videos_module.SessionLocal = testing_local
+    generation_module.SessionLocal = testing_local
 
     def override_get_db():
         try:
-            yield session
+            yield testing_local()
         finally:
-            session.close()
+            pass  # don't close — managed by fixture
 
     app.dependency_overrides[get_db] = override_get_db
-    yield session
-    app.dependency_overrides.clear()
-    session.close()
-    Base.metadata.drop_all(bind=engine)
+
+    session = testing_local()
+    try:
+        yield session
+    finally:
+        app.dependency_overrides.clear()
+        # Restore the original SessionLocal references
+        app_database.SessionLocal = original_session_local
+        videos_module.SessionLocal = original_videos_session
+        generation_module.SessionLocal = original_generation_session
+        TestSessionLocal = None
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture(scope="function")

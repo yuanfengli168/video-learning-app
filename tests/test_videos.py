@@ -119,7 +119,7 @@ def test_get_video_not_found(client: TestClient):
 
 
 def test_transcribe_video(client: TestClient):
-    """Should transcribe a video and store transcript."""
+    """Should kick off transcription and return 202 Accepted with a job."""
     course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
@@ -131,29 +131,64 @@ def test_transcribe_video(client: TestClient):
         )
         video_id = upload_resp.json()["video_id"]
 
-        # Mock the transcription
+        # Mock the background worker so we don't need real Whisper.
+        # The worker writes the transcript asset + sets video status,
+        # simulating the end state we used to get from the synchronous
+        # endpoint.
         fake_transcript = {
             "segments": [{"start": 0.0, "end": 2.0, "text": "Hello"}],
             "language": "en",
             "duration": 10.0,
         }
+        def fake_worker(vid: str, model: str) -> None:
+            from app.services.transcription import transcript_to_json
+            with patch(
+                "app.routers.videos.transcribe_video",
+                return_value=fake_transcript,
+            ):
+                # Re-import inside the worker to avoid circular issues
+                from app.routers.videos import transcribe_video
+                result = transcribe_video("ignored", model)
+                from app.database import SessionLocal
+                from app.models import Asset, Video
+                with SessionLocal() as db:
+                    v = db.get(Video, vid)
+                    if v:
+                        db.add(Asset(
+                            id="t1", video_id=vid, asset_type="transcript",
+                            content=transcript_to_json(result),
+                        ))
+                        v.status = "ready"
+                        v.duration = result["duration"]
+                        db.commit()
         with patch(
-            "app.routers.videos.transcribe_video",
-            return_value=fake_transcript,
+            "app.routers.videos._run_transcribe_job",
+            side_effect=fake_worker,
         ):
             response = client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers=_auth_headers(),
             )
-    assert response.status_code == 200
+    # The endpoint returns 202 Accepted immediately, with the
+    # initial job state in the response body.
+    assert response.status_code == 202
     data = response.json()
-    assert data["status"] == "ready"
-    assert data["segments"] == 1
-    assert data["language"] == "en"
+    assert data["status"] == "running"
+    assert data["job"]["job_type"] == "transcribe"
+    # Once the (mocked) worker ran, the transcript is queryable.
+    with _mock_auth():
+        get_resp = client.get(
+            f"/api/videos/{video_id}/transcript", headers=_auth_headers()
+        )
+    assert get_resp.status_code == 200
+    segs = get_resp.json()["segments"]
+    assert len(segs) == 1
+    assert segs[0]["text"] == "Hello"
+    assert get_resp.json()["language"] == "en"
 
 
 def test_get_transcript(client: TestClient):
-    """Should get the transcript after transcription."""
+    """Should get the transcript after the (mocked) transcribe worker ran."""
     course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
@@ -170,9 +205,29 @@ def test_get_transcript(client: TestClient):
             "language": "en",
             "duration": 10.0,
         }
+        def fake_worker(vid: str, model: str) -> None:
+            from app.services.transcription import transcript_to_json
+            with patch(
+                "app.routers.videos.transcribe_video",
+                return_value=fake_transcript,
+            ):
+                from app.routers.videos import transcribe_video
+                result = transcribe_video("ignored", model)
+                from app.database import SessionLocal
+                from app.models import Asset, Video
+                with SessionLocal() as db:
+                    v = db.get(Video, vid)
+                    if v:
+                        db.add(Asset(
+                            id="t1", video_id=vid, asset_type="transcript",
+                            content=transcript_to_json(result),
+                        ))
+                        v.status = "ready"
+                        v.duration = result["duration"]
+                        db.commit()
         with patch(
-            "app.routers.videos.transcribe_video",
-            return_value=fake_transcript,
+            "app.routers.videos._run_transcribe_job",
+            side_effect=fake_worker,
         ):
             client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
@@ -228,7 +283,7 @@ def test_transcribe_invalid_model(client: TestClient):
 
 
 def test_transcribe_failure_sets_error_status(client: TestClient):
-    """Should set video status to 'error' if transcription fails."""
+    """Should set video status to 'error' if the background transcription fails."""
     course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
@@ -240,17 +295,33 @@ def test_transcribe_failure_sets_error_status(client: TestClient):
         )
         video_id = upload_resp.json()["video_id"]
 
+        def fake_worker_raises(vid: str, model: str) -> None:
+            # Simulate the worker catching an exception from
+            # transcribe_video and marking the job + video as failed.
+            from app.jobs import get_job, finish_job
+            job = get_job(vid, "transcribe")
+            if job:
+                finish_job(job, status="failed", error="Whisper crashed")
+            from app.database import SessionLocal
+            from app.models import Video
+            with SessionLocal() as db:
+                v = db.get(Video, vid)
+                if v:
+                    v.status = "error"
+                    db.commit()
+
         with patch(
-            "app.routers.videos.transcribe_video",
-            side_effect=RuntimeError("Whisper crashed"),
+            "app.routers.videos._run_transcribe_job",
+            side_effect=fake_worker_raises,
         ):
             response = client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers=_auth_headers(),
             )
-    assert response.status_code == 500
+    # Endpoint returns 202 — the failure happens in the background.
+    assert response.status_code == 202
 
-    # Verify status was set to error
+    # Verify the (mocked) worker marked the video as 'error'.
     with _mock_auth():
         get_resp = client.get(
             f"/api/videos/{video_id}", headers=_auth_headers()

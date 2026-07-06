@@ -88,12 +88,24 @@ def _extract_json(text: str) -> dict[str, Any]:
     raise ValueError("Could not extract valid JSON from LLM response")
 
 
-def generate_materials(transcript: dict[str, Any], model: str | None = None) -> dict[str, Any]:
+def generate_materials(
+    transcript: dict[str, Any],
+    model: str | None = None,
+    on_progress: "callable | None" = None,
+) -> dict[str, Any]:
     """Generate learning materials from a transcript using Ollama.
 
     Args:
         transcript: Dict with 'segments' (list of {start, end, text}).
         model: Ollama model name (defaults to settings.ollama_model).
+        on_progress: Optional callback `fn(done: int, total: int, message: str)`
+            called at key milestones so the background worker can update
+            the UI's progress bar. Currently called at:
+              - 10/100 "Building prompt..."
+              - 20/100 "Calling Ollama (this may take 30-60s)..."
+              - 90/100 "Parsing LLM response..."
+            Anything past 90% is "saving to database" which the caller
+            does outside this function.
 
     Returns:
         Dict with keys: summary, mindmap, flashcards, quiz.
@@ -101,6 +113,8 @@ def generate_materials(transcript: dict[str, Any], model: str | None = None) -> 
     model = model or settings.ollama_model
 
     # Build transcript text from segments
+    if on_progress:
+        on_progress(5, 100, "Building prompt from transcript...")
     transcript_text = "\n".join(
         f"[{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['text']}"
         for seg in transcript.get("segments", [])
@@ -108,6 +122,9 @@ def generate_materials(transcript: dict[str, Any], model: str | None = None) -> 
 
     if not transcript_text.strip():
         raise ValueError("Transcript is empty — cannot generate materials")
+
+    if on_progress:
+        on_progress(15, 100, f"Calling Ollama ({model}) — this may take 30-60s...")
 
     # Call Ollama API
     # Use temperature=0 + fixed seed for deterministic output so re-generating
@@ -132,6 +149,9 @@ def generate_materials(transcript: dict[str, Any], model: str | None = None) -> 
 
     result = response.json()
     content = result.get("message", {}).get("content", "")
+
+    if on_progress:
+        on_progress(90, 100, "Parsing LLM response...")
 
     return _extract_json(content)
 
