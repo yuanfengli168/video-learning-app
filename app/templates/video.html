@@ -427,7 +427,7 @@ function checkAnswer(btn, selected, correct) {
 
 // ── Load mindmap (cached) ──
 let mindmapData = null;
-let mindmapInstance = null;  // Store the Markmap instance for zoom/pan control
+let mindmapInstances = {};  // Store the Markmap instances for zoom/pan control
 
 async function loadMindmap() {
     if (contentCache.mindmap) return;
@@ -452,14 +452,49 @@ async function loadMindmap() {
 
 function renderMindmap(markdown) {
     const container = document.getElementById('mindmap-container');
-    // Make sure the container is visible and has dimensions before rendering
     container.style.display = 'block';
+    container.innerHTML = '';
+
+    // Use the Markmap class directly for reliable rendering
+    if (window.markmap && window.markmap.Markmap) {
+        try {
+            const { Markmap, Transformer } = window.markmap;
+            // eslint-disable-next-line no-undef
+            const transformer = new Transformer();
+            const { root } = transformer.transform(markdown);
+
+            // Create SVG element
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.classList.add('markmap');
+            svg.style.width = '100%';
+            svg.style.height = '100%';
+            container.appendChild(svg);
+
+            // Create the markmap
+            const mm = Markmap.create(svg, null, root);
+            mindmapInstances['inline'] = mm;
+
+            // Fit the mindmap to the container after render
+            setTimeout(() => {
+                try {
+                    mm.fit();
+                } catch(e) {
+                    fitMindmapSVG(container);
+                }
+            }, 100);
+
+            return;
+        } catch (e) {
+            console.error('Direct Markmap render failed, falling back to autoloader:', e);
+        }
+    }
+
+    // Fallback: use autoloader
     container.innerHTML = `<div class="markmap w-full h-full"><script type="text/template">${markdown}<\/script></div>`;
     if (window.markmap && window.markmap.autoLoader) {
         window.markmap.autoLoader.renderAll();
-        // Apply fit after a short delay (markmap's d3 layout needs a tick)
-        requestAnimationFrame(() => requestAnimationFrame(() => fitMindmapSVG(container)));
     }
+    requestAnimationFrame(() => requestAnimationFrame(() => fitMindmapSVG(container)));
 }
 
 function fitMindmapSVG(container) {
