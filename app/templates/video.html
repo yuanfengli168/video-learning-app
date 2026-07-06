@@ -81,7 +81,12 @@
 
                 <!-- Mindmap -->
                 <div id="content-mindmap" class="hidden">
-                    <div id="mindmap-container" style="width: 100%; height: 300px;" class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900"></div>
+                    <div id="mindmap-container" style="width: 100%; height: 300px; cursor: grab;" class="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900"></div>
+                    <div class="flex gap-1 mt-2">
+                        <button onclick="inlineMindmapZoom(1.2)" class="flex-1 px-2 py-1 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-xs font-bold">＋ Zoom</button>
+                        <button onclick="inlineMindmapZoom(0.83)" class="flex-1 px-2 py-1 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-xs font-bold">－ Zoom</button>
+                        <button onclick="fitMindmapInline()" class="flex-1 px-2 py-1 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-xs">🔲 Fit</button>
+                    </div>
                     <button onclick="openMindmapFullscreen()" class="mt-2 w-full px-3 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
                         🔍 Expand to Full Screen
                     </button>
@@ -422,6 +427,7 @@ function checkAnswer(btn, selected, correct) {
 
 // ── Load mindmap (cached) ──
 let mindmapData = null;
+let mindmapInstance = null;  // Store the Markmap instance for zoom/pan control
 
 async function loadMindmap() {
     if (contentCache.mindmap) return;
@@ -451,8 +457,8 @@ function renderMindmap(markdown) {
     container.innerHTML = `<div class="markmap w-full h-full"><script type="text/template">${markdown}<\/script></div>`;
     if (window.markmap && window.markmap.autoLoader) {
         window.markmap.autoLoader.renderAll();
-        // Wait for render to complete, then re-center and scale
-        setTimeout(() => fitMindmapSVG(container), 500);
+        // Apply fit after a short delay (markmap's d3 layout needs a tick)
+        requestAnimationFrame(() => requestAnimationFrame(() => fitMindmapSVG(container)));
     }
 }
 
@@ -488,7 +494,6 @@ function fitMindmapSVG(container) {
     });
 
     if (minX === Infinity) {
-        // No visible content — center the first group
         const g = groups[0];
         g.setAttribute('transform', `translate(${w/2}, ${h/2}) scale(1)`);
         return;
@@ -503,15 +508,41 @@ function fitMindmapSVG(container) {
     const tx = w/2 - (minX + contentW/2) * scale;
     const ty = h/2 - (minY + contentH/2) * scale;
 
-    // Apply transform to all top-level groups
     groups.forEach(g => {
         g.setAttribute('transform', `translate(${tx}, ${ty}) scale(${scale})`);
     });
 }
 
+// Inline mindmap zoom (uses the same logic as fullscreen, just different container)
+function inlineMindmapZoom(factor) {
+    const container = document.getElementById('mindmap-container');
+    if (!container) return;
+    const svg = container.querySelector('svg.markmap');
+    if (!svg) return;
+    const groups = svg.querySelectorAll(':scope > g');
+    const w = container.offsetWidth;
+    const h = container.offsetHeight;
+    groups.forEach(g => {
+        const t = g.getAttribute('transform') || '';
+        const match = t.match(/translate\(([^,]+),\s*([^)]+)\)\s*scale\(([^)]+)\)/);
+        if (match) {
+            const tx = parseFloat(match[1]);
+            const ty = parseFloat(match[2]);
+            const s = parseFloat(match[3]) * factor;
+            const newTx = w/2 + (tx - w/2) * factor;
+            const newTy = h/2 + (ty - h/2) * factor;
+            g.setAttribute('transform', `translate(${newTx}, ${newTy}) scale(${s})`);
+        }
+    });
+}
+
+function fitMindmapInline() {
+    fitMindmapSVG(document.getElementById('mindmap-container'));
+}
+
 function openMindmapFullscreen() {
     if (!mindmapData) return;
-    // Create a full-screen modal overlay
+    // Create a full-screen modal overlay with zoom controls
     const modal = document.createElement('div');
     modal.id = 'mindmap-modal';
     modal.className = 'fixed inset-0 z-[100] bg-white dark:bg-gray-900 flex flex-col';
@@ -519,16 +550,28 @@ function openMindmapFullscreen() {
         <div class="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
             <h3 class="font-semibold text-lg">🧠 Mindmap — Full Screen</h3>
             <div class="flex items-center gap-2">
-                <button onclick="fitMindmapFullscreen()" class="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-sm">
-                    🔲 Fit to Screen
+                <button onclick="mindmapZoom(1.2)" title="Zoom in" class="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-bold">
+                    ＋
+                </button>
+                <button onclick="mindmapZoom(0.83)" title="Zoom out" class="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-bold">
+                    －
+                </button>
+                <button onclick="fitMindmapFullscreen()" title="Fit to screen" class="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-sm">
+                    🔲 Fit
+                </button>
+                <button onclick="mindmapResetView()" title="Reset view" class="px-3 py-2 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-sm">
+                    ↺ Reset
                 </button>
                 <button onclick="closeMindmapFullscreen()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
                     ✕ Close
                 </button>
             </div>
         </div>
-        <div id="mindmap-fullscreen-container" class="flex-1 overflow-hidden p-4 relative">
+        <div id="mindmap-fullscreen-container" class="flex-1 overflow-hidden p-4 relative" style="cursor: grab;">
             <div class="markmap w-full h-full"><script type="text/template">${mindmapData}<\/script></div>
+        </div>
+        <div class="px-4 py-2 text-xs text-gray-500 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+            💡 Drag to pan • Scroll to zoom • Ctrl+0 to reset
         </div>
     `;
     document.body.appendChild(modal);
@@ -536,12 +579,119 @@ function openMindmapFullscreen() {
     // Render markmap in the modal
     if (window.markmap && window.markmap.autoLoader) {
         window.markmap.autoLoader.renderAll();
-        // Fix SVG sizing after render
-        setTimeout(() => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
             const container = document.getElementById('mindmap-fullscreen-container');
             fitMindmapSVG(container);
-        }, 500);
+            attachMindmapInteraction(container);
+        }));
     }
+}
+
+// Zoom in/out (multiplies the current scale)
+function mindmapZoom(factor) {
+    const container = document.getElementById('mindmap-fullscreen-container');
+    if (!container) return;
+    const svg = container.querySelector('svg.markmap');
+    if (!svg) return;
+    const groups = svg.querySelectorAll(':scope > g');
+    groups.forEach(g => {
+        const t = g.getAttribute('transform') || '';
+        const match = t.match(/translate\(([^,]+),\s*([^)]+)\)\s*scale\(([^)]+)\)/);
+        if (match) {
+            const tx = parseFloat(match[1]);
+            const ty = parseFloat(match[2]);
+            const s = parseFloat(match[3]) * factor;
+            // Zoom around the center of the container
+            const w = container.offsetWidth;
+            const h = container.offsetHeight;
+            // Recalculate translate to zoom around center
+            const newTx = w/2 + (tx - w/2) * factor;
+            const newTy = h/2 + (ty - h/2) * factor;
+            g.setAttribute('transform', `translate(${newTx}, ${newTy}) scale(${s})`);
+        }
+    });
+}
+
+function mindmapResetView() {
+    const container = document.getElementById('mindmap-fullscreen-container');
+    if (!container) return;
+    fitMindmapSVG(container);
+}
+
+// Attach drag-to-pan and scroll-to-zoom to a mindmap container
+function attachMindmapInteraction(container) {
+    if (!container) return;
+    const svg = container.querySelector('svg.markmap');
+    if (!svg) return;
+
+    let isDragging = false;
+    let startX, startY;
+
+    // Drag to pan
+    container.addEventListener('mousedown', (e) => {
+        if (e.target.closest('button')) return;  // Don't drag when clicking buttons
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        container.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        startX = e.clientX;
+        startY = e.clientY;
+        const groups = svg.querySelectorAll(':scope > g');
+        groups.forEach(g => {
+            const t = g.getAttribute('transform') || '';
+            const match = t.match(/translate\(([^,]+),\s*([^)]+)\)\s*scale\(([^)]+)\)/);
+            if (match) {
+                const tx = parseFloat(match[1]) + dx;
+                const ty = parseFloat(match[2]) + dy;
+                const s = parseFloat(match[3]);
+                g.setAttribute('transform', `translate(${tx}, ${ty}) scale(${s})`);
+            }
+        });
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        container.style.cursor = 'grab';
+    });
+
+    // Scroll to zoom
+    container.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.1 : 0.9;
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const w = container.offsetWidth;
+        const h = container.offsetHeight;
+        const groups = svg.querySelectorAll(':scope > g');
+        groups.forEach(g => {
+            const t = g.getAttribute('transform') || '';
+            const match = t.match(/translate\(([^,]+),\s*([^)]+)\)\s*scale\(([^)]+)\)/);
+            if (match) {
+                const tx = parseFloat(match[1]);
+                const ty = parseFloat(match[2]);
+                const s = parseFloat(match[3]) * factor;
+                // Zoom around mouse position
+                const newTx = mouseX + (tx - mouseX) * factor;
+                const newTy = mouseY + (ty - mouseY) * factor;
+                g.setAttribute('transform', `translate(${newTx}, ${newTy}) scale(${s})`);
+            }
+        });
+    }, { passive: false });
+
+    // Ctrl+0 to reset
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === '0') {
+            e.preventDefault();
+            fitMindmapSVG(container);
+        }
+    });
 }
 
 function fitMindmapFullscreen() {
