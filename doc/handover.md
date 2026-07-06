@@ -56,7 +56,7 @@ pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
 
-> **Current status:** 192 tests passing, 96% backend coverage.
+> **Current status:** 198 tests passing, 96% backend coverage.
 
 ### Sidebar Search
 
@@ -115,7 +115,7 @@ video-learning-app/
 │       ├── login.html       # AuthKit login page
 │       ├── error.html       # Error page
 │       └── redirect.html    # Redirect helper
-├── tests/                   # 192 pytest tests (96% coverage)
+├── tests/                   # 198 pytest tests (96% coverage)
 │   ├── conftest.py          # Fixtures: test DB, client
 │   ├── test_config.py
 │   ├── test_database.py
@@ -209,6 +209,7 @@ Firebase Console → Authentication → Settings → Authorized Domains.
 *   Global Search Bar (filters the course list in real time as you type).
 *   Navigation: `Dashboard` (Home), `My Courses` (Expandable list), `Chat History`.
 *   Footer: User Avatar, Settings.
+*   Mobile: the sidebar logo has a toggle button that swaps between a hamburger (☰) and a close (✕) icon depending on whether the sidebar is open or closed.
 
 ### Homepage (Dashboard) Layout
 *   **Upload Zone:** Large drag-and-drop box at the top for video files.
