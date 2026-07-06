@@ -441,16 +441,48 @@ function checkAnswer(btn, selected, correct) {
 let mindmapData = null;
 let mindmapInstances = {};  // Store the Markmap instances for zoom/pan control
 let topicTimestamps = [];    // Map of topic -> {start, end}
+let markmapScriptReady = false;
+let markmapScriptPromise = null;
+
+// Pre-load the Markmap CDN script so the mindmap tab is instant.
+function preloadMarkmapScript() {
+    if (markmapScriptPromise) return markmapScriptPromise;
+    if (document.getElementById('markmap-script')) {
+        markmapScriptPromise = Promise.resolve();
+        markmapScriptReady = true;
+        return markmapScriptPromise;
+    }
+    markmapScriptPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.id = 'markmap-script';
+        script.src = 'https://cdn.jsdelivr.net/npm/markmap-autoloader@0.16';
+        script.onload = () => {
+            markmapScriptReady = true;
+            resolve();
+        };
+        script.onerror = () => reject(new Error('Failed to load Markmap CDN script'));
+        document.head.appendChild(script);
+    });
+    return markmapScriptPromise;
+}
 
 async function loadMindmap() {
     if (contentCache.mindmap) return;
+    const container = document.getElementById('mindmap-container');
+    // Show a loading state immediately so the tab is never empty.
+    if (container && !container.querySelector('.mindmap-loading')) {
+        container.innerHTML = '<div class="mindmap-loading flex items-center justify-center h-full text-sm text-gray-400">⏳ Loading mindmap...</div>';
+    }
     try {
         // Fetch mindmap and topic_timestamps in parallel
         const [mindmapResp, timestampsResp] = await Promise.all([
             fetch(`/api/generate/${videoId}/assets/mindmap`),
             fetch(`/api/generate/${videoId}/assets/topic_timestamps`),
         ]);
-        if (!mindmapResp.ok) return;
+        if (!mindmapResp.ok) {
+            if (container) container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-gray-400">No mindmap yet. Click "Generate" to create learning materials.</div>';
+            return;
+        }
         const data = await mindmapResp.json();
         mindmapData = data.data;
         contentCache.mindmap = true;
@@ -460,17 +492,13 @@ async function loadMindmap() {
             topicTimestamps = tsData.data || [];
             contentCache.topicTimestamps = topicTimestamps;
         }
-        // Load Markmap
-        if (!document.getElementById('markmap-script')) {
-            const script = document.createElement('script');
-            script.id = 'markmap-script';
-            script.src = 'https://cdn.jsdelivr.net/npm/markmap-autoloader@0.16';
-            script.onload = () => renderMindmap(data.data);
-            document.head.appendChild(script);
-        } else {
-            renderMindmap(data.data);
-        }
-    } catch (e) {}
+        // Wait for the Markmap script to be ready (already preloaded)
+        await preloadMarkmapScript();
+        renderMindmap(data.data);
+    } catch (e) {
+        console.error('Failed to load mindmap:', e);
+        if (container) container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Failed to load mindmap. Please try again.</div>';
+    }
 }
 
 function renderMindmap(markdown) {
@@ -497,7 +525,9 @@ function renderMindmap(markdown) {
             const mm = Markmap.create(svg, null, root);
             mindmapInstances['inline'] = mm;
 
-            // Fit the mindmap to the container after render
+            // Fit the mindmap to the container after render, and attach the
+            // click handler. Retry the click handler a few times because
+            // Markmap creates the .markmap-node <g> elements asynchronously.
             setTimeout(() => {
                 try {
                     mm.fit();
@@ -506,6 +536,9 @@ function renderMindmap(markdown) {
                 }
                 attachMindmapClickHandler(container);
             }, 100);
+            // Retry: Markmap sometimes paints nodes after first frame
+            setTimeout(() => attachMindmapClickHandler(container), 500);
+            setTimeout(() => attachMindmapClickHandler(container), 1500);
 
             return;
         } catch (e) {
@@ -822,6 +855,9 @@ function jumpToTopic(topicName) {
         alert(`No timestamp info for "${topicName}".\nThe video wasn't generated with topic timestamps yet — try regenerating materials.`);
         return;
     }
+    // If we're in the fullscreen mindmap modal, close it first so the user
+    // sees the video and transcript on the page below.
+    closeMindmapFullscreen();
     // Jump the video
     const video = document.querySelector('video');
     if (video) {
@@ -855,6 +891,15 @@ function attachMindmapClickHandler(container) {
                 }
             }
             target = target.parentElement;
+        }
+    });
+    // Show a pointer cursor + tooltip on every mindmap node, plus a
+    // visual hint that the node is clickable.
+    svg.querySelectorAll('.markmap-node').forEach(node => {
+        node.style.cursor = 'pointer';
+        const foreignObject = node.querySelector('foreignObject');
+        if (foreignObject) {
+            foreignObject.setAttribute('title', '▶ Click to watch this part of the video');
         }
     });
 }
@@ -946,5 +991,8 @@ async function sendChatMessage() {
 
 // ── Init ──
 loadTranscript();
+// Pre-load the Markmap script in the background so the mindmap tab
+// renders instantly when the user clicks it (saves ~1-2s CDN fetch time).
+preloadMarkmapScript();
 </script>
 {% endblock %}

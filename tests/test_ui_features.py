@@ -258,3 +258,71 @@ def test_video_page_has_topic_click_functions(client: TestClient):
     # Should fetch topic_timestamps asset
     assert "/assets/topic_timestamps" in response.text
     assert "topicTimestamps" in response.text
+
+
+def test_video_page_preloads_markmap_script(client: TestClient):
+    """Video page should pre-load the Markmap CDN script on page load to
+    avoid the multi-second cold start when the user first clicks the
+    mindmap tab."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # The page should pre-load the Markmap script
+    assert "preloadMarkmapScript" in response.text
+    assert "markmap-autoloader" in response.text
+    # Loading state should be shown to the user (so the tab is never blank)
+    assert "mindmap-loading" in response.text or "Loading mindmap" in response.text
+
+
+def test_mindmap_node_has_click_tooltip_and_pointer_cursor(client: TestClient):
+    """Mindmap nodes should show a pointer cursor and a tooltip saying
+    'Click to watch this part of the video'."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Pointer cursor
+    assert "node.style.cursor = 'pointer'" in response.text
+    # Tooltip
+    assert "Click to watch this part of the video" in response.text
+    # jumpToTopic should close the fullscreen modal first
+    assert "closeMindmapFullscreen()" in response.text
