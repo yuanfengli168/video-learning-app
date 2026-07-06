@@ -2,6 +2,20 @@
 
 An open-source, AI-powered web application designed to help users learn from online video classes. The app transcribes local video files, generates interactive learning materials (summaries, mindmaps, quizzes, flashcards), and provides a ChatGPT-style interface to chat with an AI about real-world applications of the concepts.
 
+## Quick Commands
+```
+# First time only:
+bash scripts/setup.sh                    # Install everything
+# After downloading Firebase key from console:
+bash scripts/setup_firebase_key.sh       # Move key to project root
+
+# Every time you want to run the app:
+bash scripts/start.sh                    # Start Ollama + app
+
+# Every time you want to run tests:
+bash scripts/test.sh                     # Run tests with coverage
+```
+
 ## Tech Stack
 *   **Backend:** FastAPI (Python 3.11+)
 *   **Frontend:** Jinja2 templates + HTMX + Tailwind CSS (dark/light themes, responsive for Desktop & Mobile)
