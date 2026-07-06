@@ -16,13 +16,12 @@ from app.models import Course, Section, Video
 
 router = APIRouter(tags=["frontend"])
 
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 
 
 def _ctx(request: Request, user: dict[str, Any] | None, **extra) -> dict[str, Any]:
-    """Common template context."""
+    """Common template context (without request — passed separately)."""
     ctx = {
-        "request": request,
         "app_name": settings.app_name,
         "user": user,
         "firebase_config": {
@@ -52,6 +51,7 @@ async def dashboard(
         ).scalars().all()
 
     return templates.TemplateResponse(
+        request,
         "dashboard.html",
         _ctx(request, user, courses=courses),
     )
@@ -68,12 +68,14 @@ async def course_view(
     course = db.get(Course, course_id)
     if not course:
         return templates.TemplateResponse(
+            request,
             "error.html",
             _ctx(request, user, error="Course not found"),
             status_code=404,
         )
 
     return templates.TemplateResponse(
+        request,
         "course.html",
         _ctx(request, user, course=course),
     )
@@ -90,6 +92,7 @@ async def video_view(
     video = db.get(Video, video_id)
     if not video:
         return templates.TemplateResponse(
+            request,
             "error.html",
             _ctx(request, user, error="Video not found"),
             status_code=404,
@@ -99,6 +102,7 @@ async def video_view(
     course = db.get(Course, section.course_id) if section else None
 
     return templates.TemplateResponse(
+        request,
         "video.html",
         _ctx(request, user, video=video, course=course, section=section),
     )
@@ -113,11 +117,13 @@ async def login_page(
     if user:
         # Already logged in — redirect to dashboard
         return templates.TemplateResponse(
+            request,
             "redirect.html",
             _ctx(request, user, target="/"),
         )
 
     return templates.TemplateResponse(
+        request,
         "login.html",
         _ctx(request, user),
     )
