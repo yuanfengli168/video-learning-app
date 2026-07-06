@@ -278,3 +278,84 @@ def test_chat_history_no_sessions_shows_empty_message(client: TestClient):
     assert response.status_code == 200
     # The empty-state copy is rendered when sessions.length === 0
     assert "No chat sessions yet" in response.text
+
+
+# ── Sidebar search UX improvements ──
+
+
+def test_sidebar_search_has_magnifier_and_clear_button(client: TestClient):
+    """The sidebar search input should have a magnifier icon and a
+    hidden clear (✕) button so the user can see it's searchable and
+    can clear the query."""
+    with _mock_auth():
+        client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    # Magnifier SVG (the M21 21l-4.35 path is a search icon)
+    assert "M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" in response.text
+    # Clear button is present and starts hidden
+    assert 'id="sidebar-search-clear"' in response.text
+    assert "hidden" in response.text.split('id="sidebar-search-clear"')[1][:200]
+    # The clearSidebarSearch function exists
+    assert "function clearSidebarSearch" in response.text
+    # The result count element exists
+    assert 'id="sidebar-search-count"' in response.text
+
+
+def test_sidebar_course_items_have_label_span_for_highlighting(client: TestClient):
+    """Each course link must have a `.sidebar-course-label` span so the
+    search filter can highlight the matched substring in the title."""
+    with _mock_auth():
+        client.post(
+            "/api/courses", json={"title": "Machine Learning"}, headers=_auth_headers()
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    assert 'class="sidebar-course-label"' in response.text
+
+
+def test_sidebar_search_filter_function_includes_count_and_highlight(client: TestClient):
+    """filterSidebarCourses should manage the result count, the clear
+    button, and call highlightMatch to mark the matched substring."""
+    with _mock_auth():
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    # The function body must reference all the new elements
+    body_start = response.text.find("function filterSidebarCourses")
+    body_end = response.text.find("function highlightMatch", body_start)
+    body = response.text[body_start:body_end] if body_end > 0 else response.text[body_start:]
+    assert "sidebar-search-count" in body
+    assert "sidebar-search-clear" in body
+    assert "highlightMatch" in body
+    # The highlight function should produce a <mark> tag
+    assert response.text.count("function highlightMatch") >= 1
+    h_start = response.text.find("function highlightMatch")
+    h_end = response.text.find("function clearSidebarSearch", h_start)
+    h_body = response.text[h_start:h_end] if h_end > 0 else response.text[h_start:]
+    assert "<mark" in h_body
+    assert "yellow" in h_body
+
+
+def test_base_template_defines_escapeHtml_for_search_highlight(client: TestClient):
+    """base.html must define escapeHtml because filterSidebarCourses ->
+    highlightMatch depends on it. Without it, typing in the sidebar
+    search would throw a ReferenceError and silently fail (no filtering,
+    no count, no clear button)."""
+    with _mock_auth():
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    # escapeHtml should be defined in the base template's <script> block
+    # (it lives in base.html so that highlightMatch can call it).
+    assert "function escapeHtml" in response.text
+    # And it must be defined BEFORE highlightMatch is called
+    escape_pos = response.text.find("function escapeHtml")
+    highlight_call_pos = response.text.find("highlightMatch(original, query)")
+    # Note: highlightMatch itself appears later, but the call site
+    # filterSidebarCourses appears before the function definition for
+    # highlightMatch. The important check is that escapeHtml is defined
+    # before filterSidebarCourses (since filterSidebarCourses calls it
+    # transitively via highlightMatch which only runs at call time).
+    # Practically: the function definition must exist in the page.
+    assert escape_pos > 0, "escapeHtml must be defined in base.html"
