@@ -446,18 +446,21 @@ async function loadMindmap() {
 
 function renderMindmap(markdown) {
     const container = document.getElementById('mindmap-container');
+    // Make sure the container is visible and has dimensions before rendering
+    container.style.display = 'block';
     container.innerHTML = `<div class="markmap w-full h-full"><script type="text/template">${markdown}<\/script></div>`;
     if (window.markmap && window.markmap.autoLoader) {
         window.markmap.autoLoader.renderAll();
-        // Fix SVG sizing after render
-        setTimeout(() => fitMindmapSVG(container), 200);
+        // Wait for render to complete, then re-center and scale
+        setTimeout(() => fitMindmapSVG(container), 500);
     }
 }
 
 function fitMindmapSVG(container) {
+    if (!container) return;
     const svg = container.querySelector('svg.markmap');
     if (!svg) return;
-    // Set SVG to fill container with pixel dimensions (d3 needs absolute values)
+    // Set SVG to fill container with pixel dimensions
     const w = container.offsetWidth;
     const h = container.offsetHeight;
     if (w > 0 && h > 0) {
@@ -466,15 +469,44 @@ function fitMindmapSVG(container) {
         svg.setAttribute('width', w);
         svg.setAttribute('height', h);
     }
-    // Try to call fit() on the markmap instance
-    if (window.markmap && window.markmap.autoLoader) {
-        const instances = window.markmap.autoLoader.instances || [];
-        instances.forEach(inst => {
-            if (inst.fit) {
-                try { inst.fit(); } catch(e) {}
+    // Find all top-level <g> elements and re-center/scale them
+    const groups = svg.querySelectorAll(':scope > g');
+    if (groups.length === 0) return;
+
+    // Get combined bounding box of all content
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    groups.forEach(g => {
+        try {
+            const bbox = g.getBBox();
+            if (bbox.width > 0 || bbox.height > 0) {
+                minX = Math.min(minX, bbox.x);
+                minY = Math.min(minY, bbox.y);
+                maxX = Math.max(maxX, bbox.x + bbox.width);
+                maxY = Math.max(maxY, bbox.y + bbox.height);
             }
-        });
+        } catch(e) {}
+    });
+
+    if (minX === Infinity) {
+        // No visible content — center the first group
+        const g = groups[0];
+        g.setAttribute('transform', `translate(${w/2}, ${h/2}) scale(1)`);
+        return;
     }
+
+    const contentW = maxX - minX;
+    const contentH = maxY - minY;
+    const scaleX = w / contentW;
+    const scaleY = h / contentH;
+    const scale = Math.min(scaleX, scaleY, 1.5) * 0.9;
+
+    const tx = w/2 - (minX + contentW/2) * scale;
+    const ty = h/2 - (minY + contentH/2) * scale;
+
+    // Apply transform to all top-level groups
+    groups.forEach(g => {
+        g.setAttribute('transform', `translate(${tx}, ${ty}) scale(${scale})`);
+    });
 }
 
 function openMindmapFullscreen() {
@@ -508,7 +540,7 @@ function openMindmapFullscreen() {
         setTimeout(() => {
             const container = document.getElementById('mindmap-fullscreen-container');
             fitMindmapSVG(container);
-        }, 300);
+        }, 500);
     }
 }
 
