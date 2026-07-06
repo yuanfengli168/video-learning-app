@@ -54,6 +54,12 @@ def _ctx(
             .scalars()
             .all()
         )
+        # Also expose the user's courses (with sections) for the dashboard
+        # upload picker. SQLAlchemy's lazy='select' loads sections on
+        # access; we touch them here so the template can render them
+        # without an N+1 in the Jinja for-loop.
+        for c in ctx["sidebar_courses"]:
+            _ = list(c.sections)
     ctx.update(extra)
     return ctx
 
@@ -64,23 +70,17 @@ async def dashboard(
     db: Session = Depends(get_db),
     user: dict[str, Any] | None = Depends(get_current_user_optional),
 ) -> HTMLResponse:
-    """Dashboard / home page."""
-    # The sidebar course list is now in _ctx; fetch the full course list
-    # for the dashboard grid (no ordering needed; matches default).
-    courses = []
-    if user:
-        courses = (
-            db.execute(
-                select(Course).where(Course.user_id == user.get("uid", ""))
-            )
-            .scalars()
-            .all()
-        )
+    """Dashboard / home page.
 
+    The sidebar course list (with sections loaded for the upload
+    picker) is built in `_ctx`. We pass it through as `courses` so
+    the existing template for-loop works without changes.
+    """
+    ctx = _ctx(request, user, db=db)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        _ctx(request, user, db=db, courses=courses),
+        {**ctx, "courses": ctx.get("sidebar_courses", [])},
     )
 
 

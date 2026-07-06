@@ -6,12 +6,44 @@
 <div class="space-y-6">
     <!-- Upload Zone -->
     {% if user %}
-    <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center hover:border-indigo-500 dark:hover:border-indigo-400 transition-colors cursor-pointer"
-         onclick="document.getElementById('upload-input').click()">
+    {% set all_sections = [] %}
+    {% for c in courses %}
+        {% for s in c.sections %}
+            {% set _ = all_sections.append((s.id, c.title ~ ' / ' ~ s.title)) %}
+        {% endfor %}
+    {% endfor %}
+    <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center hover:border-indigo-500 dark:hover:border-indigo-400 transition-colors">
         <div class="text-4xl mb-2">📤</div>
-        <p class="text-lg font-medium text-gray-700 dark:text-gray-300">Drag & drop a video file here</p>
+        <p class="text-lg font-medium text-gray-700 dark:text-gray-300">Drag &amp; drop a video file here</p>
         <p class="text-sm text-gray-400">or click to browse</p>
-        <input type="file" id="upload-input" class="hidden" accept="video/*" onchange="handleUpload(this)">
+
+        {% if all_sections %}
+            <!-- Section picker + file input — hidden by default, opened by the upload zone -->
+            <div class="mt-4 max-w-md mx-auto">
+                <label for="dashboard-upload-section" class="block text-xs text-gray-500 mb-1 text-left">Upload to section:</label>
+                <select id="dashboard-upload-section" class="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                    {% for s_id, s_label in all_sections %}
+                        <option value="{{ s_id }}">{{ s_label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="button" id="dashboard-upload-btn" class="mt-4 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                Choose Video
+            </button>
+            <input type="file" id="upload-input" class="hidden" accept="video/*">
+            <!-- Drag-and-drop visual feedback (set by JS) -->
+            <p id="dashboard-upload-status" class="mt-2 text-xs text-gray-500 min-h-[1rem]"></p>
+        {% else %}
+            <p class="mt-3 text-sm text-amber-600 dark:text-amber-400">
+                {% if courses %}
+                    Create a section in one of your courses to start uploading.
+                    <a href="{% if courses[0] %}/course/{{ courses[0].id }}{% else %}#{% endif %}" class="underline ml-1">Go to {{ courses[0].title if courses[0] else 'course' }}</a>
+                {% else %}
+                    Create a course and section first, then upload from there.
+                    <button onclick="showCreateCourse()" class="underline ml-1">Create a course</button>
+                {% endif %}
+            </p>
+        {% endif %}
     </div>
     {% else %}
     <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
@@ -93,10 +125,121 @@ async function createCourse(e) {
         alert('Failed to create course: ' + (err.detail || 'Unknown error'));
     }
 }
-function handleUpload(input) {
-    const file = input.files[0];
+// Dashboard upload — actually uploads to the section picked in
+// the dropdown. Supports both file-picker and drag-and-drop.
+function uploadToSection(sectionId, file) {
+    if (!sectionId) {
+        alert('Please pick a section to upload to.');
+        return;
+    }
     if (!file) return;
-    alert('Please create a course and section first, then upload from there. File: ' + file.name);
+    const status = document.getElementById('dashboard-upload-status');
+    if (status) {
+        status.textContent = `⏳ Uploading "${file.name}"...`;
+        status.classList.remove('text-red-500', 'dark:text-red-400', 'text-green-600', 'dark:text-green-400');
+        status.classList.add('text-indigo-600', 'dark:text-indigo-400');
+    }
+    const form = new FormData();
+    form.append('file', file);
+    fetch('/api/videos/upload/' + sectionId, {
+        method: 'POST',
+        body: form,
+    })
+    .then(resp => resp.json().then(data => ({ok: resp.ok, data})))
+    .then(({ok, data}) => {
+        if (ok) {
+            if (status) {
+                status.textContent = `✅ Uploaded "${file.name}". Redirecting...`;
+                status.classList.remove('text-indigo-600', 'dark:text-indigo-400');
+                status.classList.add('text-green-600', 'dark:text-green-400');
+            }
+            // Reload the page so the dashboard reflects the new video
+            // (the user is redirected automatically by location.reload).
+            setTimeout(() => location.reload(), 1200);
+        } else {
+            if (status) {
+                status.textContent = `❌ Upload failed: ${data.detail || 'Unknown error'}`;
+                status.classList.remove('text-indigo-600', 'dark:text-indigo-400');
+                status.classList.add('text-red-500', 'dark:text-red-400');
+            }
+        }
+    })
+    .catch(err => {
+        if (status) {
+            status.textContent = `❌ Upload error: ${err.message}`;
+            status.classList.remove('text-indigo-600', 'dark:text-indigo-400');
+            status.classList.add('text-red-500', 'dark:text-red-400');
+        }
+    });
+}
+
+function getDashboardSelectedSectionId() {
+    const sel = document.getElementById('dashboard-upload-section');
+    return sel ? sel.value : null;
+}
+
+// Wire up the upload zone: file-picker + drag-and-drop + Choose Video button.
+function initDashboardUpload() {
+    const input = document.getElementById('upload-input');
+    const btn = document.getElementById('dashboard-upload-btn');
+    const zone = input ? input.closest('.border-dashed') : null;
+    if (!input || !zone) return;
+
+    // Click the hidden file input when the zone or the Choose Video
+    // button is clicked.
+    zone.addEventListener('click', (e) => {
+        // Ignore clicks on the section dropdown or the Choose Video button
+        // — they have their own handlers.
+        if (e.target.closest('select') || e.target.closest('button')) return;
+        input.click();
+    });
+    if (btn) {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            input.click();
+        });
+    }
+
+    // File-picker change
+    input.addEventListener('change', () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        const sectionId = getDashboardSelectedSectionId();
+        uploadToSection(sectionId, file);
+        // Reset the input so the same file can be re-selected if needed
+        input.value = '';
+    });
+
+    // Drag-and-drop visual feedback
+    ['dragenter', 'dragover'].forEach(evt => {
+        zone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            zone.classList.add('border-indigo-500', 'dark:border-indigo-400', 'bg-indigo-50', 'dark:bg-indigo-900/20');
+        });
+    });
+    ['dragleave', 'drop'].forEach(evt => {
+        zone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            zone.classList.remove('border-indigo-500', 'dark:border-indigo-400', 'bg-indigo-50', 'dark:bg-indigo-900/20');
+        });
+    });
+    zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!file) return;
+        const sectionId = getDashboardSelectedSectionId();
+        uploadToSection(sectionId, file);
+    });
+}
+
+// Run after the DOM is ready so the upload zone is in place.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initDashboardUpload);
+} else {
+    initDashboardUpload();
 }
 </script>
 {% endblock %}

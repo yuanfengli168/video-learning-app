@@ -781,3 +781,110 @@ def test_resize_listener_skips_when_size_unchanged(client: TestClient):
         "the size hasn't actually changed"
     )
     assert "w === _lastInlineSize.w && h === _lastInlineSize.h" in body
+
+
+def test_dashboard_upload_zone_shows_section_picker_when_sections_exist(client: TestClient):
+    """When the user has courses with sections, the dashboard upload
+    zone should show a section picker dropdown instead of the
+    'create a course first' alert."""
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    # Section picker should be present
+    assert 'id="dashboard-upload-section"' in response.text
+    # Section id should appear as an option
+    # (Use the course id in section option since section_ids are uuid-like)
+    assert "ML / Week 1" in response.text
+    # The Choose Video button is there
+    assert 'id="dashboard-upload-btn"' in response.text
+    # No "create a course first" message
+    assert "create a course and section first" not in response.text
+
+
+def test_dashboard_upload_zone_shows_help_when_no_sections(client: TestClient):
+    """When the user has a course but no sections, the dashboard
+    upload zone should show a 'create a section' hint linking to the
+    course page (not the misleading 'create a course' message)."""
+    with _mock_auth():
+        client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    # No section picker
+    assert 'id="dashboard-upload-section"' not in response.text
+    # Helpful hint about creating a section, with a link to the course
+    assert "Create a section" in response.text
+    assert "Go to ML" in response.text
+
+
+def test_dashboard_upload_zone_shows_create_course_when_no_courses(client: TestClient):
+    """When the user has no courses, the dashboard upload zone should
+    show the 'create a course' hint with a button."""
+    with _mock_auth():
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    # No section picker
+    assert 'id="dashboard-upload-section"' not in response.text
+    # Helpful hint
+    assert "Create a course" in response.text
+    # onclick that opens the create-course form
+    assert "showCreateCourse" in response.text
+
+
+def test_dashboard_has_real_upload_function_not_alert(client: TestClient):
+    """The dashboard must have a real uploadToSection function (not
+    the old stub that just showed an alert). Also: it must support
+    drag-and-drop."""
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    # Real upload function
+    assert "function uploadToSection" in response.text
+    # Calls the real upload endpoint
+    assert "/api/videos/upload/" in response.text
+    # Drag-and-drop handlers — the page wires up dragover, dragleave,
+    # and drop via a forEach loop, so we just check that the event
+    # names are present.
+    assert "'drop'" in response.text
+    assert "'dragover'" in response.text
+    assert "'dragleave'" in response.text
+    # No more old stub
+    assert "Please create a course and section first" not in response.text
+    assert "function handleUpload" not in response.text
+
+
+def test_dashboard_upload_status_element_exists(client: TestClient):
+    """A #dashboard-upload-status element must exist so the user
+    gets feedback during/after upload (success or failure)."""
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    assert 'id="dashboard-upload-status"' in response.text
