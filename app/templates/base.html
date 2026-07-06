@@ -158,11 +158,25 @@
             }
         }
         async function logout() {
-            // Clear the backend session cookie
-            await fetch('/api/auth/session', {method: 'DELETE'});
-            // Sign out from Firebase/AuthKit if available
+            // Clear the backend session cookie first. We do this
+            // BEFORE calling AuthKit.signOut() because AuthKit's
+            // signOut() can throw (e.g. network error to Firebase),
+            // and we want the server cookie cleared regardless.
+            try {
+                await fetch('/api/auth/session', {method: 'DELETE'});
+            } catch (e) {
+                console.warn('Failed to clear session cookie:', e);
+            }
+            // Sign out from Firebase/AuthKit so the next visit to
+            // /login doesn't auto-restore the previous user from
+            // IndexedDB. The /login page also force-signs-out as a
+            // belt-and-suspenders, but doing it here too means the
+            // navigation to /login happens with Firebase already
+            // cleared (no race with the cache re-hydration).
             if (typeof AuthKit !== 'undefined' && AuthKit.signOut) {
-                try { await AuthKit.signOut(); } catch(e) {}
+                try { await AuthKit.signOut(); } catch(e) {
+                    console.warn('AuthKit.signOut failed:', e);
+                }
             }
             window.location.href = '/login';
         }

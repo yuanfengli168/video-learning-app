@@ -48,8 +48,76 @@
         },
     });
 
+    // Bug fix: switching accounts in the same browser.
+    //
+    // Symptom: login as Alice → logout → sign in as Bob → page redirects
+    // back as Alice (i.e. only the FIRST account can sign in).
+    //
+    // Root cause: Firebase Auth uses browserLocalPersistence (IndexedDB)
+    // and AuthKit re-hydrates the cached user on init. When the user
+    // navigates to /login after a logout, AuthKit's first
+    // onAuthStateChanged event fires with the previously-cached user.
+    // Our handler then POSTs /api/auth/session with that user's token and
+    // redirects to /, so the user ends up signed in as the previous
+    // account even when they were trying to sign in as someone new.
+    //
+    // Fix: BEFORE subscribing to onAuthStateChanged, force-sign-out any
+    // cached Firebase user. This makes sure onAuthStateChanged's first
+    // fire is `null` (not the previous user), so the login UI stays put
+    // until the user explicitly signs in. We also clear the backend
+    // cookie in parallel so a stale cookie can't be reused.
+    //
+    // After this, the only way to get authenticated is an explicit user
+    // action (clicking "Sign in with Google" / submitting the email
+    // form), which is exactly what we want.
+    try {
+        // Clear backend cookie first (in case the previous logout's
+        // DELETE didn't reach the server, e.g. browser refresh after
+        // closing the tab).
+        await fetch('/api/auth/session', {method: 'DELETE'});
+    } catch (e) {
+        console.warn('Failed to clear stale session cookie:', e);
+    }
+    try {
+        // signOut() is a no-op if there's no cached user, so this is
+        // safe to call unconditionally. It also waits for the Firebase
+        // auth state to settle, which is what we need.
+        if (typeof AuthKit.signOut === 'function') {
+            await AuthKit.signOut();
+        }
+    } catch (e) {
+        // signOut can throw if Firebase isn't ready yet — fall through,
+        // the subsequent init will still work.
+        console.warn('Pre-login signOut failed (likely already signed out):', e);
+    }
+
+    // Track whether the user has *explicitly* initiated a sign-in on
+    // this page. onAuthStateChanged fires once after the forced signOut
+    // above (with null) and then again when the user actually signs in.
+    // We use this flag to make absolutely sure we only redirect when
+    // the user clicks a sign-in button — never on the initial cache
+    // re-hydration, even in edge cases where the signOut above didn't
+    // fully complete before the next onAuthStateChanged event.
+    let userInitiatedSignIn = false;
+
+    // The auth-anchor UI is mounted by init() and renders the inline
+    // sign-in widget. AuthKit fires a DOM-level click event on the
+    // provider buttons; we listen for the FIRST click on any of them
+    // and treat that as the user opting in to sign-in. After that, the
+    // very next onAuthStateChanged with a user is the legitimate one.
+    const anchor = document.getElementById('auth-anchor');
+    const onUserInitiatedSignIn = () => {
+        userInitiatedSignIn = true;
+        // Only need the first click — remove the listener after firing.
+        anchor.removeEventListener('click', onUserInitiatedSignIn, true);
+    };
+    // Use capture phase so we catch the click before AuthKit's internal
+    // handlers. AuthKit also listens on the anchor, so removing this
+    // listener after the first click avoids duplicate triggers.
+    anchor.addEventListener('click', onUserInitiatedSignIn, true);
+
     AuthKit.onAuthStateChanged(async (user) => {
-        if (user) {
+        if (user && userInitiatedSignIn) {
             // Get the Firebase ID token from AuthKit's serialized user
             // AuthKit stores the raw Firebase user object in user._raw
             try {
