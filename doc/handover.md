@@ -48,22 +48,62 @@ pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
 
-## 6. Project Structure (Planned)
+## 6. Project Structure
 ```
 video-learning-app/
 ├── app/
-│   ├── main.py              # FastAPI app entry
+│   ├── __init__.py
+│   ├── main.py              # FastAPI app entry + router registration
 │   ├── config.py            # Settings via pydantic-settings
-│   ├── database.py          # SQLAlchemy engine + session
-│   ├── models/              # SQLAlchemy ORM models
+│   ├── database.py          # SQLAlchemy engine + session + init_db
+│   ├── models/              # ORM models
+│   │   ├── __init__.py
+│   │   ├── asset.py         # Asset (summary, transcript, flashcards, quiz, mindmap)
+│   │   ├── chat.py          # ChatSession + ChatMessage
+│   │   ├── course.py        # Course
+│   │   ├── section.py       # Section
+│   │   └── video.py         # Video
 │   ├── routers/             # API route modules
-│   ├── services/            # Business logic (transcription, llm, etc.)
-│   ├── auth/                # Firebase token verification middleware
+│   │   ├── __init__.py
+│   │   ├── auth.py          # /api/auth/me, /api/auth/verify
+│   │   ├── chat.py          # /api/chat/sessions (CRUD + send message)
+│   │   ├── courses.py       # /api/courses (CRUD + sections)
+│   │   ├── frontend.py      # Jinja2 template routes (/, /course, /video, /login)
+│   │   ├── generation.py    # /api/generate (LLM materials + get assets)
+│   │   └── videos.py        # /api/videos (upload, transcribe, file serving)
+│   ├── services/            # Business logic
+│   │   ├── __init__.py
+│   │   ├── chat.py          # Ollama chat integration
+│   │   ├── llm.py           # Ollama LLM generation + JSON extraction
+│   │   └── transcription.py # Faster-Whisper transcription
+│   ├── auth/                # Auth middleware
+│   │   ├── __init__.py
+│   │   ├── dependencies.py  # get_current_user, get_current_user_optional
+│   │   └── firebase_admin.py # Firebase Admin SDK init + token verification
 │   └── templates/           # Jinja2 HTML templates
-├── static/                  # CSS, JS, images
-├── uploads/                 # User video files (gitignored)
-├── storage/                 # Generated assets (gitignored)
-├── tests/                   # pytest test suite
+│       ├── base.html        # Layout: sidebar, header, dark/light theme toggle
+│       ├── dashboard.html   # Home: upload zone, courses grid
+│       ├── course.html      # Course: sections accordion, video upload
+│       ├── video.html      # Video player + tabs (summary, flashcards, quiz, mindmap, chat)
+│       ├── login.html       # AuthKit login page
+│       ├── error.html       # Error page
+│       └── redirect.html    # Redirect helper
+├── tests/                   # 140 pytest tests (96% coverage)
+│   ├── conftest.py          # Fixtures: test DB, client
+│   ├── test_config.py
+│   ├── test_database.py
+│   ├── test_main.py
+│   ├── test_model_*.py      # Model tests (course, section, video, asset, chat)
+│   ├── test_firebase_admin.py
+│   ├── test_auth.py
+│   ├── test_transcription.py
+│   ├── test_courses.py
+│   ├── test_videos.py
+│   ├── test_llm.py
+│   ├── test_generation.py
+│   ├── test_frontend.py
+│   ├── test_chat_service.py
+│   └── test_chat_router.py
 ├── doc/
 │   ├── design.md
 │   └── handover.md
@@ -71,9 +111,56 @@ video-learning-app/
 ├── .gitignore
 ├── requirements.txt
 └── Readme.md
-```
 
-## 7. Detailed Frontend Layout & UI Specifications
+## 7. Deployment Guide
+
+### Local Development
+```bash
+source venv/bin/activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+App runs at `http://localhost:8000`. Ollama must be running locally at `localhost:11434`.
+
+### Remote Deployment (Free Tier)
+
+**Architecture:** Frontend templates are served by the FastAPI backend (Jinja2). There is no separate frontend build — the backend renders HTML directly. So we only need to deploy the backend.
+
+**Option A: Render.com (Recommended — Free Tier)**
+1. Push your code to GitHub (already done).
+2. Go to [render.com](https://render.com) → New → Web Service.
+3. Connect your GitHub repo `yuanfengli168/video-learning-app`.
+4. Settings:
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - **Plan:** Free
+5. Add environment variables (same as `.env.example`):
+   - `DATABASE_URL` — use a free PostgreSQL from [Neon](https://neon.tech) or [Supabase](https://supabase.com)
+   - `OLLAMA_BASE_URL` — needs a remote Ollama instance (see below)
+   - `FIREBASE_*` — your Firebase config
+   - `FIREBASE_SERVICE_ACCOUNT_KEY_PATH` — path to your service account JSON
+6. Note: Free tier sleeps after 15 min idle, takes ~30s to wake up.
+
+**Option B: Fly.io (Free Tier — 3 shared VMs)**
+1. Install `flyctl`: `brew install flyctl`
+2. `fly launch` in the project root
+3. Add a `Dockerfile` (Fly requires it)
+4. `fly deploy`
+5. Free tier: 3 shared-cpu-1x VMs with 256MB RAM.
+
+**Option C: Railway.app (Free Trial → $5/month)**
+- Similar to Render but no free tier after trial.
+
+**Ollama Remote Hosting:**
+Ollama needs to run somewhere accessible by the backend. Options:
+- Run Ollama on a free VM (Oracle Cloud Free Tier offers always-free ARM VMs)
+- Use a managed Ollama API service
+- For MVP1 testing: run Ollama locally and use a tunnel (ngrok/cloudflare tunnel) to expose it
+
+**Firebase Authorized Domains:**
+After deploying, add your domain (e.g., `your-app.onrender.com`) to:
+Firebase Console → Authentication → Settings → Authorized Domains.
+
+## 8. Detailed Frontend Layout & UI Specifications
 
 ### Global Layout Structure
 *   1 Sidebar + 1 Main Content Area.

@@ -29,7 +29,9 @@ To handle large classes (100+ videos) neatly, the data is structured hierarchica
 *   `Course`: The overarching topic (e.g., "Machine Learning").
 *   `Section`: A module or week (e.g., "Week 1: Neural Networks").
 *   `Video`: The individual class file.
-*   `Asset`: Generated materials (Summary, Flashcards, Quiz, Chat) linked to a Video.
+*   `Asset`: Generated materials (Summary, Flashcards, Quiz, Mindmap, Transcript) linked to a Video.
+*   `ChatSession`: A chat session triggered by a flashcard's "Teach me real-world usage" button. Linked to a Video and User.
+*   `ChatMessage`: Individual messages (user/assistant) within a ChatSession.
 
 ## 4. AI Processing Pipeline
 1.  **Input:** User selects a local video file.
@@ -42,7 +44,7 @@ To handle large classes (100+ videos) neatly, the data is structured hierarchica
 4.  **Storage:** Saved to the local database and file system.
 
 ## 5. Features Scope
-*   **Chat Interface:** A ChatGPT-like UI. Flashcards have a "Real World Usage" button. Clicking it initializes an Ollama chat with a specific system prompt to teach real-world examples. Chat history is persisted in the database.
-*   **Transcript Viewer (MVP2):** A Coursera-style UI where clicking a timestamp (e.g., 00:05:32) seeks the video player to that exact second. Includes a search bar to find keywords in the transcript.
+*   **Chat Interface:** A ChatGPT-like UI. Flashcards have a "Teach me real-world usage" button. Clicking it creates a ChatSession with a specific system prompt to teach real-world examples. Chat history is persisted in the database (ChatSession → ChatMessage).
+*   **Transcript Viewer:** A Coursera-style UI where clicking a timestamp (e.g., 00:05:32) seeks the video player to that exact second. Includes a search bar to find keywords in the transcript. (Implemented in MVP1.)
 *   **Video Downloader (Future):** `yt-dlp` integration to download videos directly from URLs, documented for future implementation.
 EOF
