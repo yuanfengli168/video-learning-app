@@ -39,19 +39,19 @@
         </div>
         <!-- Search -->
         <div class="p-4">
-            <input type="text" placeholder="Search..." class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <input type="text" id="sidebar-search" placeholder="Search courses..." class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" onkeyup="filterSidebarCourses()" autocomplete="off">
         </div>
         <!-- Navigation -->
-        <nav class="flex-1 px-4 space-y-1">
+        <nav class="flex-1 px-4 space-y-1 overflow-y-auto">
             <a href="/" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
                 <span class="mr-3">🏠</span> Dashboard
             </a>
             <div class="pt-2">
                 <p class="px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">My Courses</p>
                 <div id="sidebar-courses" class="mt-1 space-y-1">
-                    {% if user and courses %}
-                        {% for c in courses %}
-                            <a href="/course/{{ c.id }}" class="block px-3 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 truncate">
+                    {% if user and sidebar_courses %}
+                        {% for c in sidebar_courses %}
+                            <a href="/course/{{ c.id }}" class="sidebar-course-item block px-3 py-1.5 rounded-lg text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 truncate" data-title="{{ c.title | lower }}">
                                 📁 {{ c.title }}
                             </a>
                         {% endfor %}
@@ -60,6 +60,8 @@
                     {% else %}
                         <a href="/login" class="block px-3 py-1.5 rounded-lg text-sm text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20">Sign in to view</a>
                     {% endif %}
+                    <!-- "No matches" placeholder, shown by the search filter -->
+                    <p id="sidebar-courses-empty" class="hidden px-3 py-1.5 text-sm text-gray-400">No matches</p>
                 </div>
             </div>
             <div class="pt-2">
@@ -130,6 +132,27 @@
                 try { await AuthKit.signOut(); } catch(e) {}
             }
             window.location.href = '/login';
+        }
+        // Filter the sidebar's course list by the search input value.
+        // Case-insensitive substring match on the course title.
+        function filterSidebarCourses() {
+            const queryEl = document.getElementById('sidebar-search');
+            if (!queryEl) return;
+            const query = queryEl.value.toLowerCase().trim();
+            const items = document.querySelectorAll('.sidebar-course-item');
+            let visible = 0;
+            items.forEach(item => {
+                const title = (item.dataset.title || '').toLowerCase();
+                const match = !query || title.includes(query);
+                item.classList.toggle('hidden', !match);
+                if (match) visible++;
+            });
+            // Show "No matches" placeholder when the query is non-empty
+            // and every item is hidden.
+            const empty = document.getElementById('sidebar-courses-empty');
+            if (empty) {
+                empty.classList.toggle('hidden', !(query && visible === 0));
+            }
         }
     </script>
     {% block scripts %}{% endblock %}

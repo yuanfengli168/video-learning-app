@@ -164,3 +164,63 @@ def test_templates_have_sidebar(client: TestClient):
     response = client.get("/")
     assert "sidebar" in response.text.lower()
     assert "Dashboard" in response.text
+
+# ── Sidebar search tests ──
+
+
+def test_sidebar_search_input_present(client: TestClient):
+    """Sidebar should have a search input that filters courses."""
+    with _mock_auth():
+        client.post("/api/courses", json={"title": "ML"}, headers=_auth_headers())
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    assert 'id="sidebar-search"' in response.text
+    assert "filterSidebarCourses" in response.text
+    assert 'class="sidebar-course-item' in response.text
+    assert 'id="sidebar-courses-empty"' in response.text
+
+
+def test_sidebar_courses_have_data_title_for_filtering(client: TestClient):
+    """Each course in the sidebar must have a data-title attribute so
+    the search filter can match against it (case-insensitive)."""
+    with _mock_auth():
+        client.post(
+            "/api/courses", json={"title": "Machine Learning"}, headers=_auth_headers()
+        )
+        client.post(
+            "/api/courses", json={"title": "Deep Learning"}, headers=_auth_headers()
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    assert 'data-title="machine learning"' in response.text
+    assert 'data-title="deep learning"' in response.text
+
+
+def test_sidebar_courses_shown_on_video_page(client: TestClient):
+    """The sidebar should show the user's courses on every page, not
+    just the dashboard. The _ctx() helper now fetches them when db is
+    passed in."""
+    import io
+
+    with _mock_auth():
+        client.post(
+            "/api/courses", json={"title": "ML Course"}, headers=_auth_headers()
+        )
+        course_id = client.get("/api/courses", headers=_auth_headers()).json()[0]["id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    # Sidebar should list the course
+    assert "ML Course" in response.text
+    assert 'class="sidebar-course-item' in response.text
