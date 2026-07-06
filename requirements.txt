@@ -1,0 +1,28 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+python-multipart==0.0.20
+htmx==0.0.0 # frontend library loaded via CDN, no pip package needed
+
+# Database
+sqlalchemy==2.0.36
+
+# Settings
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Auth
+firebase-admin==6.2.0
+
+# Transcription
+faster-whisper==1.1.0
+
+# LLM
+ollama==0.4.4
+httpx==0.28.1
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0
