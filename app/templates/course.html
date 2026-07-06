@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}{{ course.title }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+    <a href="/" class="text-gray-400 hover:text-indigo-500">Dashboard</a>
+    <span class="mx-1 text-gray-400">/</span>
+    <span class="text-gray-700 dark:text-gray-300">{{ course.title }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Course header -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
+        <h1 class="text-2xl font-bold mb-2">{{ course.title }}</h1>
+        <p class="text-gray-500 dark:text-gray-400">{{ course.description or 'No description' }}</p>
+        <button onclick="showCreateSection()" class="mt-4 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ Add Section</button>
+    </div>
+
+    <!-- Create section form -->
+    <div id="create-section-form" class="hidden bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
+        <form class="space-y-3" onsubmit="createSection(event)">
+            <input type="text" id="section-title" placeholder="Section title (e.g., Week 1: Neural Networks)" required class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+            <div class="flex gap-2">
+                <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Create</button>
+                <button type="button" onclick="hideCreateSection()" class="px-4 py-2 text-gray-500 hover:text-gray-700">Cancel</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Sections -->
+    <div class="space-y-3">
+        {% for section in course.sections %}
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <button onclick="toggleSection('{{ section.id }}')" class="w-full flex items-center justify-between p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                <span class="font-medium">📂 {{ section.title }}</span>
+                <span class="text-sm text-gray-400">{{ section.videos | length }} video(s)</span>
+            </button>
+            <div id="section-{{ section.id }}" class="hidden border-t border-gray-200 dark:border-gray-700">
+                <div class="p-4 space-y-2">
+                    {% for video in section.videos %}
+                    <a href="/video/{{ video.id }}" class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <span class="flex items-center space-x-2">
+                            <span>🎬</span>
+                            <span>{{ video.title }}</span>
+                        </span>
+                        <span class="text-xs px-2 py-1 rounded
+                            {% if video.status == 'ready' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
+                            {% elif video.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                            {% elif video.status == 'transcribing' or video.status == 'generating' %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
+                            {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
+                            {{ video.status }}
+                        </span>
+                    </a>
+                    {% else %}
+                    <p class="text-sm text-gray-400 py-2">No videos in this section</p>
+                    {% endfor %}
+                    <!-- Upload button -->
+                    <div class="pt-2">
+                        <input type="file" id="upload-{{ section.id }}" class="hidden" accept="video/*" onchange="uploadVideo('{{ section.id }}', this)">
+                        <button onclick="document.getElementById('upload-{{ section.id }}').click()" class="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
+                            + Upload Video
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="text-center py-8 text-gray-400">
+            No sections yet. Add a section to start uploading videos.
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+function showCreateSection() {
+    document.getElementById('create-section-form').classList.remove('hidden');
+}
+function hideCreateSection() {
+    document.getElementById('create-section-form').classList.add('hidden');
+}
+function toggleSection(id) {
+    document.getElementById('section-' + id).classList.toggle('hidden');
+}
+async function createSection(e) {
+    e.preventDefault();
+    const title = document.getElementById('section-title').value;
+    const token = await getAuthToken();
+    const resp = await fetch('/api/courses/{{ course.id }}/sections', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+        body: JSON.stringify({title: title}),
+    });
+    if (resp.ok) { location.reload(); }
+    else { alert('Failed to create section'); }
+}
+async function uploadVideo(sectionId, input) {
+    const file = input.files[0];
+    if (!file) return;
+    const token = await getAuthToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    const resp = await fetch('/api/videos/upload/' + sectionId, {
+        method: 'POST',
+        headers: {'Authorization': 'Bearer ' + token},
+        body: formData,
+    });
+    if (resp.ok) { location.reload(); }
+    else { alert('Upload failed: ' + (await resp.json()).detail); }
+}
+</script>
+{% endblock %}

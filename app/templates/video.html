@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}{{ video.title }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}
+    {% if course %}
+    <a href="/" class="text-gray-400 hover:text-indigo-500">Dashboard</a>
+    <span class="mx-1 text-gray-400">/</span>
+    <a href="/course/{{ course.id }}" class="text-gray-400 hover:text-indigo-500">{{ course.title }}</a>
+    <span class="mx-1 text-gray-400">/</span>
+    {% endif %}
+    <span class="text-gray-700 dark:text-gray-300">{{ video.title }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col lg:flex-row gap-6">
+    <!-- Left: Video Player + Transcript -->
+    <div class="lg:w-3/5 space-y-4">
+        <!-- Video Player -->
+        <div class="bg-black rounded-lg overflow-hidden">
+            <video controls class="w-full" src="/api/videos/{{ video.id }}/file"></video>
+        </div>
+
+        <!-- Transcript -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-4">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="font-semibold">📜 Transcript</h3>
+                <input type="text" id="transcript-search" placeholder="Search transcript..." class="px-3 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700" onkeyup="searchTranscript()">
+            </div>
+            <div id="transcript-container" class="max-h-96 overflow-y-auto space-y-1 text-sm">
+                <p class="text-gray-400 py-4 text-center">Loading transcript...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Tabbed Interface -->
+    <div class="lg:w-2/5">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <!-- Tab buttons -->
+            <div class="flex border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+                <button onclick="switchTab('summary')" id="tab-summary" class="px-4 py-3 text-sm font-medium border-b-2 border-indigo-500 text-indigo-600 dark:text-indigo-400">Summary</button>
+                <button onclick="switchTab('flashcards')" id="tab-flashcards" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Flashcards</button>
+                <button onclick="switchTab('quiz')" id="tab-quiz" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Quiz</button>
+                <button onclick="switchTab('mindmap')" id="tab-mindmap" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Mindmap</button>
+            </div>
+
+            <!-- Tab content -->
+            <div class="p-4">
+                <!-- Summary -->
+                <div id="content-summary" class="prose dark:prose-invert max-w-none text-sm">
+                    <p class="text-gray-400">Click "Generate" to create learning materials.</p>
+                    <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                        ⚡ Generate Materials
+                    </button>
+                </div>
+
+                <!-- Flashcards -->
+                <div id="content-flashcards" class="hidden space-y-3"></div>
+
+                <!-- Quiz -->
+                <div id="content-quiz" class="hidden space-y-4"></div>
+
+                <!-- Mindmap -->
+                <div id="content-mindmap" class="hidden">
+                    <div id="mindmap-container" class="w-full h-96"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const videoId = '{{ video.id }}';
+let transcriptData = null;
+
+// ── Tab switching ──
+function switchTab(tab) {
+    ['summary', 'flashcards', 'quiz', 'mindmap'].forEach(t => {
+        document.getElementById('content-' + t).classList.add('hidden');
+        const btn = document.getElementById('tab-' + t);
+        btn.classList.remove('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
+        btn.classList.add('border-transparent', 'text-gray-500');
+    });
+    document.getElementById('content-' + tab).classList.remove('hidden');
+    const activeBtn = document.getElementById('tab-' + tab);
+    activeBtn.classList.add('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
+    activeBtn.classList.remove('border-transparent', 'text-gray-500');
+
+    // Load content if needed
+    if (tab === 'flashcards') loadFlashcards();
+    if (tab === 'quiz') loadQuiz();
+    if (tab === 'mindmap') loadMindmap();
+}
+
+// ── Auth token helper ──
+async function getAuthToken() {
+    // AuthKit stores the Firebase user — get ID token
+    if (typeof AuthKit !== 'undefined' && AuthKit.currentUser) {
+        return await AuthKit.currentUser.getIdToken();
+    }
+    return '';
+}
+
+// ── Load transcript ──
+async function loadTranscript() {
+    try {
+        const token = await getAuthToken();
+        const resp = await fetch(`/api/videos/${videoId}/transcript`, {
+            headers: {'Authorization': 'Bearer ' + token},
+        });
+        if (!resp.ok) {
+            document.getElementById('transcript-container').innerHTML = '<p class="text-gray-400 py-4 text-center">No transcript yet. Transcribe first.</p>';
+            return;
+        }
+        transcriptData = await resp.json();
+        renderTranscript(transcriptData.segments);
+    } catch (e) {
+        document.getElementById('transcript-container').innerHTML = '<p class="text-gray-400 py-4 text-center">Failed to load transcript.</p>';
+    }
+}
+
+function renderTranscript(segments) {
+    const container = document.getElementById('transcript-container');
+    container.innerHTML = segments.map((s, i) => `
+        <div class="transcript-line flex gap-2 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer" onclick="seekTo(${s.start})" data-text="${s.text.toLowerCase()}">
+            <span class="text-indigo-500 text-xs flex-shrink-0 pt-0.5">${formatTime(s.start)}</span>
+            <span class="text-gray-700 dark:text-gray-300">${s.text}</span>
+        </div>
+    `).join('');
+}
+
+function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+function seekTo(seconds) {
+    const video = document.querySelector('video');
+    if (video) { video.currentTime = seconds; video.play(); }
+}
+
+function searchTranscript() {
+    const query = document.getElementById('transcript-search').value.toLowerCase();
+    document.querySelectorAll('.transcript-line').forEach(line => {
+        const text = line.dataset.text;
+        line.style.display = text.includes(query) ? '' : 'none';
+    });
+}
+
+// ── Generate materials ──
+async function generateMaterials() {
+    const token = await getAuthToken();
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '⏳ Generating...';
+    try {
+        const resp = await fetch(`/api/generate/${videoId}`, {
+            method: 'POST',
+            headers: {'Authorization': 'Bearer ' + token},
+        });
+        if (resp.ok) {
+            btn.textContent = '✅ Done! Switch tabs to view.';
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            const err = await resp.json();
+            btn.textContent = '❌ ' + err.detail;
+            btn.disabled = false;
+        }
+    } catch (e) {
+        btn.textContent = '❌ Error';
+        btn.disabled = false;
+    }
+}
+
+// ── Load flashcards ──
+async function loadFlashcards() {
+    const token = await getAuthToken();
+    try {
+        const resp = await fetch(`/api/generate/${videoId}/assets/flashcards`, {
+            headers: {'Authorization': 'Bearer ' + token},
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const container = document.getElementById('content-flashcards');
+        container.innerHTML = data.data.map((card, i) => `
+            <div class="flashcard bg-gray-50 dark:bg-gray-700 rounded-lg p-4 cursor-pointer" onclick="this.classList.toggle('flipped')">
+                <div class="flashcard-front">
+                    <p class="text-xs text-gray-400 mb-1">Term ${i + 1}</p>
+                    <p class="font-medium">${card.term}</p>
+                    <p class="text-xs text-indigo-500 mt-2">Click to reveal definition</p>
+                </div>
+                <div class="flashcard-back hidden">
+                    <p class="text-xs text-gray-400 mb-1">Definition</p>
+                    <p class="text-sm">${card.definition}</p>
+                    <button onclick="event.stopPropagation(); openChat('${card.term}')" class="mt-3 text-xs px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                        💡 Teach me real-world usage
+                    </button>
+                </div>
+            </div>
+        `).join('');
+        // Add flip logic
+        container.querySelectorAll('.flashcard').forEach(card => {
+            card.addEventListener('click', function() {
+                this.querySelector('.flashcard-front').classList.toggle('hidden');
+                this.querySelector('.flashcard-back').classList.toggle('hidden');
+            });
+        });
+    } catch (e) {}
+}
+
+// ── Load quiz ──
+async function loadQuiz() {
+    const token = await getAuthToken();
+    try {
+        const resp = await fetch(`/api/generate/${videoId}/assets/quiz`, {
+            headers: {'Authorization': 'Bearer ' + token},
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const container = document.getElementById('content-quiz');
+        container.innerHTML = data.data.map((q, i) => `
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                <p class="font-medium mb-2">${i + 1}. ${q.question}</p>
+                <div class="space-y-1">
+                    ${q.options.map((opt, j) => `
+                        <button onclick="checkAnswer(this, ${j}, ${q.answer_index})" class="block w-full text-left px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600 text-sm">
+                            ${String.fromCharCode(65 + j)}. ${opt}
+                        </button>
+                    `).join('')}
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {}
+}
+
+function checkAnswer(btn, selected, correct) {
+    const allBtns = btn.parentElement.querySelectorAll('button');
+    allBtns.forEach(b => b.disabled = true);
+    if (selected === correct) {
+        btn.classList.add('bg-green-100', 'dark:bg-green-900/30', 'border-green-500');
+    } else {
+        btn.classList.add('bg-red-100', 'dark:bg-red-900/30', 'border-red-500');
+        allBtns[correct].classList.add('bg-green-100', 'dark:bg-green-900/30', 'border-green-500');
+    }
+}
+
+// ── Load mindmap ──
+async function loadMindmap() {
+    const token = await getAuthToken();
+    try {
+        const resp = await fetch(`/api/generate/${videoId}/assets/mindmap`, {
+            headers: {'Authorization': 'Bearer ' + token},
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        // Load Markmap
+        if (!document.getElementById('markmap-script')) {
+            const script = document.createElement('script');
+            script.id = 'markmap-script';
+            script.src = 'https://cdn.jsdelivr.net/npm/markmap-autoloader@0.16';
+            script.onload = () => renderMindmap(data.data);
+            document.head.appendChild(script);
+        } else {
+            renderMindmap(data.data);
+        }
+    } catch (e) {}
+}
+
+function renderMindmap(markdown) {
+    const container = document.getElementById('mindmap-container');
+    container.innerHTML = `<div class="markmap"><script type="text/template">${markdown}<\/script></div>`;
+    if (window.markmap) { window.markmap.autoLoader.renderAll(); }
+}
+
+// ── Chat (placeholder — Phase 6) ──
+function openChat(concept) {
+    // Will be implemented in Phase 6
+    alert('Chat for: ' + concept + ' — coming in Phase 6!');
+}
+
+// ── Init ──
+loadTranscript();
+</script>
+{% endblock %}

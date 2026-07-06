@@ -8,6 +8,7 @@ from app.config import settings
 from app.database import init_db
 from app.routers import auth as auth_router
 from app.routers import courses as courses_router
+from app.routers import frontend as frontend_router
 from app.routers import generation as generation_router
 from app.routers import videos as videos_router
 
@@ -28,6 +29,7 @@ app.include_router(auth_router.router)
 app.include_router(courses_router.router)
 app.include_router(videos_router.router)
 app.include_router(generation_router.router)
+app.include_router(frontend_router.router)
 
 
 @app.get("/api/health")

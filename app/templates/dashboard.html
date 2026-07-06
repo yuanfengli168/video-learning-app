@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — {{ app_name }}{% endblock %}
+{% block breadcrumb %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Upload Zone -->
+    {% if user %}
+    <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center hover:border-indigo-500 dark:hover:border-indigo-400 transition-colors cursor-pointer"
+         onclick="document.getElementById('upload-input').click()">
+        <div class="text-4xl mb-2">📤</div>
+        <p class="text-lg font-medium text-gray-700 dark:text-gray-300">Drag & drop a video file here</p>
+        <p class="text-sm text-gray-400">or click to browse</p>
+        <input type="file" id="upload-input" class="hidden" accept="video/*" onchange="handleUpload(this)">
+    </div>
+    {% else %}
+    <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
+        <div class="text-4xl mb-2">🔐</div>
+        <p class="text-lg font-medium text-gray-700 dark:text-gray-300">Sign in to start learning</p>
+        <a href="/login" class="inline-block mt-3 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Sign in</a>
+    </div>
+    {% endif %}
+
+    <!-- Continue Learning -->
+    {% if user %}
+    <div>
+        <h2 class="text-lg font-semibold mb-3">Continue Learning</h2>
+        <div class="flex gap-4 overflow-x-auto pb-2">
+            <div class="flex-shrink-0 w-64 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-4 text-center text-gray-400">
+                No videos in progress yet
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Your Courses -->
+    {% if user %}
+    <div>
+        <div class="flex items-center justify-between mb-3">
+            <h2 class="text-lg font-semibold">Your Courses</h2>
+            <button onclick="showCreateCourse()" class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ New Course</button>
+        </div>
+
+        <!-- Create course form (hidden by default) -->
+        <div id="create-course-form" class="hidden mb-4 bg-white dark:bg-gray-800 rounded-lg shadow p-4 border border-gray-200 dark:border-gray-700">
+            <form hx-post="/api/courses" hx-target="#create-result" class="space-y-3">
+                <input type="text" name="title" placeholder="Course title (e.g., Machine Learning)" required class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                <textarea name="description" placeholder="Description (optional)" rows="2" class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"></textarea>
+                <div class="flex gap-2">
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Create</button>
+                    <button type="button" onclick="hideCreateCourse()" class="px-4 py-2 text-gray-500 hover:text-gray-700">Cancel</button>
+                </div>
+            </form>
+            <div id="create-result"></div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {% for course in courses %}
+            <a href="/course/{{ course.id }}" class="block bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-5 hover:shadow-md transition-shadow">
+                <div class="text-3xl mb-2">📁</div>
+                <h3 class="font-semibold text-lg mb-1">{{ course.title }}</h3>
+                <p class="text-sm text-gray-400 line-clamp-2">{{ course.description or 'No description' }}</p>
+            </a>
+            {% else %}
+            <div class="col-span-full text-center py-8 text-gray-400">
+                No courses yet. Create one to get started!
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function showCreateCourse() {
+    document.getElementById('create-course-form').classList.remove('hidden');
+}
+function hideCreateCourse() {
+    document.getElementById('create-course-form').classList.add('hidden');
+}
+function handleUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+    // TODO: Upload to a section (will be implemented when user selects a course/section)
+    alert('Please create a course and section first, then upload from there. File: ' + file.name);
+}
+</script>
+{% endblock %}

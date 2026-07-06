@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -231,3 +232,27 @@ async def get_transcript(
     from app.services.transcription import json_to_transcript
 
     return json_to_transcript(transcript_asset.content)
+
+
+@router.get("/{video_id}/file")
+async def get_video_file(
+    video_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> FileResponse:
+    """Serve the video file for playback."""
+    video = db.get(Video, video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Verify ownership
+    section = db.get(Section, video.section_id)
+    course = db.get(Course, section.course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your video")
+
+    file_path = Path(video.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found on disk")
+
+    return FileResponse(str(file_path), media_type="video/mp4")
