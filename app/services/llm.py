@@ -110,6 +110,8 @@ def generate_materials(transcript: dict[str, Any], model: str | None = None) -> 
         raise ValueError("Transcript is empty — cannot generate materials")
 
     # Call Ollama API
+    # Use temperature=0 + fixed seed for deterministic output so re-generating
+    # the same transcript produces the same mindmap/flashcards/quiz.
     response = httpx.post(
         f"{settings.ollama_base_url}/api/chat",
         json={
@@ -119,6 +121,10 @@ def generate_materials(transcript: dict[str, Any], model: str | None = None) -> 
                 {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Transcript:\n\n{transcript_text}"},
             ],
+            "options": {
+                "temperature": 0,
+                "seed": 42,
+            },
         },
         timeout=300.0,  # 5 min timeout for long transcripts
     )

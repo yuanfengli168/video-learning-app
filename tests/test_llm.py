@@ -194,3 +194,18 @@ def test_llm_prompt_includes_topic_timestamps_instruction():
     assert "topic_timestamps" in GENERATION_SYSTEM_PROMPT
     assert "start" in GENERATION_SYSTEM_PROMPT
     assert "end" in GENERATION_SYSTEM_PROMPT
+
+def test_generate_materials_uses_deterministic_options():
+    """The Ollama call should set temperature=0 and a fixed seed so that
+    re-generating the same transcript produces the same materials."""
+    transcript = {
+        "segments": [{"start": 0.0, "end": 5.0, "text": "Test"}],
+    }
+    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))) as mock_post:
+        generate_materials(transcript)
+
+    # Inspect the payload sent to Ollama
+    call_args = mock_post.call_args
+    payload = call_args.kwargs.get("json") or call_args.args[1]
+    assert payload["options"]["temperature"] == 0
+    assert payload["options"]["seed"] == 42
