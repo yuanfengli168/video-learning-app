@@ -27,7 +27,7 @@ Headers added
 - `Strict-Transport-Security` — only set when behind HTTPS (in
   production). Tells the browser to upgrade future requests to
   HTTPS for one year.
-- `Cross-Origin-Opener-Policy: same-origin` — isolate the browsing
+- `Cross-Origin-Opener-Policy: same-origin-allow-popups` — isolate the browsing
   context. Stops cross-window attacks.
 - `Cross-Origin-Embedder-Policy: credentialless` — require explicit
   opt-in from embedded resources, BUT allow cross-origin resources
@@ -180,18 +180,31 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
-        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        # `same-origin-allow-popups` (not plain `same-origin`) is
+        # required for Firebase popup-based Google sign-in.
+        #
+        # How Firebase popup auth works:
+        #   1. Parent window opens a popup to accounts.google.com
+        #   2. After auth, Google redirects popup to
+        #      firebaseapp.com/__/auth/handler
+        #   3. That handler calls window.opener.postMessage(result,
+        #      parentOrigin) to return the ID token to the parent
+        #
+        # With COOP `same-origin`, the browser SEVERS window.opener
+        # for any cross-origin popup, so step 3 fails silently.
+        # The popup shows a blank page then closes — indistinguishable
+        # from auth/popup-closed-by-user.
+        #
+        # `same-origin-allow-popups` keeps the opener relationship
+        # for popups WE open, while still blocking other origins
+        # from navigating into our browsing context. This is the
+        # correct value for any app using OAuth popup flows.
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
         # Use `credentialless` (not `require-corp`) so cross-origin
         # scripts/styles (Tailwind CDN, AuthKit) still load even
         # though they don't send a `Cross-Origin-Resource-Policy`
         # header. This is the OWASP-recommended setting for apps
-        # that don't use `SharedArrayBuffer`. The trade-off: an
-        # attacker who gets XSS execution can still embed
-        # credentialed cross-origin resources — but the COOP
-        # `same-origin` already blocks the only common attack
-        # vector (popups/windows). We don't load any credentialed
-        # cross-origin resources ourselves, so the residual risk
-        # is zero in practice.
+        # that don't use `SharedArrayBuffer`.
         response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
 
         # HSTS only when we're confident the request is over HTTPS.

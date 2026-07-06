@@ -167,6 +167,40 @@ def test_csp_has_default_src_self(client: TestClient):
     )
 
 
+def test_coop_is_same_origin_allow_popups_not_same_origin(client: TestClient):
+    """Cross-Origin-Opener-Policy must be 'same-origin-allow-popups', NOT
+    plain 'same-origin'.
+
+    Root cause (2026-07-06): with COOP 'same-origin', the browser SEVERS
+    window.opener for ANY cross-origin popup. Firebase popup sign-in uses
+    this exact mechanism:
+      1. Parent window opens a popup to accounts.google.com
+      2. Google redirects popup to firebaseapp.com/__/auth/handler
+      3. That handler calls window.opener.postMessage(result, parentOrigin)
+         to return the ID token to the parent
+
+    With 'same-origin', step 3 fails silently (window.opener is null).
+    The popup shows a blank white page for a few seconds then closes
+    with auth/popup-closed-by-user — indistinguishable from a cancelled
+    sign-in. Google sign-in was broken the entire time COOP was set to
+    'same-origin', but wasn't noticed because the session cookie from
+    before the security middleware was added was still valid.
+
+    'same-origin-allow-popups' keeps the opener relationship for popups
+    WE open (needed for Firebase auth), while still blocking other origins
+    from navigating into our browsing context. This is the correct value
+    for any app using OAuth popup flows.
+    """
+    response = client.get("/api/health")
+    coop = response.headers["cross-origin-opener-policy"]
+    assert coop == "same-origin-allow-popups", (
+        f"COOP must be 'same-origin-allow-popups' (NOT plain 'same-origin'). "
+        f"Plain 'same-origin' severs window.opener for cross-origin popups, "
+        f"breaking Firebase Google sign-in (popup closes blank with "
+        f"auth/popup-closed-by-user). Got: {coop!r}"
+    )
+
+
 def test_coep_is_credentialless_not_require_corp(client: TestClient):
     """Cross-Origin-Embedder-Policy must be 'credentialless' (not
     'require-corp' or 'unsafe-none').
