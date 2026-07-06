@@ -224,3 +224,57 @@ def test_sidebar_courses_shown_on_video_page(client: TestClient):
     # Sidebar should list the course
     assert "ML Course" in response.text
     assert 'class="sidebar-course-item' in response.text
+
+
+# ── Chat history page tests ──
+
+
+def test_chat_history_route_exists(client: TestClient):
+    """The /chat-history route should exist and render (no 404)."""
+    response = client.get("/chat-history")
+    assert response.status_code == 200
+
+
+def test_chat_history_shows_signin_when_unauthenticated(client: TestClient):
+    """Unauthenticated users see a sign-in prompt, not the session list."""
+    response = client.get("/chat-history")
+    assert response.status_code == 200
+    assert "Sign in" in response.text
+    # Should NOT show the session list UI
+    assert 'id="session-list"' not in response.text
+
+
+def test_chat_history_has_session_list_ui_for_authenticated(client: TestClient):
+    """Signed-in users should see the two-pane layout with session list."""
+    with _mock_auth():
+        response = client.get("/chat-history", headers=_auth_headers())
+    assert response.status_code == 200
+    assert 'id="session-list"' in response.text
+    assert 'id="session-detail"' in response.text
+    assert 'id="session-search"' in response.text
+
+
+def test_chat_history_has_js_functions(client: TestClient):
+    """The page must have the JS that loads + renders sessions."""
+    with _mock_auth():
+        response = client.get("/chat-history", headers=_auth_headers())
+    assert response.status_code == 200
+    # Core JS functions
+    assert "loadSessions" in response.text
+    assert "selectSession" in response.text
+    assert "deleteSession" in response.text
+    assert "sendChatMessage" in response.text
+    assert "filterSessions" in response.text
+    # API endpoints it should call
+    assert "/api/chat/sessions" in response.text
+
+
+def test_chat_history_no_sessions_shows_empty_message(client: TestClient):
+    """When the API returns no sessions, show an empty-state message."""
+    with _mock_auth():
+        # Get the page; JS will call the API. We just verify the empty-state
+        # string is present in the JS code so it will be shown.
+        response = client.get("/chat-history", headers=_auth_headers())
+    assert response.status_code == 200
+    # The empty-state copy is rendered when sessions.length === 0
+    assert "No chat sessions yet" in response.text

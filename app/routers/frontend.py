@@ -155,3 +155,27 @@ async def login_page(
         "login.html",
         _ctx(request, user, db=db),
     )
+
+
+@router.get("/chat-history", response_class=HTMLResponse)
+async def chat_history_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(get_current_user_optional),
+) -> HTMLResponse:
+    """Chat history page — list all past flashcard chat sessions.
+
+    The page is a two-pane layout:
+      - Left: list of all the user's chat sessions, with concept, video,
+        date, and message count.
+      - Right: messages of the selected session, with a composer to
+        continue the conversation.
+
+    Both panes are populated client-side via the existing
+    `/api/chat/sessions` endpoints.
+    """
+    return templates.TemplateResponse(
+        request,
+        "chat_history.html",
+        _ctx(request, user, db=db),
+    )
