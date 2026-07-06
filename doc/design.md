@@ -46,9 +46,11 @@ To handle large classes (100+ videos) neatly, the data is structured hierarchica
 
 ## 5. Features Scope
 *   **Chat Interface:** A ChatGPT-like UI. Flashcards have a "Teach me real-world usage" button. Clicking it creates a ChatSession with a specific system prompt to teach real-world examples. Chat history is persisted in the database (ChatSession → ChatMessage).
+*   **Chat History Page:** A dedicated `/chat-history` page with a searchable list of all the user's past chat sessions, a messages panel for the selected session, and an inline composer to continue any conversation. Per-session delete button.
 *   **Transcript Viewer:** A Coursera-style UI where clicking a timestamp (e.g., 00:05:32) seeks the video player to that exact second. Includes a search bar with live highlighting, match count, and prev/next navigation.
 *   **Clickable Mindmap:** Markmap nodes are interactive. Clicking a node jumps the video to that topic's start time, displays a topic banner (name + time range, or `Leaf → Parent` when ancestor-matching is used), and highlights the matching transcript lines. Works in both inline and fullscreen mindmap views. If neither the node nor any of its ancestors has a timestamp, a non-blocking toast is shown in the bottom-right corner (no alert dialog).
 *   **Mindmap Controls:** Inline and fullscreen views support zoom (+/–), fit-to-screen, drag-to-pan, scroll-to-zoom, and Ctrl+0 to reset. All nodes display a pointer cursor and a hover tooltip (`▶ Click to watch this part of the video`).
 *   **Session-based Auth:** AuthKit issues a Firebase ID token on login; the frontend exchanges it for an httpOnly session cookie via `POST /api/auth/session`. All subsequent API calls authenticate via the cookie — the JS code never needs to handle tokens.
+*   **Sidebar Search:** The sidebar's course list is searchable in real time as the user types — case-insensitive substring match against the course title, with a "No matches" placeholder when nothing matches.
 *   **Video Downloader (Future):** `yt-dlp` integration to download videos directly from URLs, documented for future implementation.
 EOF

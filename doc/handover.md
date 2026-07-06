@@ -56,7 +56,15 @@ pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
 
-> **Current status:** 179 tests passing, 96% backend coverage.
+> **Current status:** 192 tests passing, 96% backend coverage.
+
+### Sidebar Search
+
+The sidebar's "Search courses..." input filters the user's course list in real time as the user types. It's a case-insensitive substring match against each course's title (via a `data-title` attribute). The implementation is in `app/templates/base.html` (`filterSidebarCourses` function). The `_ctx()` helper in `app/routers/frontend.py` now fetches the user's courses when a DB session is provided, so the sidebar shows the same course list on every page (not just the dashboard).
+
+### Chat History Page
+
+`/chat-history` is a two-pane Jinja page (see `app/templates/chat_history.html`) that lists all the user's past flashcard chat sessions, lets them continue any conversation, and delete ones they don't need. The backend API (`/api/chat/sessions` and friends) was already in place — only the UI was missing. Unauthenticated users see a sign-in prompt; signed-in users see the list + composer.
 
 ### Mindmap Parent-Map Algorithm
 
@@ -85,7 +93,7 @@ video-learning-app/
 │   │   ├── session.py       # /api/auth/session — issue/clear httpOnly session cookie
 │   │   ├── chat.py          # /api/chat/sessions (CRUD + send message)
 │   │   ├── courses.py       # /api/courses (CRUD + sections)
-│   │   ├── frontend.py      # Jinja2 template routes (/, /course, /video, /login)
+│   │   ├── frontend.py      # Jinja2 template routes (/, /course, /video, /login, /chat-history)
 │   │   ├── generation.py    # /api/generate (LLM materials + get assets incl. topic_timestamps)
 │   │   └── videos.py        # /api/videos (upload, transcribe, file serving)
 │   ├── services/            # Business logic
@@ -99,14 +107,15 @@ video-learning-app/
 │   │   ├── firebase_admin.py # Firebase Admin SDK init + token verification
 │   │   └── session.py       # Session cookie helpers (COOKIE_NAME, set/clear)
 │   └── templates/           # Jinja2 HTML templates
-│       ├── base.html        # Layout: sidebar, header, dark/light theme toggle
+│       ├── base.html        # Layout: sidebar (with course search), header, dark/light theme toggle
 │       ├── dashboard.html   # Home: upload zone, courses grid
 │       ├── course.html      # Course: sections accordion, video upload
 │       ├── video.html       # Video player + tabs + clickable mindmap nodes + topic banner
+│       ├── chat_history.html # Two-pane chat history (list + detail + composer)
 │       ├── login.html       # AuthKit login page
 │       ├── error.html       # Error page
 │       └── redirect.html    # Redirect helper
-├── tests/                   # 179 pytest tests (96% coverage)
+├── tests/                   # 192 pytest tests (96% coverage)
 │   ├── conftest.py          # Fixtures: test DB, client
 │   ├── test_config.py
 │   ├── test_database.py
@@ -197,7 +206,7 @@ Firebase Console → Authentication → Settings → Authorized Domains.
 *   **Top Header Bar:** Spans main area. Left: Hamburger/Logo. Center: Breadcrumbs. Right: User Profile/Logout.
 
 ### Sidebar Contents
-*   Global Search Bar.
+*   Global Search Bar (filters the course list in real time as you type).
 *   Navigation: `Dashboard` (Home), `My Courses` (Expandable list), `Chat History`.
 *   Footer: User Avatar, Settings.
 
