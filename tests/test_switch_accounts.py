@@ -147,17 +147,18 @@ def test_login_page_forces_signout_before_subscribing(client: TestClient):
     # 3) Must guard the post-signin redirect so it only happens after
     #    a real user interaction, not on the initial cache re-hydration.
     #    The current implementation handles this by:
-    #    - Initializing its OWN Firebase app (named "video-learning-app-login")
-    #      with a unique name so it doesn't collide with AuthKit's internal one.
-    #    - Performing signInWithPopup() directly in the click handler
-    #      (capturing the user synchronously from the resolved promise).
+    #    - Calling signInWithPopup() against AuthKit's own Firebase app
+    #      (named 'authkit') via getApp('authkit'). This means we use
+    #      THE SAME auth instance AuthKit uses, so there's no popup
+    #      collision or "popup-closed-by-user" race.
+    #    - Capturing the user synchronously from the resolved promise.
     #    - Gating the onAuthStateChanged safety net behind a signInHandled
     #      flag that only flips inside that click handler.
-    assert "video-learning-app-login" in text, (
-        "login.html must initialize its own Firebase app with a unique "
-        "name (e.g. 'video-learning-app-login'). AuthKit keeps its own "
-        "auth instance internal, so we need a second app to call "
-        "signInWithPopup directly."
+    assert "getApp('authkit')" in text, (
+        "login.html must call getApp('authkit') to use AuthKit's own "
+        "Firebase app. Using a second app (initializeApp with a unique "
+        "name) causes a popup-closed-by-user race because two popups "
+        "fight for the same OAuth flow."
     )
     assert "signInWithPopup" in text, (
         "login.html must call signInWithPopup() directly in the Google "

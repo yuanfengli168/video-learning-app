@@ -127,25 +127,18 @@
         clickEvent.stopImmediatePropagation();
 
         try {
-            // We need our own Firebase app instance because AuthKit
-            // keeps the auth object internal. We give ours a unique
-            // name so it doesn't collide with AuthKit's "default" app.
+            // Use the SAME Firebase app instance that AuthKit uses.
+            // AuthKit calls initializeApp(config, 'authkit'), so we grab
+            // it by name via getApp('authkit'). This means:
+            //   - No second Firebase app on the page (no SDK conflicts)
+            //   - The popup we open is the same one AuthKit would open,
+            //     so no "popup closed by user" race
+            //   - The auth state is shared, so AuthKit's onAuthStateChanged
+            //     handler will fire with the user too (the safety net
+            //     will skip it because signInHandled is true)
             const fb = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js');
             const fba = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
-            const appName = 'video-learning-app-login';
-            let app;
-            try {
-                app = fb.getApp(appName);
-            } catch {
-                app = fb.initializeApp({
-                    apiKey: "{{ firebase_config.apiKey }}",
-                    authDomain: "{{ firebase_config.authDomain }}",
-                    projectId: "{{ firebase_config.projectId }}",
-                    storageBucket: "{{ firebase_config.storageBucket }}",
-                    messagingSenderId: "{{ firebase_config.messagingSenderId }}",
-                    appId: "{{ firebase_config.appId }}",
-                }, appName);
-            }
+            const app = fb.getApp('authkit');  // throws if AuthKit hasn't init'd
             const auth = fba.getAuth(app);
             const provider = new fba.GoogleAuthProvider();
             const result = await fba.signInWithPopup(auth, provider);
