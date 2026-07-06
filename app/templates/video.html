@@ -11,12 +11,15 @@
 {% endblock %}
 
 {% block content %}
-<div class="flex flex-col lg:flex-row gap-6">
+<div class="flex flex-col lg:flex-row gap-4 lg:gap-6 min-w-0">
     <!-- Left: Video Player + Transcript -->
-    <div class="lg:w-3/5 space-y-4">
+    <div class="lg:w-3/5 space-y-4 min-w-0">
         <!-- Video Player -->
-        <div class="bg-black rounded-lg overflow-hidden">
-            <video controls class="w-full" src="/api/videos/{{ video.id }}/file"></video>
+        <div class="bg-black rounded-lg overflow-hidden max-w-full">
+            <!-- max-w-full + h-auto prevent the video from overflowing its
+                 container on small screens (the intrinsic 1280px width would
+                 otherwise force the column wider than the viewport). -->
+            <video controls class="w-full h-auto max-w-full block" src="/api/videos/{{ video.id }}/file"></video>
         </div>
 
         <!-- Topic notification banner (hidden by default, shown when clicking a mindmap node).
@@ -34,10 +37,10 @@
         </div>
 
         <!-- Transcript -->
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-4">
-            <div class="flex items-center justify-between mb-3">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-3 md:p-4">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
                 <h3 class="font-semibold">📜 Transcript</h3>
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
                     <!-- Whisper model selector -->
                     <select id="whisper-model" class="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
                         <option value="tiny">tiny (fastest)</option>
@@ -67,7 +70,7 @@
     </div>
 
     <!-- Right: Tabbed Interface -->
-    <div class="lg:w-2/5">
+    <div class="lg:w-2/5 min-w-0">
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
             <!-- Tab buttons -->
             <div class="flex border-b border-gray-200 dark:border-gray-700 overflow-x-auto">

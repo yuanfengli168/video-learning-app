@@ -391,3 +391,112 @@ def test_toggle_sidebar_function_toggles_both_icons(client: TestClient):
     assert "sidebar-icon-hamburger" in body
     assert "sidebar-icon-close" in body
     assert body.count(".classList.toggle('hidden'") >= 3  # overlay + 2 icons
+
+
+# ── Responsive layout tests ──
+
+
+def test_main_content_has_min_w_0_to_prevent_flex_overflow(client: TestClient):
+    """The main content wrapper must have `min-w-0` so flex children
+    (like a 1280px video player) can shrink below their intrinsic
+    width and don't force horizontal overflow on small screens."""
+    response = client.get("/")
+    assert response.status_code == 200
+    # The main container that wraps <header> + <main>
+    assert "flex-1 md:ml-64 flex flex-col min-h-screen min-w-0" in response.text
+
+
+def test_video_element_constrains_its_width(client: TestClient):
+    """The video element must use max-w-full + h-auto so it scales
+    down to fit narrow viewports instead of overflowing horizontally.
+    Without this, a 1280px video forces the entire layout wider than
+    the screen on mobile.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # The video tag must have max-w-full + h-auto + block
+    assert "class=\"w-full h-auto max-w-full block\"" in response.text
+
+
+def test_video_page_flex_columns_have_min_w_0(client: TestClient):
+    """Both the left and right flex columns on the video page need
+    min-w-0 to allow their content (especially the video player) to
+    shrink to fit the viewport."""
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # The two columns inside the flex row should both have min-w-0
+    assert "lg:w-3/5 space-y-4 min-w-0" in response.text  # left col
+    assert "lg:w-2/5 min-w-0" in response.text  # right col
+
+
+def test_transcript_header_stacks_on_mobile(client: TestClient):
+    """The transcript section header (title + controls) should stack
+    vertically on small screens and sit side-by-side on larger ones,
+    so the controls don't get squished.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # flex-col on mobile, flex-row at sm+ breakpoint
+    assert "flex flex-col sm:flex-row" in response.text
+    # The controls wrapper should wrap on overflow
+    assert "flex-wrap" in response.text

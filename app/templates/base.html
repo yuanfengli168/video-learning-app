@@ -109,7 +109,10 @@
     <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden" onclick="toggleSidebar()"></div>
 
     <!-- Main content -->
-    <div class="flex-1 md:ml-64 flex flex-col min-h-screen">
+    <!-- min-w-0 is required so flex children can shrink below their
+         intrinsic min-content width — without it, wide children (like
+         a 1280px video) force the flex container to overflow the body. -->
+    <div class="flex-1 md:ml-64 flex flex-col min-h-screen min-w-0">
         <!-- Top header -->
         <header class="sticky top-0 z-30 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex items-center justify-between">
             <div class="flex items-center space-x-3">
