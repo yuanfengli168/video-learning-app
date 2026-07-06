@@ -20,10 +20,11 @@ def test_verify_without_token(client: TestClient):
 
 def test_me_with_invalid_token(client: TestClient):
     """/api/auth/me should return 401 with an invalid token."""
-    response = client.get(
-        "/api/auth/me",
-        headers={"Authorization": "Bearer invalid-token"},
-    )
+    with patch("app.auth.dependencies.verify_token", side_effect=ValueError("Invalid token")):
+        response = client.get(
+            "/api/auth/me",
+            headers={"Authorization": "Bearer invalid-token"},
+        )
     assert response.status_code == 401
     assert "Invalid or expired token" in response.json()["detail"]
 
