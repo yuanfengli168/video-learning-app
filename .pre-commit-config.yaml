@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Pre-commit hooks
+# Install:  pre-commit install
+# Run once: detect-secrets scan > .secrets.baseline  (already done)
+# Run manually:  pre-commit run --all-files
+# Update baseline:  detect-secrets scan --exclude-files 'tests/.*' > .secrets.baseline
+#
+# What this catches:
+#   - Firebase API keys (AIza...)
+#   - AWS access keys (AKIA...)
+#   - Private key headers (-----BEGIN ... PRIVATE KEY-----)
+#   - Stripe live keys (sk_live_)
+#   - Generic high-entropy strings that look like secrets
+#
+# If a hook fails, either:
+#   1) You actually leaked a secret — rotate it immediately, then update
+#      the baseline (see SECURITY.md)
+#   2) It's a false positive — add the line to the baseline with
+#      `detect-secrets scan --update <file>`
+# ─────────────────────────────────────────────────────────────────────────────
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        # Use the committed baseline so existing files don't trip the hook.
+        # New secrets in new files (or new lines in existing files) WILL
+        # be flagged.
+        args: ['--baseline', '.secrets.baseline']
+        # Skip the venv and test artifacts — we don't want noise from
+        # cached Python bytecode, coverage XML, etc.
+        exclude: |
+          (?x)^(
+              venv/.*|
+              \.pytest_cache/.*|
+              htmlcov/.*|
+              coverage\.xml|
+              test-results\.xml|
+              .*\.db|
+              uploads/.*|
+              storage/.*|
+              downloads/.*
+          )$
+
+  # Keep Python imports sorted (cheap, catches a class of bugs).
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--profile', 'black', '--line-length', '100']
+        # Don't touch the venv or test snapshots
+        exclude: '^(venv|tests/__snapshots__)/'
+
+  # Trim trailing whitespace and ensure a final newline.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      # Block the most obvious accidental commits of large binaries.
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      # Block commits to main directly — force a feature branch.
+      # (Comment this out if you're working solo and want direct pushes.)
+      # - id: no-commit-to-branch
+      #   args: ['--branch=main']

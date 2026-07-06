@@ -1,0 +1,175 @@
+"""Security headers middleware.
+
+Adds baseline hardening headers to every HTTP response, in line with
+OWASP recommendations and the [SECURITY.md] policy doc. Cheap, no
+runtime cost, no dependencies — runs as pure ASGI middleware so it
+covers the API, the Jinja2 template routes, the /api/auth/session
+endpoint, and the static file serving uniformly.
+
+Headers added
+-------------
+
+- `Content-Security-Policy` — defense-in-depth against XSS. Allows
+  only the resources the app actually uses (CDN scripts, inline JS
+  for the mindmap bootstrap, Firebase auth images, etc.). Block
+  everything else by default. If a future feature needs a new
+  origin, add it here and document why.
+- `X-Frame-Options: DENY` — prevent clickjacking. The app has no
+  legitimate reason to be embedded in an <iframe>.
+- `X-Content-Type-Options: nosniff` — prevent MIME-type sniffing.
+  Stops the browser from "helpfully" re-interpreting a file as
+  something it's not.
+- `Referrer-Policy: no-referrer` — don't leak our URLs to third
+  parties (e.g. when a user clicks a link to an external resource).
+- `Permissions-Policy` — disable browser features we don't use
+  (camera, microphone, geolocation, payment, USB, etc.). Limits
+  the blast radius if an attacker gets JS execution via XSS.
+- `Strict-Transport-Security` — only set when behind HTTPS (in
+  production). Tells the browser to upgrade future requests to
+  HTTPS for one year.
+- `Cross-Origin-Opener-Policy: same-origin` — isolate the browsing
+  context. Stops cross-window attacks.
+- `Cross-Origin-Embedder-Policy: require-corp` — require explicit
+  opt-in from embedded resources. We're not using SharedArrayBuffer
+  so this is safe to set.
+
+Headers NOT set
+---------------
+
+- `X-XSS-Protection` — deprecated; modern browsers ignore it and
+  CSP is the recommended replacement.
+"""
+
+from __future__ import annotations
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.types import ASGIApp
+
+
+# ── Content Security Policy ──────────────────────────────────────────────────
+# The app uses:
+#   - inline <script> blocks in the Jinja2 templates (small bootstrap
+#     snippets, the Markmap preloader, the drag/pan handlers, etc.)
+#   - External scripts from cdn.jsdelivr.net (Markmap), unpkg.com
+#     (htmx), cdn.tailwindcss.com (Tailwind), and yuanfengli168.github.io
+#     (AuthKit)
+#   - Firebase auth which uses gstatic.com for images
+#   - Data: URIs in the markdown-to-HTML converter for inline images
+#   - Blob: URIs in the markmap export flow
+#   - wasm-unsafe-eval because Markmap uses d3 internals that may
+#     eval wasm (low risk; without this the mindmap breaks)
+#
+# If you add a new external service, append its origin here AND
+# add a comment explaining what it's for.
+CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+    "https://cdn.jsdelivr.net https://unpkg.com "
+    "https://cdn.tailwindcss.com https://yuanfengli168.github.io; "
+    "style-src 'self' 'unsafe-inline' "
+    "https://cdn.jsdelivr.net https://cdn.tailwindcss.com "
+    "https://yuanfengli168.github.io; "
+    "img-src 'self' data: blob: https:; "
+    "font-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self' "
+    "https://cdn.jsdelivr.net https://yuanfengli168.github.io "
+    "https://firestore.googleapis.com https://identitytoolkit.googleapis.com; "
+    "frame-src 'self' https://yuanfengli168.github.io; "
+    "worker-src 'self' blob:; "
+    "child-src 'self' https://yuanfengli168.github.io; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "wasm-unsafe-eval 'self' https://cdn.jsdelivr.net; "
+    "upgrade-insecure-requests"
+)
+
+# Permissions-Policy disables browser features we don't use. If a
+# future feature needs one (e.g. the camera for video recording),
+# remove that feature from the list.
+PERMISSIONS_POLICY = (
+    "accelerometer=(), "
+    "autoplay=(), "
+    "camera=(), "
+    "cross-origin-isolated=(), "
+    "display-capture=(), "
+    "encrypted-media=(), "
+    "fullscreen=(self), "
+    "geolocation=(), "
+    "gyroscope=(), "
+    "keyboard-map=(), "
+    "magnetometer=(), "
+    "microphone=(), "
+    "midi=(), "
+    "payment=(), "
+    "picture-in-picture=(), "
+    "publickey-credentials-get=(), "
+    "screen-wake-lock=(), "
+    "sync-xhr=(), "
+    "usb=(), "
+    "xr-spatial-tracking=()"
+)
+
+# HSTS is only meaningful over HTTPS. We detect that by checking
+# the X-Forwarded-Proto header (set by Render / Cloudflare / etc.)
+# OR the request's url.scheme. Both are honored.
+HSTS_VALUE = "max-age=31536000; includeSubDomains"
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to every response.
+
+    Implementation notes:
+    - We only ADD headers; we never strip headers set by the
+      application or by FastAPI itself. This means if a route
+      intentionally sets (e.g.) `Cache-Control: no-store`, we
+      don't clobber it.
+    - HSTS is conditional on HTTPS. The check is best-effort:
+      - If `X-Forwarded-Proto: https` is set (the standard
+        reverse-proxy header), we treat as HTTPS.
+      - Else if the request URL itself uses `https://`, we treat
+        as HTTPS.
+      - Else (plain HTTP, e.g. localhost dev), we skip HSTS.
+    - We do NOT set HSTS in DEBUG mode regardless, because
+      setting it during development would lock out http://
+      localhost browsers for a year on a misconfiguration.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        debug: bool = False,
+    ) -> None:
+        super().__init__(app)
+        self._debug = debug
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+
+        # Baseline headers — always set.
+        response.headers["Content-Security-Policy"] = CSP
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+
+        # HSTS only when we're confident the request is over HTTPS.
+        if not self._debug and self._is_https(request):
+            response.headers["Strict-Transport-Security"] = HSTS_VALUE
+
+        return response
+
+    @staticmethod
+    def _is_https(request: Request) -> bool:
+        """Best-effort detection of HTTPS, honoring reverse-proxy headers."""
+        # Standard reverse-proxy header (set by Render, Cloudflare, nginx, etc.)
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
+        if forwarded_proto == "https":
+            return True
+        # Fallback: the URL itself. In dev this is http://localhost.
+        return request.url.scheme == "https"

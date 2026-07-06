@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.database import init_db
+from app.middleware import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
 from app.routers import chat as chat_router
 from app.routers import courses as courses_router
@@ -25,6 +26,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     lifespan=lifespan,
+)
+
+# Security headers — applied to every response (API + Jinja2 + static).
+# See app/middleware.py for the full list. DEBUG is passed in so HSTS
+# is never set on the http://localhost dev server.
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    debug=settings.debug,
 )
 
 app.include_router(auth_router.router)
