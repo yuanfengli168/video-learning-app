@@ -54,6 +54,15 @@ coverage.xml
 *.log
 logs/
 
-
-# downloads:
+# Downloads (e.g. yt-dlp output if MVP2 adds the Video Downloader feature)
 downloads/
+
+# ── Defense-in-depth: any other secret-shaped files a contributor might create ──
+# Catches Stripe / OpenAI / AWS / GCP / Twilio-style keys if they ever land here.
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/

@@ -115,7 +115,7 @@ else
     echo "  2. Click 'Generate new private key' — downloads a JSON file"
     echo "  3. Move it to the project root:"
     echo ""
-    echo "     mv ~/Downloads/ai-idea-generator-d9e15-firebase-adminsdk-*.json \\"
+    echo "     mv ~/Downloads/<your-project>-firebase-adminsdk-*.json \\"
     echo "       \"$PROJECT_ROOT/firebase-service-account.json\""
     echo ""
     echo "  Or run this after downloading:"

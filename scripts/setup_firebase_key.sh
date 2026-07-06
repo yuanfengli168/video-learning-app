@@ -32,7 +32,6 @@ fi
 # Look for the downloaded file in common locations
 DOWNLOADS="$HOME/Downloads"
 PATTERNS=(
-    "$DOWNLOADS/ai-idea-generator-d9e15-firebase-adminsdk-*.json"
     "$DOWNLOADS/*firebase-adminsdk*.json"
     "$DOWNLOADS/*service-account*.json"
     "$PROJECT_ROOT/*firebase-adminsdk*.json"
@@ -63,7 +62,7 @@ else
     echo "     bash scripts/setup_firebase_key.sh"
     echo ""
     echo "  Or manually move the file:"
-    echo "     mv ~/Downloads/ai-idea-generator-d9e15-firebase-adminsdk-*.json \\"
+    echo "     mv ~/Downloads/<your-project>-firebase-adminsdk-*.json \\"
     echo "       \"$DEST\""
     exit 1
 fi
