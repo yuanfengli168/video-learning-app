@@ -43,11 +43,16 @@ source venv/bin/activate
 ok "Virtual environment activated"
 
 # ── Start the app ────────────────────────────────────────────────────────────
+mkdir -p logs
+LOG_FILE="logs/server.log"
+
 echo ""
 echo "  🚀 Starting Video Learning App..."
 echo "  📡 http://localhost:8000"
 echo "  📚 Docs: http://localhost:8000/docs"
+echo "  📝 Logs: $LOG_FILE"
 echo "  ⏹️  Press Ctrl+C to stop"
 echo ""
 
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Tee to log file so we can debug 500s after the terminal is gone
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 2>&1 | tee -a "$LOG_FILE"
