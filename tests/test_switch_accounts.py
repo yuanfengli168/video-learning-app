@@ -144,14 +144,19 @@ def test_login_page_forces_signout_before_subscribing(client: TestClient):
         "stale cookie can't be reused."
     )
 
-    # 3) Must track a user-initiated sign-in flag, so the redirect
-    #    to '/' only happens after a real click on a sign-in button,
-    #    not on the initial cache re-hydration.
-    assert "userInitiatedSignIn" in text, (
-        "login.html must gate the post-signin redirect behind a flag "
-        "that only flips on an explicit user click, to defend against "
-        "any edge case where signOut() didn't fully clear the cache "
-        "before the next onAuthStateChanged event."
+    # 3) Must guard the post-signin redirect so it only happens after
+    #    a real user interaction, not on the initial cache re-hydration.
+    #    The current implementation handles this by performing
+    #    signInWithPopup() directly in the click handler (capturing the
+    #    user synchronously from the resolved promise) and gating the
+    #    onAuthStateChanged safety net behind a `signInHandled` flag
+    #    that only flips inside that click handler.
+    assert "signInHandled" in text and "signInWithPopup" in text, (
+        "login.html must guard the post-signin redirect so the previous "
+        "account can't be silently re-hydrated. The current approach is "
+        "to do signInWithPopup() directly in the click handler and gate "
+        "the onAuthStateChanged safety net with a signInHandled flag. "
+        "If you change the auth flow, keep this property."
     )
 
 

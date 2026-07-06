@@ -91,51 +91,102 @@
         console.warn('Pre-login signOut failed (likely already signed out):', e);
     }
 
-    // Track whether the user has *explicitly* initiated a sign-in on
-    // this page. onAuthStateChanged fires once after the forced signOut
-    // above (with null) and then again when the user actually signs in.
-    // We use this flag to make absolutely sure we only redirect when
-    // the user clicks a sign-in button — never on the initial cache
-    // re-hydration, even in edge cases where the signOut above didn't
-    // fully complete before the next onAuthStateChanged event.
-    let userInitiatedSignIn = false;
-
-    // The auth-anchor UI is mounted by init() and renders the inline
-    // sign-in widget. AuthKit fires a DOM-level click event on the
-    // provider buttons; we listen for the FIRST click on any of them
-    // and treat that as the user opting in to sign-in. After that, the
-    // very next onAuthStateChanged with a user is the legitimate one.
+    // ── Reliable sign-in completion ──
+    //
+    // Problem: relying on AuthKit's onAuthStateChanged to fire in the
+    // PARENT window after a Google popup sign-in is unreliable. The
+    // popup runs in a different browsing context, closes itself, and
+    // AuthKit's onAuthStateChanged does not always fire on the parent
+    // (or fires with a stale user). The user sees the popup close
+    // and nothing else happens — the page never POSTs the ID token
+    // to /api/auth/session.
+    //
+    // Fix: don't wait for onAuthStateChanged. Intercept the click on
+    // the Google button and perform the Firebase sign-in directly,
+    // capture the user synchronously from signInWithPopup()'s resolved
+    // promise, get the ID token, and POST it. Falls back to
+    // onAuthStateChanged only as a safety net for non-Google flows.
     const anchor = document.getElementById('auth-anchor');
-    const onUserInitiatedSignIn = () => {
-        userInitiatedSignIn = true;
-        // Only need the first click — remove the listener after firing.
-        anchor.removeEventListener('click', onUserInitiatedSignIn, true);
-    };
-    // Use capture phase so we catch the click before AuthKit's internal
-    // handlers. AuthKit also listens on the anchor, so removing this
-    // listener after the first click avoids duplicate triggers.
-    anchor.addEventListener('click', onUserInitiatedSignIn, true);
+    let signInHandled = false;
 
-    AuthKit.onAuthStateChanged(async (user) => {
-        if (user && userInitiatedSignIn) {
-            // Get the Firebase ID token from AuthKit's serialized user
-            // AuthKit stores the raw Firebase user object in user._raw
-            try {
-                let idToken = null;
-                if (user._raw && typeof user._raw.getIdToken === 'function') {
-                    idToken = await user._raw.getIdToken();
-                }
-                if (idToken) {
-                    await fetch('/api/auth/session', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({id_token: idToken}),
-                    });
-                }
-            } catch (e) {
-                console.error('Failed to create session:', e);
+    async function handleGoogleSignInClick(clickEvent) {
+        // Only intercept clicks on the Google button. Let email form
+        // submissions fall through to AuthKit's normal flow.
+        const target = clickEvent.target;
+        const isGoogle = target && (
+            target.closest('[data-provider="google"]') ||
+            target.closest('button[class*="google"]') ||
+            (target.textContent && target.textContent.includes('Google'))
+        );
+        if (!isGoogle) return;
+        if (signInHandled) return;
+        signInHandled = true;
+
+        // Prevent AuthKit's own handler from also trying to sign in.
+        clickEvent.preventDefault();
+        clickEvent.stopImmediatePropagation();
+
+        try {
+            // Get the Firebase Auth instance. AuthKit initialises
+            // Firebase internally; we need the same auth object it
+            // uses. Try a few common locations.
+            const auth = window.auth || (window.firebase && window.firebase.auth)
+                || (AuthKit && AuthKit.auth) || (AuthKit && AuthKit._auth);
+            if (!auth) {
+                throw new Error('Firebase auth instance not found on window');
             }
+            const { GoogleAuthProvider, signInWithPopup } =
+                await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js');
+            const provider = new GoogleAuthProvider();
+            const result = await signInWithPopup(auth, provider);
+            const idToken = await result.user.getIdToken();
+            const resp = await fetch('/api/auth/session', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({id_token: idToken}),
+            });
+            if (resp.ok) {
+                window.location.href = '/';
+            } else {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.detail || `Session POST failed: ${resp.status}`);
+            }
+        } catch (e) {
+            console.error('Google sign-in failed:', e);
+            signInHandled = false;  // allow retry
+            const errEl = document.createElement('p');
+            errEl.className = 'text-red-500 text-sm mt-2';
+            errEl.textContent = (e.code && ERROR_TRANSLATIONS[e.code])
+                || e.message
+                || 'Google sign-in failed. Please try again.';
+            anchor.appendChild(errEl);
+        }
+    }
+
+    // Capture phase: run before AuthKit's own click handlers. The
+    // anchor's children can be re-rendered by AuthKit, so we don't
+    // remove this listener.
+    anchor.addEventListener('click', handleGoogleSignInClick, true);
+
+    // Safety net: if AuthKit does eventually fire onAuthStateChanged
+    // (e.g. for email/password sign-in, which doesn't open a popup),
+    // post the token and redirect.
+    AuthKit.onAuthStateChanged(async (user) => {
+        if (signInHandled) return;  // already handled via direct flow
+        if (!user) return;
+        try {
+            const idToken = user._raw && typeof user._raw.getIdToken === 'function'
+                ? await user._raw.getIdToken()
+                : null;
+            if (!idToken) return;
+            await fetch('/api/auth/session', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({id_token: idToken}),
+            });
             window.location.href = '/';
+        } catch (e) {
+            console.error('Session POST failed (safety net):', e);
         }
     });
 
