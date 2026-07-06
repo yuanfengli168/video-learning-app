@@ -26,7 +26,7 @@ bash scripts/test.sh                     # Run tests with coverage
 ## Features
 *   **Course Hierarchy:** Organize videos into Courses → Sections → Videos (like Google Drive folders).
 *   **AI Processing:** Automatically generate markdown summaries, Markmap mindmaps, quizzes, flashcards, and per-topic timestamps from video transcripts.
-*   **Clickable Mindmap:** Click any node in the mindmap to jump the video to that topic, show a topic banner, and highlight the matching transcript lines. Inline and fullscreen views both support zoom/pan/fit.
+*   **Clickable Mindmap:** Click any node in the mindmap to jump the video to that topic, show a topic banner, and highlight the matching transcript lines. Uses ancestor-walking to find timestamps for leaf nodes whose exact name isn't in the topic list. Inline and fullscreen views both support zoom/pan/fit, with a pointer cursor and hover tooltip on every node.
 *   **Interactive Chat:** Click "Teach me real-world usage" on a flashcard to open a chatroom where the AI teaches real-world examples. Chat history is persisted.
 *   **Transcript Viewer:** Timestamped transcript with click-to-seek video player integration, keyword search with live highlighting, and prev/next match navigation.
 *   **Whisper Model Selection:** Choose between `tiny`, `base`, `small`, `medium` on the web UI. Models auto-download.
@@ -49,7 +49,7 @@ uvicorn app.main:app --reload   # http://localhost:8000
 ## Testing
 ```bash
 bash scripts/test.sh        # full test suite with coverage
-pytest                      # 159 unit tests (Whisper/Ollama mocked)
+pytest                      # 179 unit tests (Whisper/Ollama mocked)
 pytest --cov=app            # 96% coverage report
 ```
 
@@ -65,7 +65,7 @@ app/
 ├── auth/                # Firebase Admin SDK + session cookie helpers
 └── templates/           # Jinja2 HTML templates (base, dashboard, course, video, login)
 scripts/                 # setup.sh, setup_firebase_key.sh, start.sh, test.sh
-tests/                   # 159 pytest tests (96% coverage)
+tests/                   # 179 pytest tests (96% coverage)
 doc/                     # design.md, handover.md, deployment.md
 ```
 

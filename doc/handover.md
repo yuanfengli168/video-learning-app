@@ -30,7 +30,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 | Auth (frontend) | AuthKit (Firebase Auth UI) | Drop-in Google + email/password login |
 | Auth (backend) | Firebase Admin SDK + session cookie | Frontend exchanges Firebase ID token for an httpOnly session cookie via `POST /api/auth/session`; subsequent API calls authenticate via the cookie (no tokens in JS) |
 | Transcription | Faster-Whisper | Model selectable on web UI (`tiny`/`base`/`small`/`medium`); auto-downloads |
-| LLM | Ollama (`glm-5.2:cloud`) | Local inference at `localhost:11434` |
+| LLM | Ollama (`glm-5.2:cloud`) | Local inference at `localhost:11434`; calls use `temperature: 0` + `seed: 42` for deterministic output |
 | Testing | pytest + pytest-asyncio + httpx | Mock Whisper/Ollama in unit tests; integration tests marked slow |
 | Coverage target | ≥90% backend logic | 100% coverage is not required; focus on core logic |
 | Dependencies | `requirements.txt` | No Poetry for MVP1 |
@@ -42,7 +42,7 @@ Each phase produces 3 commits: (A) implementation, (B) tests, (C) fix failing te
 2. **Auth** — AuthKit frontend integration + Firebase Admin SDK backend token verification + session cookie flow.
 3. **Video upload + Whisper transcription** — Upload endpoint, model selection, Faster-Whisper pipeline, timestamped transcript storage.
 4. **LLM generation** — Ollama integration; prompt engineering for JSON output (summary, mindmap, quiz, flashcards, topic_timestamps).
-5. **Frontend views** — Jinja2 + HTMX + Tailwind; all views from spec (dashboard, course, video player, tabs); dark/light themes; transcript search with highlight + navigation; mindmap zoom/pan/fit + fullscreen.
+5. **Frontend views** — Jinja2 + HTMX + Tailwind; all views from spec (dashboard, course, video player, tabs); dark/light themes; transcript search with highlight + navigation; mindmap zoom/pan/fit + fullscreen; **clickable mindmap nodes with ancestor-walking timestamp lookup and non-blocking toast notifications**.
 6. **Chat interface** — ChatGPT-style chat triggered by flashcard "Teach me real-world usage" button; persisted history.
 
 ## 5. Running Tests
@@ -56,7 +56,13 @@ pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
 
-> **Current status:** 159 tests passing, 96% backend coverage.
+> **Current status:** 179 tests passing, 96% backend coverage.
+
+### Mindmap Parent-Map Algorithm
+
+The LLM only generates `topic_timestamps` for the *most important* topics (typically parent / level-1 branches). To make leaf nodes clickable too, the frontend builds a parent map from the mindmap markdown at load time and walks up the tree when a node has no exact timestamp. The algorithm is implemented in `app/templates/video.html` as `buildMindmapParentMap` and `findTopicTimestampWithAncestors`. The same algorithm is ported to Python in `tests/test_mindmap_parent_map.py` to serve as a regression contract — if the JS changes, update the Python test to match.
+
+When no ancestor matches, a **non-blocking toast** is shown in the bottom-right corner (no `alert()` dialog), so the user can keep interacting with the mindmap.
 
 ## 6. Project Structure
 ```
@@ -100,7 +106,7 @@ video-learning-app/
 │       ├── login.html       # AuthKit login page
 │       ├── error.html       # Error page
 │       └── redirect.html    # Redirect helper
-├── tests/                   # 159 pytest tests (96% coverage)
+├── tests/                   # 179 pytest tests (96% coverage)
 │   ├── conftest.py          # Fixtures: test DB, client
 │   ├── test_config.py
 │   ├── test_database.py
@@ -116,6 +122,7 @@ video-learning-app/
 │   ├── test_generation.py
 │   ├── test_frontend.py
 │   ├── test_ui_features.py  # Frontend template feature tests (banner, click handlers, etc.)
+│   ├── test_mindmap_parent_map.py # Python port of the JS ancestor-walking algorithm (regression contract)
 │   ├── test_chat_service.py
 │   └── test_chat_router.py
 ├── scripts/                 # Helper shell scripts
