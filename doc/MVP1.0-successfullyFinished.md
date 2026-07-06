@@ -2,7 +2,7 @@
 
 > **Status:** ✅ All MVP1 scope items from [`doc/design.md`](design.md) §2 + §3 + §4 + §5 are implemented, tested, and pushed to `origin/main`.
 > **Completion date:** 2026-07-06
-> **Test count:** 213 passing · **Coverage:** 96% (target was ≥90%)
+> **Test count:** 218 passing · **Coverage:** 96% (target was ≥90%)
 
 ---
 
@@ -113,7 +113,7 @@ Each fix is documented in the corresponding commit message and was followed by a
 
 ```
 TOTAL                             710     29    96%
-====================== 213 passed in 2.05s ======================
+====================== 218 passed in 2.05s ======================
 ```
 
 | Module | Coverage | Notes |
@@ -184,4 +184,4 @@ See the answer to "what should we do now?" in the chat log (after this doc was c
 
 ---
 
-**Signed off:** 2026-07-06 · commit `0eb3878` · 213 tests · 96% coverage · `origin/main` is green.
+**Signed off:** 2026-07-06 · commit `754d614` · 218 tests · 96% coverage · `origin/main` is green.
