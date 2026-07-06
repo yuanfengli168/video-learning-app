@@ -40,6 +40,15 @@
             <div id="transcript-container" class="max-h-96 overflow-y-auto space-y-1 text-sm">
                 <p class="text-gray-400 py-4 text-center">No transcript yet. Click "Transcribe" to generate one.</p>
             </div>
+            <!-- Search navigation bar -->
+            <div id="search-nav" class="hidden mt-2 flex items-center justify-between text-xs text-gray-400">
+                <span id="search-count">0 results</span>
+                <div class="flex gap-1">
+                    <button onclick="searchNavigate(-1)" class="px-2 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">↑ Prev</button>
+                    <button onclick="searchNavigate(1)" class="px-2 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">↓ Next</button>
+                    <button onclick="clearSearch()" class="px-2 py-1 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">✕ Clear</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -72,7 +81,10 @@
 
                 <!-- Mindmap -->
                 <div id="content-mindmap" class="hidden">
-                    <div id="mindmap-container" class="w-full h-96"></div>
+                    <div id="mindmap-container" class="w-full h-64"></div>
+                    <button onclick="openMindmapFullscreen()" class="mt-2 w-full px-3 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
+                        🔍 Expand to Full Screen
+                    </button>
                 </div>
             </div>
         </div>
@@ -97,6 +109,7 @@ function switchTab(tab) {
     activeBtn.classList.remove('border-transparent', 'text-gray-500');
 
     // Load content if needed
+    if (tab === 'summary') loadSummary();
     if (tab === 'flashcards') loadFlashcards();
     if (tab === 'quiz') loadQuiz();
     if (tab === 'mindmap') loadMindmap();
@@ -130,9 +143,9 @@ async function loadTranscript() {
 function renderTranscript(segments) {
     const container = document.getElementById('transcript-container');
     container.innerHTML = segments.map((s, i) => `
-        <div class="transcript-line flex gap-2 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer" onclick="seekTo(${s.start})" data-text="${s.text.toLowerCase()}">
+        <div class="transcript-line flex gap-2 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer" onclick="seekTo(${s.start})" data-text="${s.text.toLowerCase()}" data-index="${i}">
             <span class="text-indigo-500 text-xs flex-shrink-0 pt-0.5">${formatTime(s.start)}</span>
-            <span class="text-gray-700 dark:text-gray-300">${s.text}</span>
+            <span class="text-gray-700 dark:text-gray-300 transcript-text">${s.text}</span>
         </div>
     `).join('');
 }
@@ -148,12 +161,84 @@ function seekTo(seconds) {
     if (video) { video.currentTime = seconds; video.play(); }
 }
 
+// ── Transcript search with highlight + navigation ──
+let searchMatches = [];
+let currentMatchIndex = -1;
+
 function searchTranscript() {
-    const query = document.getElementById('transcript-search').value.toLowerCase();
-    document.querySelectorAll('.transcript-line').forEach(line => {
+    const query = document.getElementById('transcript-search').value.toLowerCase().trim();
+    const lines = document.querySelectorAll('.transcript-line');
+    const searchNav = document.getElementById('search-nav');
+
+    if (!query) {
+        // Reset: show all, remove highlights
+        lines.forEach(line => {
+            line.style.display = '';
+            const textEl = line.querySelector('.transcript-text');
+            const original = line.dataset.text;
+            textEl.textContent = original;
+            line.classList.remove('bg-yellow-100', 'dark:bg-yellow-900/40');
+        });
+        searchNav.classList.add('hidden');
+        searchMatches = [];
+        currentMatchIndex = -1;
+        return;
+    }
+
+    // Find matches and highlight
+    searchMatches = [];
+    lines.forEach((line, i) => {
         const text = line.dataset.text;
-        line.style.display = text.includes(query) ? '' : 'none';
+        const textEl = line.querySelector('.transcript-text');
+        if (text.includes(query)) {
+            line.style.display = '';
+            searchMatches.push(i);
+            // Highlight the matched text
+            const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+            textEl.innerHTML = text.replace(regex, '<mark class="bg-yellow-200 dark:bg-yellow-600 dark:text-white rounded px-0.5">$1</mark>');
+        } else {
+            line.style.display = 'none';
+            textEl.textContent = text;
+        }
     });
+
+    if (searchMatches.length > 0) {
+        searchNav.classList.remove('hidden');
+        currentMatchIndex = 0;
+        highlightCurrentMatch();
+        document.getElementById('search-count').textContent = `${searchMatches.length} result(s)`;
+    } else {
+        searchNav.classList.add('hidden');
+    }
+}
+
+function highlightCurrentMatch() {
+    // Remove previous active highlight
+    document.querySelectorAll('.transcript-line').forEach(line => {
+        line.classList.remove('bg-yellow-100', 'dark:bg-yellow-900/40', 'ring-2', 'ring-indigo-400');
+    });
+    if (currentMatchIndex >= 0 && currentMatchIndex < searchMatches.length) {
+        const lineIdx = searchMatches[currentMatchIndex];
+        const line = document.querySelectorAll('.transcript-line')[lineIdx];
+        if (line) {
+            line.classList.add('bg-yellow-100', 'dark:bg-yellow-900/40', 'ring-2', 'ring-indigo-400');
+            line.scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+        document.getElementById('search-count').textContent = `${currentMatchIndex + 1} / ${searchMatches.length} results`;
+    }
+}
+
+function searchNavigate(direction) {
+    if (searchMatches.length === 0) return;
+    currentMatchIndex += direction;
+    if (currentMatchIndex >= searchMatches.length) currentMatchIndex = 0;
+    if (currentMatchIndex < 0) currentMatchIndex = searchMatches.length - 1;
+    highlightCurrentMatch();
+}
+
+function clearSearch() {
+    document.getElementById('transcript-search').value = '';
+    searchTranscript();
 }
 
 // ── Transcribe ──
@@ -211,6 +296,49 @@ async function generateMaterials() {
         btn.textContent = '❌ Error';
         btn.disabled = false;
     }
+}
+
+// ── Load summary ──
+async function loadSummary() {
+    try {
+        const resp = await fetch(`/api/generate/${videoId}/assets/summary`);
+        if (!resp.ok) {
+            // Show generate button if no summary yet
+            document.getElementById('content-summary').innerHTML = `
+                <p class="text-gray-400">No summary yet. Click "Generate" to create learning materials.</p>
+                <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                    ⚡ Generate Materials
+                </button>
+            `;
+            return;
+        }
+        const data = await resp.json();
+        // Render markdown as HTML (simple conversion)
+        const html = simpleMarkdown(data.data);
+        document.getElementById('content-summary').innerHTML = `
+            <div class="prose dark:prose-invert max-w-none text-sm">${html}</div>
+            <button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">
+                🔄 Regenerate
+            </button>
+        `;
+    } catch (e) {
+        document.getElementById('content-summary').innerHTML = '<p class="text-red-500 text-sm">Failed to load summary.</p>';
+    }
+}
+
+// Simple markdown to HTML converter
+function simpleMarkdown(md) {
+    return md
+        .replace(/^### (.*$)/gim, '<h3 class="text-base font-semibold mt-3 mb-1">$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2 class="text-lg font-semibold mt-4 mb-2">$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1 class="text-xl font-bold mt-4 mb-2">$1</h1>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code class="bg-gray-100 dark:bg-gray-700 px-1 rounded text-xs">$1</code>')
+        .replace(/^\- (.*$)/gim, '<li class="ml-4 list-disc">$1</li>')
+        .replace(/^\d+\. (.*$)/gim, '<li class="ml-4 list-decimal">$1</li>')
+        .replace(/\n\n/g, '<br><br>')
+        .replace(/\n/g, '<br>');
 }
 
 // ── Load flashcards ──
@@ -286,14 +414,14 @@ function checkAnswer(btn, selected, correct) {
 }
 
 // ── Load mindmap ──
+let mindmapData = null;
+
 async function loadMindmap() {
-    const token = await getAuthToken();
     try {
-        const resp = await fetch(`/api/generate/${videoId}/assets/mindmap`, {
-            headers: {'Authorization': 'Bearer ' + token},
-        });
+        const resp = await fetch(`/api/generate/${videoId}/assets/mindmap`);
         if (!resp.ok) return;
         const data = await resp.json();
+        mindmapData = data.data;
         // Load Markmap
         if (!document.getElementById('markmap-script')) {
             const script = document.createElement('script');
@@ -311,6 +439,38 @@ function renderMindmap(markdown) {
     const container = document.getElementById('mindmap-container');
     container.innerHTML = `<div class="markmap"><script type="text/template">${markdown}<\/script></div>`;
     if (window.markmap) { window.markmap.autoLoader.renderAll(); }
+}
+
+function openMindmapFullscreen() {
+    if (!mindmapData) return;
+    // Create a full-screen modal overlay
+    const modal = document.createElement('div');
+    modal.id = 'mindmap-modal';
+    modal.className = 'fixed inset-0 z-[100] bg-white dark:bg-gray-900 flex flex-col';
+    modal.innerHTML = `
+        <div class="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+            <h3 class="font-semibold text-lg">🧠 Mindmap — Full Screen</h3>
+            <div class="flex items-center gap-2">
+                <button onclick="closeMindmapFullscreen()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                    ✕ Close
+                </button>
+            </div>
+        </div>
+        <div id="mindmap-fullscreen-container" class="flex-1 overflow-hidden p-4">
+            <div class="markmap w-full h-full"><script type="text/template">${mindmapData}<\/script></div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    // Render markmap in the modal
+    if (window.markmap) { window.markmap.autoLoader.renderAll(); }
+    // Prevent body scroll
+    document.body.style.overflow = 'hidden';
+}
+
+function closeMindmapFullscreen() {
+    const modal = document.getElementById('mindmap-modal');
+    if (modal) modal.remove();
+    document.body.style.overflow = '';
 }
 
 // ── Chat ──
