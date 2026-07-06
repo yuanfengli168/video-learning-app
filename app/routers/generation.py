@@ -64,6 +64,9 @@ async def generate(
             "mindmap": materials.get("mindmap", ""),
             "flashcards": json.dumps(materials.get("flashcards", []), ensure_ascii=False),
             "quiz": json.dumps(materials.get("quiz", []), ensure_ascii=False),
+            "topic_timestamps": json.dumps(
+                materials.get("topic_timestamps", []), ensure_ascii=False
+            ),
         }
 
         for asset_type, content in asset_map.items():
@@ -119,7 +122,7 @@ async def get_asset(
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your video")
 
-    valid_types = {"summary", "mindmap", "flashcards", "quiz"}
+    valid_types = {"summary", "mindmap", "flashcards", "quiz", "topic_timestamps"}
     if asset_type not in valid_types:
         raise HTTPException(
             status_code=400,
@@ -136,7 +139,7 @@ async def get_asset(
         raise HTTPException(status_code=404, detail=f"{asset_type} not generated yet")
 
     # Return structured data for JSON types, raw text for markdown types
-    if asset_type in ("flashcards", "quiz"):
+    if asset_type in ("flashcards", "quiz", "topic_timestamps"):
         return {"type": asset_type, "data": json.loads(asset.content)}
     else:
         return {"type": asset_type, "data": asset.content}

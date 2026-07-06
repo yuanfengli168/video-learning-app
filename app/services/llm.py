@@ -17,7 +17,7 @@ from app.config import settings
 
 # System prompt for generating learning materials
 GENERATION_SYSTEM_PROMPT = """You are an expert educational content generator.
-Given a video transcript, generate learning materials in JSON format.
+Given a video transcript with timestamps, generate learning materials in JSON format.
 
 You MUST respond with ONLY a valid JSON object, no markdown, no explanation.
 The JSON must have exactly these keys:
@@ -35,6 +35,9 @@ The JSON must have exactly these keys:
       "answer": "Correct option text",
       "answer_index": 0
     }
+  ],
+  "topic_timestamps": [
+    {"topic": "Topic name exactly as it appears in mindmap", "start": 60, "end": 120}
   ]
 }
 
@@ -44,6 +47,13 @@ Rules:
 - The summary should be in markdown with headers and bullet points
 - The mindmap should be hierarchical markdown that Markmap can render
 - answer_index is 0-based (0=A, 1=B, 2=C, 3=D)
+- TOPIC TIMESTAMPS: For each major topic in the mindmap, identify which part of the video discusses it
+  - Use the timestamps from the transcript to determine start and end (in seconds)
+  - Each topic must match EXACTLY (case-sensitive) a node name from the mindmap
+  - Generate 5-15 topic_timestamps entries covering the most important topics
+  - Topics should not overlap in time ranges
+  - Skip very short topics (less than 10 seconds)
+  - For parent topics in the mindmap, you can include them too if they cover a clear time range
 """
 
 

@@ -68,6 +68,10 @@ FAKE_MATERIALS = {
     "mindmap": "# Topic\n## Branch 1\n## Branch 2",
     "flashcards": [{"term": "AI", "definition": "Artificial Intelligence"}],
     "quiz": [{"question": "What is AI?", "options": ["A", "B", "C", "D"], "answer": "A", "answer_index": 0}],
+    "topic_timestamps": [
+        {"topic": "Topic", "start": 0, "end": 60},
+        {"topic": "Branch 1", "start": 60, "end": 120},
+    ],
 }
 
 
@@ -171,3 +175,22 @@ def test_generate_quiz():
         result = generate_quiz(transcript)
     assert len(result) == 1
     assert result[0]["question"] == "What is AI?"
+
+def test_generate_topic_timestamps():
+    """generate_materials should return topic_timestamps when present."""
+    transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
+    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))):
+        result = generate_materials(transcript)
+    assert "topic_timestamps" in result
+    assert len(result["topic_timestamps"]) == 2
+    assert result["topic_timestamps"][0]["topic"] == "Topic"
+    assert result["topic_timestamps"][0]["start"] == 0
+    assert result["topic_timestamps"][0]["end"] == 60
+
+
+def test_llm_prompt_includes_topic_timestamps_instruction():
+    """The LLM system prompt should mention topic_timestamps."""
+    from app.services.llm import GENERATION_SYSTEM_PROMPT
+    assert "topic_timestamps" in GENERATION_SYSTEM_PROMPT
+    assert "start" in GENERATION_SYSTEM_PROMPT
+    assert "end" in GENERATION_SYSTEM_PROMPT

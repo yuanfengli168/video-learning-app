@@ -12,6 +12,10 @@ FAKE_MATERIALS = {
     "mindmap": "# Topic\n## Branch",
     "flashcards": [{"term": "AI", "definition": "Artificial Intelligence"}],
     "quiz": [{"question": "What?", "options": ["A", "B", "C", "D"], "answer": "A", "answer_index": 0}],
+    "topic_timestamps": [
+        {"topic": "Topic", "start": 0, "end": 60},
+        {"topic": "Branch", "start": 60, "end": 120},
+    ],
 }
 
 
@@ -78,6 +82,29 @@ def test_generate_success(client: TestClient):
     assert data["status"] == "ready"
     assert data["flashcard_count"] == 1
     assert data["quiz_count"] == 1
+
+
+def test_generate_saves_topic_timestamps(client: TestClient):
+    """Generate should save topic_timestamps asset."""
+    video_id = _setup_video_with_transcript(client)
+
+    with _mock_auth():
+        with patch(
+            "app.routers.generation.generate_materials",
+            return_value=FAKE_MATERIALS,
+        ):
+            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
+            response = client.get(
+                f"/api/generate/{video_id}/assets/topic_timestamps",
+                headers=_auth_headers(),
+            )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["type"] == "topic_timestamps"
+    assert len(data["data"]) == 2
+    assert data["data"][0]["topic"] == "Topic"
+    assert data["data"][0]["start"] == 0
+    assert data["data"][1]["topic"] == "Branch"
 
 
 def test_generate_no_transcript(client: TestClient):
