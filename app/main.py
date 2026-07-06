@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.database import init_db
+from app.routers import auth as auth_router
 
 
 @asynccontextmanager
@@ -19,6 +20,8 @@ app = FastAPI(
     title=settings.app_name,
     lifespan=lifespan,
 )
+
+app.include_router(auth_router.router)
 
 
 @app.get("/api/health")
