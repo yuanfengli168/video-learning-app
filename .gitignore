@@ -53,3 +53,7 @@ coverage.xml
 # Logs
 *.log
 logs/
+
+
+# downloads:
+downloads/

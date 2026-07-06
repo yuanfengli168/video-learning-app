@@ -537,8 +537,15 @@ function renderMindmap(markdown) {
             svg.setAttribute('height', h);
             container.appendChild(svg);
 
-            // Create the markmap
-            const mm = Markmap.create(svg, null, root);
+            // IMPORTANT: disable markmap's built-in d3 zoom and pan
+            // (zoom: false, pan: false). The built-in d3-zoom listens for
+            // mousedown/wheel on the SVG and rewrites the inner <g> element's
+            // transform on every drag, which fights (and wins over) our
+            // manual drag-to-pan handler — the result is the mindmap
+            // "snapping back" to the fitted transform on the first drag.
+            // With these options off, markmap only handles layout and
+            // rendering; we own the transform via attachMindmapInteraction.
+            const mm = Markmap.create(svg, { zoom: false, pan: false }, root);
             mindmapInstances['inline'] = mm;
 
             // Auto-fit after two animation frames so the SVG has its real
@@ -553,11 +560,26 @@ function renderMindmap(markdown) {
                     svg.setAttribute('width', w2);
                     svg.setAttribute('height', h2);
                 }
+                // Use mm.fit() once to set the initial layout transform,
+                // then capture that transform onto the OUTER <g> element
+                // (svg > g) so our drag handler can keep mutating it.
+                // fitMindmapSVG writes the transform to the top-level
+                // <g> children and is what attachMindmapInteraction
+                // expects to find.
+                let initialTransform = null;
                 try {
+                    // mm.fit() with zoom disabled sets the d3-managed <g>
+                    // transform; we read it back so the manual handler
+                    // starts from the same baseline.
                     mm.fit();
+                    const innerG = svg.querySelector(':scope > g > g');
+                    if (innerG) {
+                        initialTransform = innerG.getAttribute('transform');
+                    }
                 } catch (e) {
-                    fitMindmapSVG(container);
+                    initialTransform = null;
                 }
+                fitMindmapSVG(container, initialTransform);
                 // Attach both click AND drag/pan/scroll-zoom so the user
                 // can pan around the inline mindmap the same way they can
                 // in fullscreen. Previously only fullscreen had pan.
@@ -585,7 +607,7 @@ function renderMindmap(markdown) {
     requestAnimationFrame(() => requestAnimationFrame(() => fitMindmapSVG(container)));
 }
 
-function fitMindmapSVG(container) {
+function fitMindmapSVG(container, initialTransform) {
     if (!container) return;
     const svg = container.querySelector('svg.markmap');
     if (!svg) return;
@@ -598,42 +620,57 @@ function fitMindmapSVG(container) {
         svg.setAttribute('width', w);
         svg.setAttribute('height', h);
     }
-    // Find all top-level <g> elements and re-center/scale them
-    const groups = svg.querySelectorAll(':scope > g');
-    if (groups.length === 0) return;
-
-    // Get combined bounding box of all content
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    groups.forEach(g => {
-        try {
-            const bbox = g.getBBox();
-            if (bbox.width > 0 || bbox.height > 0) {
-                minX = Math.min(minX, bbox.x);
-                minY = Math.min(minY, bbox.y);
-                maxX = Math.max(maxX, bbox.x + bbox.width);
-                maxY = Math.max(maxY, bbox.y + bbox.height);
-            }
-        } catch(e) {}
-    });
-
-    if (minX === Infinity) {
-        const g = groups[0];
-        g.setAttribute('transform', `translate(${w/2}, ${h/2}) scale(1)`);
+    // Find the d3-managed inner <g> (svg > g > g) where markmap stores
+    // the content. When zoom:false is passed to Markmap.create, markmap
+    // still uses this nested <g> for layout. We then mirror markmap's
+    // computed transform onto the OUTER <g> (svg > g) so our manual
+    // drag handler can keep mutating it.
+    const innerG = svg.querySelector(':scope > g > g');
+    if (!innerG) return;
+    // Prefer the transform markmap computed (passed in via initialTransform
+    // after mm.fit()); fall back to the live innerG transform.
+    const t = initialTransform || innerG.getAttribute('transform') || '';
+    // Parse markmap's d3 transform string: "translate(x, y) scale(s)"
+    // d3 uses comma-separated numbers and may include extra spaces.
+    const d3Match = t.match(/translate\(\s*([^,)\s]+)\s*[, ]\s*([^)\s]+)\s*\)\s*scale\(\s*([^)\s]+)\s*\)/);
+    if (d3Match) {
+        const tx = parseFloat(d3Match[1]);
+        const ty = parseFloat(d3Match[2]);
+        const s = parseFloat(d3Match[3]);
+        // Apply the same transform to the outer <g> so our manual
+        // handler picks up the fitted view.
+        const outerG = svg.querySelector(':scope > g');
+        if (outerG) {
+            outerG.setAttribute('transform', `translate(${tx}, ${ty}) scale(${s})`);
+        }
         return;
     }
-
+    // Fallback: no markmap transform available (e.g. mm.fit() failed).
+    // Compute fit from the raw bbox of the innerG.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    try {
+        const bbox = innerG.getBBox();
+        if (bbox.width > 0 || bbox.height > 0) {
+            minX = bbox.x;
+            minY = bbox.y;
+            maxX = bbox.x + bbox.width;
+            maxY = bbox.y + bbox.height;
+        }
+    } catch (e) {}
+    const outerG = svg.querySelector(':scope > g');
+    if (!outerG) return;
+    if (minX === Infinity) {
+        outerG.setAttribute('transform', `translate(${w/2}, ${h/2}) scale(1)`);
+        return;
+    }
     const contentW = maxX - minX;
     const contentH = maxY - minY;
     const scaleX = w / contentW;
     const scaleY = h / contentH;
     const scale = Math.min(scaleX, scaleY, 1.5) * 0.9;
-
     const tx = w/2 - (minX + contentW/2) * scale;
     const ty = h/2 - (minY + contentH/2) * scale;
-
-    groups.forEach(g => {
-        g.setAttribute('transform', `translate(${tx}, ${ty}) scale(${scale})`);
-    });
+    outerG.setAttribute('transform', `translate(${tx}, ${ty}) scale(${scale})`);
 }
 
 // Inline mindmap zoom (uses the same logic as fullscreen, just different container)
@@ -715,7 +752,10 @@ function openMindmapFullscreen() {
             svg.style.height = '100%';
             container.appendChild(svg);
 
-            const mm = Markmap.create(svg, null, root);
+            // Same as inline: disable built-in d3 zoom/pan so our manual
+            // drag handler can own the transform. See the inline branch
+            // for the full explanation.
+            const mm = Markmap.create(svg, { zoom: false, pan: false }, root);
             mindmapInstances['fullscreen'] = mm;
 
             // Auto-fit: wait two animation frames so the SVG has its
@@ -730,11 +770,17 @@ function openMindmapFullscreen() {
                     svg.setAttribute('width', w);
                     svg.setAttribute('height', h);
                 }
+                let initialTransform = null;
                 try {
                     mm.fit();
+                    const innerG = svg.querySelector(':scope > g > g');
+                    if (innerG) {
+                        initialTransform = innerG.getAttribute('transform');
+                    }
                 } catch (e) {
-                    fitMindmapSVG(container);
+                    initialTransform = null;
                 }
+                fitMindmapSVG(container, initialTransform);
                 attachMindmapInteraction(container);
                 attachMindmapClickHandler(container);
             }));
@@ -878,17 +924,26 @@ function closeMindmapFullscreen() {
     document.body.style.overflow = '';
     // Re-fit the inline mindmap in case the body layout shifted (e.g.,
     // the scrollbar appeared/disappeared). The inline SVG dimensions
-    // may now be stale relative to its container.
+    // may now be stale relative to its container. We need to recompute
+    // the outer <g> transform because markmap's mm.fit() only updates
+    // the inner d3-managed <g> (which we don't drag from).
     if (mindmapInstances['inline']) {
         const inlineContainer = document.getElementById('mindmap-container');
         if (inlineContainer) {
             // Wait one frame for layout to settle, then refit.
             requestAnimationFrame(() => {
+                let initialTransform = null;
                 try {
                     mindmapInstances['inline'].fit();
+                    const svg = inlineContainer.querySelector('svg.markmap');
+                    const innerG = svg && svg.querySelector(':scope > g > g');
+                    if (innerG) {
+                        initialTransform = innerG.getAttribute('transform');
+                    }
                 } catch (e) {
-                    fitMindmapSVG(inlineContainer);
+                    initialTransform = null;
                 }
+                fitMindmapSVG(inlineContainer, initialTransform);
             });
         }
     }

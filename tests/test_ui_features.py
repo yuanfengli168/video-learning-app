@@ -527,12 +527,103 @@ def test_open_mindmap_fullscreen_auto_fits(client: TestClient):
     )
     assert m, "openMindmapFullscreen function not found"
     body = m.group(1)
-    # It should use Markmap.create directly (not autoloader template)
-    assert "Markmap.create(svg, null, root)" in body, "should use Markmap.create directly"
+    # It should use Markmap.create directly (not autoloader template).
+    # We now pass { zoom: false, pan: false } to disable markmap's built-in
+    # d3-zoom so our manual drag handler can own the transform (see the
+    # comment in video.html for the full explanation).
+    assert "Markmap.create(svg, " in body, "should use Markmap.create directly"
+    assert "zoom: false" in body and "pan: false" in body, (
+        "should disable markmap's built-in zoom/pan so manual drag works"
+    )
     # It should call mm.fit() to auto-fit
     assert "mm.fit()" in body, "should auto-fit the mindmap"
     # It should NOT use the autoloader template pattern in the fullscreen
     assert 'type="text/template"' not in body, "should not use autoloader template"
+
+
+def test_mindmap_disables_builtin_zoom_and_pan(client: TestClient):
+    """Regression test: markmap's built-in d3-zoom would fight (and win
+    over) our manual drag handler, causing the mindmap to 'snap back' to
+    the fitted transform on the first drag. We disable it by passing
+    { zoom: false, pan: false } to Markmap.create() in BOTH the inline
+    and fullscreen render paths. See the comment near Markmap.create()
+    in video.html for the full explanation.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    text = response.text
+    # The pattern "Markmap.create(svg, { zoom: false, pan: false }" must
+    # appear at least twice — once in the inline renderMindmap() path and
+    # once in the openMindmapFullscreen() path.
+    count = text.count("zoom: false")
+    pan_count = text.count("pan: false")
+    assert count >= 2, (
+        f"Expected at least 2 occurrences of `zoom: false` (inline + "
+        f"fullscreen), found {count}"
+    )
+    assert pan_count >= 2, (
+        f"Expected at least 2 occurrences of `pan: false` (inline + "
+        f"fullscreen), found {pan_count}"
+    )
+
+
+def test_mindmap_uses_outer_g_for_drag_transform(client: TestClient):
+    """After disabling markmap's built-in zoom/pan, our manual drag
+    handler needs to mutate a different <g> than the one markmap
+    controls. fitMindmapSVG now writes the transform onto the OUTER
+    <g> (svg > g) so attachMindmapInteraction can keep mutating it
+    without fighting d3-zoom.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # fitMindmapSVG should write onto the outer <g> via the
+    # :scope > g > g lookup (markmap's inner d3-managed <g>).
+    assert "'svg > g > g'" in response.text or "':scope > g > g'" in response.text, (
+        "fitMindmapSVG should read markmap's inner transform from "
+        "the nested <g> and apply it to the outer <g>"
+    )
 
 
 def test_close_mindmap_fullscreen_refits_inline(client: TestClient):
