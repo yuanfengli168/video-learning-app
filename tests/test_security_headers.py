@@ -38,11 +38,14 @@ def test_security_headers_on_api_route(client: TestClient):
 
 
 def test_security_headers_on_login_page(client: TestClient):
-    """The /login template route should also return the headers (it
-    has a lot of inline JS that the CSP must permit)."""
+    """The /login template route should return all baseline headers
+    except cross-origin-embedder-policy, which is intentionally
+    omitted on /login to allow the Firebase auth iframe to load.
+    See test_login_page_has_no_coep for the full rationale."""
     response = client.get("/login")
     assert response.status_code == 200
-    for header in EXPECTED_HEADERS:
+    login_expected = EXPECTED_HEADERS - {"cross-origin-embedder-policy"}
+    for header in login_expected:
         assert header in response.headers, f"Missing on /login: {header}"
 
 
@@ -202,27 +205,38 @@ def test_coop_is_same_origin_allow_popups_not_same_origin(client: TestClient):
 
 
 def test_coep_is_credentialless_not_require_corp(client: TestClient):
-    """Cross-Origin-Embedder-Policy must be 'credentialless' (not
-    'require-corp' or 'unsafe-none').
+    """Non-login pages must have COEP 'credentialless'.
 
-    Background: when this was 'require-corp', the Tailwind CDN and
-    AuthKit CDN stopped loading because neither sends a
-    Cross-Origin-Resource-Policy header. The result: a
-    `ReferenceError: tailwind is not defined` in the browser and
-    a completely unstyled UI.
-
-    'credentialless' is the OWASP-recommended value for apps that
-    don't use SharedArrayBuffer. It still isolates the page from
-    cross-origin credentialed requests, while allowing non-CORP
-    resources (like the Tailwind CDN) to load.
+    The /login page is intentionally exempt — see
+    test_login_page_has_no_coep for the rationale.
     """
     response = client.get("/api/health")
     coep = response.headers["cross-origin-embedder-policy"]
     assert coep == "credentialless", (
-        f"COEP must be 'credentialless' (the value that allows "
-        f"Tailwind CDN and AuthKit to load), got: {coep!r}. "
-        f"If you really need to change this, update the test and "
-        f"verify the dashboard, login page, and mindmap still load."
+        f"COEP must be 'credentialless' on non-login pages, got: {coep!r}."
+    )
+
+
+def test_login_page_has_no_coep(client: TestClient):
+    """The /login page must NOT set Cross-Origin-Embedder-Policy.
+
+    Firebase Auth popup mode embeds a hidden iframe at
+    firebaseapp.com/__/auth/iframe to relay auth state between the
+    popup and the parent window. That iframe has no CORP header.
+    Under COEP (even 'credentialless'), Chrome blocks it with
+    ERR_BLOCKED_BY_RESPONSE (reason: "origin"). Without the iframe,
+    signInWithPopup() never resolves and the user can't log in.
+
+    The login page is the only page that runs Firebase Auth, so
+    skipping COEP there is targeted and has minimal security impact.
+    All other pages keep COEP: credentialless.
+    """
+    response = client.get("/login")
+    assert "cross-origin-embedder-policy" not in response.headers, (
+        "COEP must be absent on /login so the Firebase auth iframe "
+        "(firebaseapp.com/__/auth/iframe) can load. "
+        "Setting COEP on /login blocks Google sign-in with "
+        "ERR_BLOCKED_BY_RESPONSE."
     )
 
 

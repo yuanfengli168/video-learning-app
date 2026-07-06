@@ -200,12 +200,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # from navigating into our browsing context. This is the
         # correct value for any app using OAuth popup flows.
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
-        # Use `credentialless` (not `require-corp`) so cross-origin
-        # scripts/styles (Tailwind CDN, AuthKit) still load even
-        # though they don't send a `Cross-Origin-Resource-Policy`
-        # header. This is the OWASP-recommended setting for apps
-        # that don't use `SharedArrayBuffer`.
-        response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
+        # COEP: omit on /login so the Firebase auth iframe
+        # (firebaseapp.com/__/auth/iframe) can load.
+        #
+        # Firebase Auth popup mode embeds a hidden iframe at
+        # firebaseapp.com/__/auth/iframe to relay auth state between
+        # the popup and the parent window. That iframe has NO
+        # Cross-Origin-Resource-Policy header. Under COEP
+        # 'credentialless', iframes without CORP still load in
+        # theory, but Chrome blocks them with ERR_BLOCKED_BY_RESPONSE
+        # (reason: "origin") at Firebase SDK v10.12.0 — possibly
+        # because the iframe itself sends gapi.js requests that
+        # conflict with our COEP.
+        #
+        # The login page is the only place Firebase Auth runs, so we
+        # skip COEP there. All other pages keep 'credentialless'.
+        if request.url.path != "/login":
+            response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
 
         # HSTS only when we're confident the request is over HTTPS.
         if not self._debug and self._is_https(request):
