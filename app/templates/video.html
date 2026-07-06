@@ -441,6 +441,7 @@ function checkAnswer(btn, selected, correct) {
 let mindmapData = null;
 let mindmapInstances = {};  // Store the Markmap instances for zoom/pan control
 let topicTimestamps = [];    // Map of topic -> {start, end}
+let mindmapParentMap = {};   // Maps each node to its direct parent (for ancestor lookup)
 let markmapScriptReady = false;
 let markmapScriptPromise = null;
 
@@ -486,6 +487,9 @@ async function loadMindmap() {
         const data = await mindmapResp.json();
         mindmapData = data.data;
         contentCache.mindmap = true;
+        // Build the parent map from the mindmap markdown so leaf-node clicks
+        // can fall back to ancestor timestamps.
+        mindmapParentMap = buildMindmapParentMap(mindmapData);
         // Load topic timestamps if available
         if (timestampsResp.ok) {
             const tsData = await timestampsResp.json();
@@ -800,7 +804,70 @@ function closeMindmapFullscreen() {
 }
 
 // ── Topic click → jump video + highlight transcript ──
+// Build a parent map from the mindmap markdown so we can walk up the
+// tree when a clicked node has no exact timestamp. For markdown like:
+//
+//   # Root
+//   ## Branch A
+//   ### Leaf A1
+//   ### Leaf A2
+//   ## Branch B
+//   ### Leaf B1
+//
+// parentMap will be:
+//   { "Branch A": "Root", "Leaf A1": "Branch A", "Leaf A2": "Branch A",
+//     "Branch B": "Root", "Leaf B1": "Branch B" }
+function buildMindmapParentMap(markdown) {
+    const parentMap = {};
+    if (!markdown) return parentMap;
+    // Track the most recent node at each heading level (1=#, 2=##, 3=###, 4=####).
+    const levelStack = {};  // {1: "Root", 2: "Branch A", 3: "Leaf A1"}
+    const lines = markdown.split('\n');
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        // Match up to 4 leading # characters, then capture the rest as the title.
+        const match = line.match(/^(#{1,4})\s+(.+?)\s*$/);
+        if (!match) continue;
+        const level = match[1].length;
+        const title = match[2].trim();
+        // The parent is the most recent node at level-1 (or the root if level=1).
+        if (level === 1) {
+            // Root has no parent.
+            levelStack[1] = title;
+        } else {
+            const parent = levelStack[level - 1];
+            if (parent && parent !== title) {
+                parentMap[title] = parent;
+            }
+            levelStack[level] = title;
+            // Invalidate deeper levels (they're no longer ancestors).
+            for (let d = level + 1; d <= 4; d++) delete levelStack[d];
+        }
+    }
+    return parentMap;
+}
+
+// Returns the closest ancestor (including the node itself) that has a
+// timestamp entry. Returns null only if the entire ancestor chain has
+// no match.
+function findTopicTimestampWithAncestors(topicName, parentMap) {
+    // First try the node itself.
+    let ts = findTopicTimestamp(topicName);
+    if (ts) return { ts, matchedName: topicName };
+    // Then walk up the parent chain.
+    let current = parentMap[topicName];
+    const seen = new Set([topicName]);
+    while (current && !seen.has(current)) {
+        seen.add(current);
+        ts = findTopicTimestamp(current);
+        if (ts) return { ts, matchedName: current };
+        current = parentMap[current];
+    }
+    return null;
+}
+
 function findTopicTimestamp(topicName) {
+    if (!topicName || !topicTimestamps || topicTimestamps.length === 0) return null;
     // Exact match first
     let match = topicTimestamps.find(t => t.topic === topicName);
     if (match) return match;
@@ -808,9 +875,18 @@ function findTopicTimestamp(topicName) {
     const lower = topicName.toLowerCase();
     match = topicTimestamps.find(t => t.topic.toLowerCase() === lower);
     if (match) return match;
-    // Partial match
-    match = topicTimestamps.find(t => t.topic.toLowerCase().includes(lower) || lower.includes(t.topic.toLowerCase()));
-    return match || null;
+    // Partial match — the topic text contains a known timestamp key
+    // (or vice versa). Prefer the longer / more specific match.
+    let candidates = topicTimestamps.filter(t => {
+        const tt = t.topic.toLowerCase();
+        return tt.includes(lower) || lower.includes(tt);
+    });
+    if (candidates.length > 0) {
+        // Pick the candidate with the longest matching topic (most specific).
+        candidates.sort((a, b) => b.topic.length - a.topic.length);
+        return candidates[0];
+    }
+    return null;
 }
 
 function showTopicBanner(topicName, start, end) {
@@ -849,12 +925,40 @@ function highlightTranscriptRange(start, end) {
     }
 }
 
+// Non-blocking toast notification. Replaces the intrusive alert() so
+// the user can keep interacting with the mindmap.
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = 'fixed bottom-6 right-6 z-[200] px-4 py-3 rounded-lg shadow-lg text-sm max-w-sm transition-opacity duration-300';
+    if (type === 'error') {
+        toast.classList.add('bg-red-100', 'dark:bg-red-900/40', 'text-red-700', 'dark:text-red-300', 'border', 'border-red-300', 'dark:border-red-700');
+    } else {
+        toast.classList.add('bg-indigo-100', 'dark:bg-indigo-900/40', 'text-indigo-700', 'dark:text-indigo-300', 'border', 'border-indigo-300', 'dark:border-indigo-700');
+    }
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
 function jumpToTopic(topicName) {
-    const ts = findTopicTimestamp(topicName);
-    if (!ts) {
-        alert(`No timestamp info for "${topicName}".\nThe video wasn't generated with topic timestamps yet — try regenerating materials.`);
+    const result = findTopicTimestampWithAncestors(topicName, mindmapParentMap);
+    if (!result) {
+        // No timestamp for this node or any of its ancestors.
+        console.warn('No timestamp for topic:', topicName, 'or any ancestor');
+        showToast(
+            `No timestamp info for "${topicName}". Regenerate materials to get fresh timestamps.`,
+            'error'
+        );
         return;
     }
+    const { ts, matchedName } = result;
+    // If we matched an ancestor, show the user which one we used.
+    const displayName = matchedName === topicName
+        ? topicName
+        : `${topicName} → ${matchedName}`;
     // If we're in the fullscreen mindmap modal, close it first so the user
     // sees the video and transcript on the page below.
     closeMindmapFullscreen();
@@ -865,7 +969,7 @@ function jumpToTopic(topicName) {
         video.pause();  // Pause at start so user can read the banner
     }
     // Show the banner
-    showTopicBanner(topicName, ts.start, ts.end);
+    showTopicBanner(displayName, ts.start, ts.end);
     // Highlight transcript
     highlightTranscriptRange(ts.start, ts.end);
 }

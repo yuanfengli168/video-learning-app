@@ -326,3 +326,77 @@ def test_mindmap_node_has_click_tooltip_and_pointer_cursor(client: TestClient):
     assert "Click to watch this part of the video" in response.text
     # jumpToTopic should close the fullscreen modal first
     assert "closeMindmapFullscreen()" in response.text
+
+
+def test_video_page_has_mindmap_parent_map_ancestor_lookup(client: TestClient):
+    """When a user clicks a leaf node that has no exact timestamp, the
+    page should walk up the mindmap tree to find the closest ancestor
+    that does. This prevents the 'No timestamp info' error for deeply
+    nested topics that the LLM didn't enumerate directly.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Parent map builder and ancestor walker must exist
+    assert "function buildMindmapParentMap" in response.text
+    assert "function findTopicTimestampWithAncestors" in response.text
+    # The parent map should be populated when the mindmap loads
+    assert "mindmapParentMap = buildMindmapParentMap" in response.text
+    assert "mindmapParentMap" in response.text
+    # jumpToTopic must call the ancestor-aware version
+    assert "findTopicTimestampWithAncestors(topicName, mindmapParentMap)" in response.text
+
+
+def test_video_page_has_graceful_toast_not_alert(client: TestClient):
+    """The page should show a non-blocking toast (not an alert) when no
+    timestamp is found, so the user can keep interacting with the mindmap.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Toast helper exists
+    assert "function showToast" in response.text
+    # jumpToTopic should call showToast, not alert
+    assert "showToast(" in response.text
+    # Old alert() with 'No timestamp info' should be gone
+    assert "alert(`No timestamp info" not in response.text
