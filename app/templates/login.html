@@ -48,8 +48,19 @@
         },
     });
 
-    AuthKit.onAuthStateChanged((user) => {
+    AuthKit.onAuthStateChanged(async (user) => {
         if (user) {
+            // Get the Firebase ID token and exchange it for a session cookie
+            try {
+                const idToken = await user.getIdToken();
+                await fetch('/api/auth/session', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id_token: idToken}),
+                });
+            } catch (e) {
+                console.error('Failed to create session:', e);
+            }
             window.location.href = '/';
         }
     });

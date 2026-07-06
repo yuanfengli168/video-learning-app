@@ -84,10 +84,9 @@ function toggleSection(id) {
 async function createSection(e) {
     e.preventDefault();
     const title = document.getElementById('section-title').value;
-    const token = await getAuthToken();
     const resp = await fetch('/api/courses/{{ course.id }}/sections', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({title: title}),
     });
     if (resp.ok) { location.reload(); }
@@ -96,12 +95,10 @@ async function createSection(e) {
 async function uploadVideo(sectionId, input) {
     const file = input.files[0];
     if (!file) return;
-    const token = await getAuthToken();
     const formData = new FormData();
     formData.append('file', file);
     const resp = await fetch('/api/videos/upload/' + sectionId, {
         method: 'POST',
-        headers: {'Authorization': 'Bearer ' + token},
         body: formData,
     });
     if (resp.ok) { location.reload(); }

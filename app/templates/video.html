@@ -92,10 +92,8 @@ function switchTab(tab) {
 
 // ── Auth token helper ──
 async function getAuthToken() {
-    // AuthKit stores the Firebase user — get ID token
-    if (typeof AuthKit !== 'undefined' && AuthKit.currentUser) {
-        return await AuthKit.currentUser.getIdToken();
-    }
+    // Session cookie is sent automatically with same-origin requests.
+    // Return empty string — the cookie handles auth.
     return '';
 }
 

@@ -80,7 +80,7 @@
                         {% endif %}
                         <span class="text-sm text-gray-600 dark:text-gray-400 truncate max-w-[120px]">{{ user.get('name', user.get('email', '')) }}</span>
                     </div>
-                    <button onclick="AuthKit.signOut()" class="text-xs text-gray-400 hover:text-red-500">Logout</button>
+                    <button onclick="logout()" class="text-xs text-gray-400 hover:text-red-500">Logout</button>
                 {% else %}
                     <a href="/login" class="text-sm text-indigo-600 dark:text-indigo-400">Sign in</a>
                 {% endif %}
@@ -121,6 +121,15 @@
             const overlay = document.getElementById('sidebar-overlay');
             sidebar.classList.toggle('-translate-x-full');
             overlay.classList.toggle('hidden');
+        }
+        async function logout() {
+            // Clear the backend session cookie
+            await fetch('/api/auth/session', {method: 'DELETE'});
+            // Sign out from Firebase/AuthKit if available
+            if (typeof AuthKit !== 'undefined' && AuthKit.signOut) {
+                try { await AuthKit.signOut(); } catch(e) {}
+            }
+            window.location.href = '/login';
         }
     </script>
     {% block scripts %}{% endblock %}

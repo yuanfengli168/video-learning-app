@@ -88,7 +88,7 @@ def test_get_user_id_helper():
 
 
 def test_get_current_user_optional_no_header(client: TestClient):
-    """get_current_user_optional should return None when no auth header."""
+    """get_current_user_optional should return None when no auth header or cookie."""
     from starlette.requests import Request
 
     scope = {
@@ -103,7 +103,7 @@ def test_get_current_user_optional_no_header(client: TestClient):
     import asyncio
     from app.auth.dependencies import get_current_user_optional
 
-    result = asyncio.run(get_current_user_optional(request))
+    result = asyncio.run(get_current_user_optional(request, None))
     assert result is None
 
 
@@ -113,6 +113,7 @@ def test_get_current_user_optional_valid_token(client: TestClient):
 
     with patch("app.auth.dependencies.verify_token", return_value=fake_claims):
         from starlette.requests import Request
+        from fastapi.security import HTTPAuthorizationCredentials
 
         scope = {
             "type": "http",
@@ -122,11 +123,12 @@ def test_get_current_user_optional_valid_token(client: TestClient):
             "query_string": b"",
         }
         request = Request(scope)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-token")
 
         import asyncio
         from app.auth.dependencies import get_current_user_optional
 
-        result = asyncio.run(get_current_user_optional(request))
+        result = asyncio.run(get_current_user_optional(request, credentials))
         assert result == fake_claims
 
 
@@ -137,6 +139,7 @@ def test_get_current_user_optional_invalid_token(client: TestClient):
         side_effect=ValueError("bad token"),
     ):
         from starlette.requests import Request
+        from fastapi.security import HTTPAuthorizationCredentials
 
         scope = {
             "type": "http",
@@ -146,9 +149,10 @@ def test_get_current_user_optional_invalid_token(client: TestClient):
             "query_string": b"",
         }
         request = Request(scope)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="bad-token")
 
         import asyncio
         from app.auth.dependencies import get_current_user_optional
 
-        result = asyncio.run(get_current_user_optional(request))
+        result = asyncio.run(get_current_user_optional(request, credentials))
         assert result is None

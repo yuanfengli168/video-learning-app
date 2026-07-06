@@ -6,22 +6,43 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.auth.firebase_admin import verify_token
+from app.auth.session import get_token_from_cookie
 
 security = HTTPBearer(auto_error=False)
 
 
+def _extract_token(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str | None:
+    """Extract the Firebase ID token from cookie or Authorization header.
+
+    Cookie takes priority (for browser page loads), then Bearer header (for API calls).
+    """
+    # Try cookie first
+    cookie_token = get_token_from_cookie(request)
+    if cookie_token:
+        return cookie_token
+
+    # Fall back to Authorization header
+    if credentials and credentials.credentials:
+        return credentials.credentials
+
+    return None
+
+
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict[str, Any]:
     """FastAPI dependency that verifies the Firebase ID token.
 
-    Extracts the Bearer token from the Authorization header, verifies it
-    with Firebase Admin SDK, and returns the decoded claims.
+    Checks the session cookie first, then the Authorization header.
+    Verifies the token with Firebase Admin SDK and returns the decoded claims.
 
     Raises:
         HTTPException 401: If no token is provided or the token is invalid.
     """
-    if credentials is None:
+    token = _extract_token(request, credentials)
+
+    if token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated. Provide a Bearer token.",
@@ -29,7 +50,7 @@ async def get_current_user(
         )
 
     try:
-        claims = verify_token(credentials.credentials)
+        claims = verify_token(token)
         return claims
     except ValueError as exc:
         raise HTTPException(
@@ -41,16 +62,17 @@ async def get_current_user(
 
 async def get_current_user_optional(
     request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict[str, Any] | None:
     """Optional auth — returns user claims if token is valid, None otherwise.
 
+    Checks the session cookie first, then the Authorization header.
     Useful for routes that behave differently for authenticated vs anonymous users.
     """
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    token = _extract_token(request, credentials)
+    if not token:
         return None
 
-    token = auth_header.removeprefix("Bearer ")
     try:
         return verify_token(token)
     except ValueError:
