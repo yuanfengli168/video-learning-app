@@ -122,6 +122,11 @@
         if (signInHandled) return;
         signInHandled = true;
 
+        // Clear any previous error message from a failed attempt so the
+        // user doesn't see a confusing stale error like
+        // "Firebase auth instance not found" while a new attempt runs.
+        anchor.querySelectorAll('.text-red-500').forEach(el => el.remove());
+
         // Prevent AuthKit's own handler from also trying to sign in.
         clickEvent.preventDefault();
         clickEvent.stopImmediatePropagation();
@@ -141,6 +146,17 @@
             const app = fb.getApp('authkit');  // throws if AuthKit hasn't init'd
             const auth = fba.getAuth(app);
             const provider = new fba.GoogleAuthProvider();
+            // Add a no-op target so the popup goes straight to account
+            // selection rather than the Firebase Hosting auth handler
+            // (which is what causes the redirect-back-to-app step that
+            // can fail if localhost isn't an authorized domain).
+            // Actually — we WANT the redirect-back step so Firebase can
+            // mint the ID token. The "redirect back" target IS our app
+            // (or rather the Firebase Hosting auth handler, which then
+            // calls back to our origin). If localhost isn't in the
+            // Firebase Auth authorized domains list, the popup will
+            // appear to hang and then close. The error will be
+            // auth/unauthorized-domain or auth/popup-closed-by-user.
             const result = await fba.signInWithPopup(auth, provider);
             const idToken = await result.user.getIdToken();
             const resp = await fetch('/api/auth/session', {
@@ -159,9 +175,23 @@
             signInHandled = false;  // allow retry
             const errEl = document.createElement('p');
             errEl.className = 'text-red-500 text-sm mt-2';
-            errEl.textContent = (e.code && ERROR_TRANSLATIONS[e.code])
-                || e.message
-                || 'Google sign-in failed. Please try again.';
+            // Special-case the most common Firebase Console misconfig:
+            // a missing authorized domain. The user will hit
+            // 'auth/popup-closed-by-user' or 'auth/unauthorized-domain'.
+            const code = e.code || '';
+            let msg;
+            if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+                msg = 'Google sign-in was cancelled or the popup was blocked. ' +
+                    'If you clicked your account and the popup closed on its own, ' +
+                    'this usually means ' + location.host + ' is not in the Firebase ' +
+                    'Console → Authentication → Settings → Authorized domains list. ' +
+                    'Add it there, then reload this page.';
+            } else {
+                msg = (ERROR_TRANSLATIONS[code])
+                    || e.message
+                    || 'Google sign-in failed. Please try again.';
+            }
+            errEl.textContent = msg;
             anchor.appendChild(errEl);
         }
     }
