@@ -73,6 +73,7 @@ app/
 scripts/                 # setup.sh, setup_firebase_key.sh, start.sh, test.sh
 tests/                   # 218 pytest tests (96% coverage)
 doc/                     # design.md, handover.md, deployment.md, MVP1.0-successfullyFinished.md
+CHANGELOG.md             # version history (Keep a Changelog format)
 ```
 
 ## License
