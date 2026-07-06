@@ -51,7 +51,7 @@ uvicorn app.main:app --reload   # http://localhost:8000
 ## Testing
 ```bash
 bash scripts/test.sh        # full test suite with coverage
-pytest                      # 206 unit tests (Whisper/Ollama mocked)
+pytest                      # 211 unit tests (Whisper/Ollama mocked)
 pytest --cov=app            # 96% coverage report
 ```
 
@@ -67,7 +67,7 @@ app/
 ├── auth/                # Firebase Admin SDK + session cookie helpers
 └── templates/           # Jinja2 HTML templates (base, dashboard, course, video, login)
 scripts/                 # setup.sh, setup_firebase_key.sh, start.sh, test.sh
-tests/                   # 206 pytest tests (96% coverage)
+tests/                   # 211 pytest tests (96% coverage)
 doc/                     # design.md, handover.md, deployment.md
 ```
 

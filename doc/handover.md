@@ -56,7 +56,7 @@ pytest -m slow           # integration tests (requires real Ollama + Whisper)
 pytest --cov=app         # coverage report
 ```
 
-> **Current status:** 206 tests passing, 96% backend coverage.
+> **Current status:** 211 tests passing, 96% backend coverage.
 
 ### Sidebar Search
 
@@ -115,7 +115,7 @@ video-learning-app/
 │       ├── login.html       # AuthKit login page
 │       ├── error.html       # Error page
 │       └── redirect.html    # Redirect helper
-├── tests/                   # 206 pytest tests (96% coverage)
+├── tests/                   # 211 pytest tests (96% coverage)
 │   ├── conftest.py          # Fixtures: test DB, client
 │   ├── test_config.py
 │   ├── test_database.py
@@ -212,7 +212,7 @@ Firebase Console → Authentication → Settings → Authorized Domains.
 *   Mobile: the sidebar logo has a toggle button that swaps between a hamburger (☰) and a close (✕) icon depending on whether the sidebar is open or closed.
 
 ### Homepage (Dashboard) Layout
-*   **Upload Zone:** Large drag-and-drop box at the top for video files.
+*   **Upload Zone:** Drag-and-drop box at the top of the dashboard. If the user has any sections, the zone shows a section picker dropdown (listing all sections as "Course Title / Section Title") plus a "Choose Video" button — the file-picker (or drag-and-drop) uploads to the selected section via `/api/videos/upload/{id}`. A status line below the zone gives feedback ("⏳ Uploading…", "✅ Uploaded. Redirecting…", or "❌ Upload failed: …"). If the user has a course but no sections, it shows a link to the course page. If the user has no courses, it shows the "create a course" button.
 *   **Continue Learning:** Horizontal carousel of in-progress videos (Thumbnail, Title, Progress Bar).
 *   **Your Courses:** Responsive grid (3 cols desktop, 1 col mobile) of Course Cards. Clicking opens Course View.
 
