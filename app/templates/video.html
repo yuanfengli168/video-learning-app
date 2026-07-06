@@ -23,10 +23,22 @@
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-4">
             <div class="flex items-center justify-between mb-3">
                 <h3 class="font-semibold">📜 Transcript</h3>
-                <input type="text" id="transcript-search" placeholder="Search transcript..." class="px-3 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700" onkeyup="searchTranscript()">
+                <div class="flex items-center gap-2">
+                    <!-- Whisper model selector -->
+                    <select id="whisper-model" class="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                        <option value="tiny">tiny (fastest)</option>
+                        <option value="base" selected>base (recommended)</option>
+                        <option value="small">small (better)</option>
+                        <option value="medium">medium (best)</option>
+                    </select>
+                    <button onclick="transcribeVideo()" id="transcribe-btn" class="px-3 py-1 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
+                        🎙️ Transcribe
+                    </button>
+                    <input type="text" id="transcript-search" placeholder="Search..." class="px-3 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700" onkeyup="searchTranscript()">
+                </div>
             </div>
             <div id="transcript-container" class="max-h-96 overflow-y-auto space-y-1 text-sm">
-                <p class="text-gray-400 py-4 text-center">Loading transcript...</p>
+                <p class="text-gray-400 py-4 text-center">No transcript yet. Click "Transcribe" to generate one.</p>
             </div>
         </div>
     </div>
@@ -142,6 +154,38 @@ function searchTranscript() {
         const text = line.dataset.text;
         line.style.display = text.includes(query) ? '' : 'none';
     });
+}
+
+// ── Transcribe ──
+async function transcribeVideo() {
+    const modelName = document.getElementById('whisper-model').value;
+    const btn = document.getElementById('transcribe-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Transcribing... (this may take a few minutes)';
+    document.getElementById('transcript-container').innerHTML =
+        '<p class="text-gray-400 py-4 text-center">⏳ Transcribing with Whisper (' + modelName + ')... please wait</p>';
+
+    try {
+        const resp = await fetch(`/api/videos/${videoId}/transcribe?model_name=${modelName}`, {
+            method: 'POST',
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            btn.textContent = '✅ Transcribed';
+            // Reload to load the transcript
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            btn.textContent = '❌ Failed';
+            btn.disabled = false;
+            document.getElementById('transcript-container').innerHTML =
+                '<p class="text-red-500 py-4 text-center">Error: ' + (data.detail || 'Unknown error') + '</p>';
+        }
+    } catch (e) {
+        btn.textContent = '❌ Error';
+        btn.disabled = false;
+        document.getElementById('transcript-container').innerHTML =
+            '<p class="text-red-500 py-4 text-center">Error: ' + e.message + '</p>';
+    }
 }
 
 // ── Generate materials ──
