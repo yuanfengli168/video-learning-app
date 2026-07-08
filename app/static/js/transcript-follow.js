@@ -98,12 +98,46 @@
                 const lineRect = lines[idx].getBoundingClientRect();
                 const containerRect = container.getBoundingClientRect();
                 if (shouldScroll(lineRect, containerRect, mode)) {
-                    lines[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // Scroll ONLY the transcript container's inner
+                    // scrollbar, not the window. Using `scrollIntoView`
+                    // here would scroll the nearest scrollable ancestor,
+                    // which on a long page is the browser window — that
+                    // would scroll the whole page down and push the
+                    // video player out of view. We compute the desired
+                    // scrollTop by aligning the line's offset within the
+                    // container so it sits in the center.
+                    scrollContainerToCenter(lines[idx]);
                     lastScrollTime = now;
                 }
             }
         }
         lastActiveIndex = idx;
+    }
+
+    // Scroll the transcript container so the given line sits roughly at
+    // the vertical center of the visible area. Pure DOM arithmetic —
+    // no scrollIntoView, no jQuery, no layout thrash beyond what the
+    // browser already does. Safe to call from the timeupdate handler
+    // (throttled to once per 250ms by the caller).
+    function scrollContainerToCenter(lineEl) {
+        if (!container || !lineEl) return;
+        // Offset of the line relative to the top of the container's
+        // scrollable content. scrollTop + line.offsetTop gives the line's
+        // position within the scrolled content.
+        const lineTopWithinContent = lineEl.offsetTop;
+        const lineHeight = lineEl.offsetHeight;
+        const containerHeight = container.clientHeight;
+        // We want the line to land at the vertical center of the
+        // visible area. The visible area is the content from
+        // [scrollTop, scrollTop + containerHeight]. To put the line
+        // at the center, set scrollTop so that the line's center sits
+        // at scrollTop + containerHeight / 2.
+        const desired = lineTopWithinContent - (containerHeight / 2) + (lineHeight / 2);
+        // Clamp to valid scroll range. Setting scrollTop to a value
+        // outside [0, scrollHeight - clientHeight] is a no-op in some
+        // browsers and an error in others — clamp defensively.
+        const max = Math.max(0, container.scrollHeight - containerHeight);
+        container.scrollTop = Math.max(0, Math.min(desired, max));
     }
 
     function init(opts) {

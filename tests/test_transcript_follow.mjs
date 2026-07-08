@@ -169,3 +169,45 @@ test('readPersistedMode/writePersistedMode: round-trips through localStorage', (
     // Clean up.
     globalThis.localStorage.removeItem(key);
 });
+
+// ── Source-level regression: transcript scroll must be container-only ──
+//
+// Why this exists: scrollIntoView() scrolls the nearest scrollable
+// ancestor, which on a long page is the BROWSER WINDOW — that scrolls
+// the whole page and pushes the video out of view. The fix is to
+// manually set `container.scrollTop` instead. This source-level test
+// fails loudly if anyone re-introduces scrollIntoView in the
+// transcript-follow code, so the regression is caught in CI rather
+// than reported by users.
+test('transcript-follow does NOT use scrollIntoView (it would scroll the window)', () => {
+    // Strip comments so an `// scrollIntoView` mention in a comment
+    // doesn't false-positive the test.
+    const codeOnly = SRC
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+    assert.equal(
+        codeOnly.includes('scrollIntoView'),
+        false,
+        'app/static/js/transcript-follow.js uses scrollIntoView, which '
+        + 'scrolls the nearest scrollable ancestor (the browser window '
+        + 'on long pages). This scrolls the whole page and pushes the '
+        + 'video player out of view. Use `container.scrollTop = ...` '
+        + 'to scroll ONLY the transcript container. See the '
+        + 'scrollContainerToCenter helper for the correct pattern.'
+    );
+});
+
+// The container-scroll helper uses pure DOM arithmetic (no
+// scrollIntoView, no smooth behavior, no browser window scroll). This
+// source-level test confirms the helper is wired up and avoids the
+// banned APIs.
+test('scrollContainerToCenter uses container.scrollTop, not scrollIntoView', () => {
+    // Find the helper function in the source.
+    const m = SRC.match(/function\s+scrollContainerToCenter[\s\S]*?\n\s{4}\}/);
+    assert.ok(m, 'scrollContainerToCenter function must be defined');
+    const helper = m[0];
+    assert.match(helper, /container\.scrollTop\s*=/,
+        'scrollContainerToCenter must assign container.scrollTop');
+    assert.equal(helper.includes('scrollIntoView'), false,
+        'scrollContainerToCenter must not use scrollIntoView');
+});
