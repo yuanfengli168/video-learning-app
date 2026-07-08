@@ -1,0 +1,22 @@
+/*
+ * transcript-follow.css — visual highlight for the active transcript
+ * line as the video plays. Only styles the .is-follow-active class
+ * added/removed by app/static/js/transcript-follow.js. Designed to
+ * compose with the existing search-highlight classes without
+ * overriding them: the search ring stays more prominent.
+ */
+.transcript-line.is-follow-active {
+    background-color: rgba(99, 102, 241, 0.12); /* indigo-500 @ 12% */
+    box-shadow: inset 3px 0 0 0 rgb(99, 102, 241); /* left accent bar */
+    transition: background-color 200ms ease, box-shadow 200ms ease;
+}
+.dark .transcript-line.is-follow-active {
+    background-color: rgba(129, 140, 248, 0.18); /* indigo-400 @ 18% */
+    box-shadow: inset 3px 0 0 0 rgb(129, 140, 248);
+}
+
+/* When the search-match ring AND the follow-active bar are both on
+ * the same line, keep the search ring dominant. */
+.transcript-line.is-follow-active.ring-2 {
+    box-shadow: inset 3px 0 0 0 rgb(99, 102, 241), 0 0 0 2px rgb(129, 140, 248);
+}

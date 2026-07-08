@@ -41,6 +41,20 @@
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
                 <h3 class="font-semibold">📜 Transcript</h3>
                 <div class="flex flex-wrap items-center gap-2">
+                    <!-- Transcript follow-mode dropdown (MVP1.1 experiment).
+                         Default "smart" = highlight tracks the video, scroll
+                         only when active line is out of viewport.
+                         "always" = Coursera-style auto-scroll on every line.
+                         Persists in localStorage namespaced by user email
+                         (see app/static/js/transcript-follow.js). -->
+                    <label for="transcript-follow-mode" class="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                        Follow:
+                        <select id="transcript-follow-mode"
+                                class="px-2 py-0.5 text-xs rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                            <option value="smart" selected>Smart (default)</option>
+                            <option value="always">Always scroll</option>
+                        </select>
+                    </label>
                     <!-- Whisper model selector -->
                     <select id="whisper-model" class="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
                         <option value="tiny">tiny (fastest)</option>
@@ -113,6 +127,7 @@
     </div>
 </div>
 
+<script src="/static/js/transcript-follow.js" defer></script>
 <script>
 const videoId = '{{ video.id }}';
 let transcriptData = null;
@@ -173,6 +188,36 @@ function renderTranscript(segments) {
             <span class="text-gray-700 dark:text-gray-300 transcript-text">${s.text}</span>
         </div>
     `).join('');
+    // Wire the transcript-follow component (see app/static/js/transcript-follow.js).
+    // Uses the existing global transcriptData so the timeupdate handler
+    // can read segments without re-querying the DOM. The dropdown's
+    // initial value reflects the user's persisted mode from localStorage
+    // (handled inside TranscriptFollow.init).
+    if (window.TranscriptFollow) {
+        const followSelect = document.getElementById('transcript-follow-mode');
+        if (followSelect) {
+            // Set the dropdown to the persisted mode before init() so the
+            // component and the UI agree on the first render.
+            const meta = document.querySelector('meta[name="x-user-email"]');
+            const email = meta ? meta.content : 'anon';
+            try {
+                const persisted = localStorage.getItem('transcript.followMode.' + email.toLowerCase());
+                if (persisted === 'smart' || persisted === 'always') {
+                    followSelect.value = persisted;
+                }
+            } catch (e) { /* ignore */ }
+            followSelect.addEventListener('change', function () {
+                window.TranscriptFollow.setMode(this.value, email);
+            });
+        }
+        window.TranscriptFollow.init({
+            container: container,
+            video: document.querySelector('video'),
+            segmentsProvider: function () {
+                return (transcriptData && transcriptData.segments) || null;
+            },
+        });
+    }
 }
 
 function formatTime(seconds) {

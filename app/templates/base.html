@@ -4,6 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# Stamp the signed-in user's email into a meta tag so the
+       transcript-follow component can namespace its localStorage key
+       per-account (no cross-user pollution on shared devices). #}
+    {% if user and user.get('email') %}
+    <meta name="x-user-email" content="{{ user.get('email', '') }}">
+    {% endif %}
     <title>{% block title %}{{ app_name }}{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -25,6 +31,10 @@
         }
     </script>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    {# Transcript-follow experiment (MVP1.1, see MVP1.0-PostRelease § Optimization #1).
+       Only used by video.html today; safe to include globally because
+       the .is-follow-active rules are inert without the JS component. #}
+    <link rel="stylesheet" href="/static/css/transcript-follow.css">
     {% block head %}{% endblock %}
 </head>
 <body class="h-full bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 flex">
