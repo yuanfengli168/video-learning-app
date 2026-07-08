@@ -12,11 +12,17 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user_optional
 from app.config import settings
 from app.database import get_db
-from app.models import Course, Section, Video
+from app.models import Asset, Course, Section, Video
+from app.services.markdown import simple_markdown
 
 router = APIRouter(tags=["frontend"])
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+# Register the `md` Jinja filter used by video.html to pre-render the
+# summary HTML. Mirrors the JS `simpleMarkdown` function in
+# app/templates/video.html — the byte-equality test in
+# tests/test_frontend.py locks both implementations in lockstep.
+templates.env.filters["md"] = simple_markdown
 
 
 def _ctx(
@@ -115,7 +121,14 @@ async def video_view(
     db: Session = Depends(get_db),
     user: dict[str, Any] | None = Depends(get_current_user_optional),
 ) -> HTMLResponse:
-    """Video player view — the core learning page."""
+    """Video player view — the core learning page.
+
+    SSR pre-render of the Summary tab (see MVP1.0-PostRelease §
+    Optimization #2). When a summary `Asset` exists for this video we
+    hand the template the rendered HTML so the user never sees the
+    "Generate" button flicker on re-login. When no summary exists we
+    pass None and the template renders the Generate button as before.
+    """
     video = db.get(Video, video_id)
     if not video:
         return templates.TemplateResponse(
@@ -128,10 +141,27 @@ async def video_view(
     section = db.get(Section, video.section_id)
     course = db.get(Course, section.course_id) if section else None
 
+    # Look up the summary asset. Limit to one row (we always upsert in
+    # `_run_generate_job`) so this is a single-row read.
+    summary_asset = db.execute(
+        select(Asset).where(
+            Asset.video_id == video_id, Asset.asset_type == "summary"
+        )
+    ).scalar_one_or_none()
+    summary_content = summary_asset.content if summary_asset else None
+
     return templates.TemplateResponse(
         request,
         "video.html",
-        _ctx(request, user, db=db, video=video, course=course, section=section),
+        _ctx(
+            request,
+            user,
+            db=db,
+            video=video,
+            course=course,
+            section=section,
+            summary_content=summary_content,
+        ),
     )
 
 

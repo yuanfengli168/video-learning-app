@@ -96,12 +96,25 @@
 
             <!-- Tab content -->
             <div class="p-4">
-                <!-- Summary -->
+                <!-- Summary
+                     SSR pre-render (see MVP1.0-PostRelease § Optimization #2):
+                     when a summary Asset already exists, render the HTML
+                     server-side so the user never sees a "Generate" button
+                     on re-login for a video that already has materials.
+                     The frontend `loadSummary` then becomes a no-op (cache
+                     is populated by SSR) or a refresh-after-regenerate. -->
                 <div id="content-summary" class="prose dark:prose-invert max-w-none text-sm">
-                    <p class="text-gray-400">Click "Generate" to create learning materials.</p>
-                    <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
-                        ⚡ Generate Materials
-                    </button>
+                    {% if summary_content %}
+                        <div class="prose dark:prose-invert max-w-none text-sm">{{ summary_content | md }}</div>
+                        <button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">
+                            🔄 Regenerate
+                        </button>
+                    {% else %}
+                        <p class="text-gray-400">Click "Generate" to create learning materials.</p>
+                        <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                            ⚡ Generate Materials
+                        </button>
+                    {% endif %}
                 </div>
 
                 <!-- Flashcards -->
@@ -131,10 +144,26 @@
 <script>
 const videoId = '{{ video.id }}';
 let transcriptData = null;
+// SSR pre-population: when the server-rendered HTML already contains a
+// summary, treat the cache as filled so the first loadSummary() call
+// is a no-op. Otherwise the JS path below would race with SSR and could
+// briefly stomp the rendered content (see Optimization #2 in
+// doc/MVP1.0-PostRelease.md).
+const initialSummaryHtml = document.getElementById('content-summary').innerHTML;
 
 // ── Tab switching ──
 // Cache for loaded content — avoids re-fetching on every tab switch
 const contentCache = {};
+// Seed the summary cache from the SSR'd HTML so the first loadSummary()
+// call (triggered by switchTab('summary') on page load) is a no-op
+// and the first switchTab→other-tab→back-to-summary cycle doesn't
+// refetch. See Optimization #2 in doc/MVP1.0-PostRelease.md — this
+// is the frontend half of the SSR fix; the backend half is in
+// app/routers/frontend.py (video_view passes summary_content to the
+// template).
+if (document.getElementById('content-summary').querySelector('.prose')) {
+    contentCache.summary = initialSummaryHtml;
+}
 
 function switchTab(tab) {
     ['summary', 'flashcards', 'quiz', 'mindmap'].forEach(t => {
@@ -485,36 +514,79 @@ function showJobError(jobType, message) {
     }
 }
 
-// ── Load summary (cached) ──
+// ── Load summary (cached + SSR-aware + in-flight guarded) ──
+//
+// Two failure modes this defends against (see Optimization #2 in
+// doc/MVP1.0-PostRelease.md):
+//   1. Re-login race: the user just logged in, the cookie isn't yet
+//      attached to the request, the fetch 401s, the previous code
+//      stomped the SSR'd "Generate" button over the existing summary.
+//   2. Double-load race: switchTab('summary') can be called multiple
+//      times during page init, triggering two parallel fetches that
+//      both stomp the DOM in arbitrary order.
+//
+// Defenses:
+//   a. SSR populates contentCache.summary when a summary exists, so the
+//      first loadSummary() call short-circuits.
+//   b. The `inFlight` map coalesces concurrent calls onto one fetch.
+//   c. The !resp.ok branch is now defensive: it only renders the
+//      Generate button if the current DOM doesn't already show a
+//      summary (`.prose` div is the SSR marker).
 async function loadSummary() {
     if (contentCache.summary) {
         document.getElementById('content-summary').innerHTML = contentCache.summary;
         return;
     }
-    try {
-        const resp = await fetch(`/api/generate/${videoId}/assets/summary`);
-        if (!resp.ok) {
-            document.getElementById('content-summary').innerHTML = `
-                <p class="text-gray-400">No summary yet. Click "Generate" to create learning materials.</p>
-                <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
-                    ⚡ Generate Materials
+    return cacheCoalesce('summary', async () => {
+        try {
+            const resp = await fetch(`/api/generate/${videoId}/assets/summary`);
+            if (!resp.ok) {
+                // Only render the Generate button if SSR didn't already
+                // give us a summary. The presence of a `.prose` div
+                // (rendered by the Jinja `summary_content` branch) is
+                // our signal that SSR populated this tab.
+                const container = document.getElementById('content-summary');
+                if (!container.querySelector('.prose')) {
+                    container.innerHTML = `
+                        <p class="text-gray-400">No summary yet. Click "Generate" to create learning materials.</p>
+                        <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                            ⚡ Generate Materials
+                        </button>
+                    `;
+                }
+                return;
+            }
+            const data = await resp.json();
+            const html = simpleMarkdown(data.data);
+            const fullHtml = `
+                <div class="prose dark:prose-invert max-w-none text-sm">${html}</div>
+                <button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">
+                    🔄 Regenerate
                 </button>
             `;
-            return;
+            contentCache.summary = fullHtml;
+            document.getElementById('content-summary').innerHTML = fullHtml;
+        } catch (e) {
+            // Network error — leave the current DOM alone so we don't
+            // stomp the SSR'd summary.
         }
-        const data = await resp.json();
-        const html = simpleMarkdown(data.data);
-        const fullHtml = `
-            <div class="prose dark:prose-invert max-w-none text-sm">${html}</div>
-            <button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">
-                🔄 Regenerate
-            </button>
-        `;
-        contentCache.summary = fullHtml;
-        document.getElementById('content-summary').innerHTML = fullHtml;
-    } catch (e) {
-        document.getElementById('content-summary').innerHTML = '<p class="text-red-500 text-sm">Failed to load summary.</p>';
-    }
+    });
+}
+
+// ── Cache coalescing helper ──
+//
+// `cacheCoalesce(key, fn)` runs `fn()` at most once per key while a
+// previous call is still in flight. Concurrent callers receive the
+// same Promise, so the DOM is only written once per fetch. Without
+// this, a double `switchTab('summary')` (which happens during page
+// init because the tab is "summary" by default) fires two parallel
+// fetches that race to overwrite the DOM.
+const inFlight = {};
+function cacheCoalesce(key, fn) {
+    if (inFlight[key]) return inFlight[key];
+    const p = (async () => fn())().finally(() => { delete inFlight[key]; });
+    inFlight[key] = p;
+    return p;
 }
 
 // Simple markdown to HTML converter
@@ -535,60 +607,64 @@ function simpleMarkdown(md) {
 // ── Load flashcards (cached) ──
 async function loadFlashcards() {
     if (contentCache.flashcards) return;
-    try {
-        const resp = await fetch(`/api/generate/${videoId}/assets/flashcards`);
-        if (!resp.ok) return;
-        const data = await resp.json();
-        contentCache.flashcards = true;
-        const container = document.getElementById('content-flashcards');
-        container.innerHTML = data.data.map((card, i) => `
-            <div class="flashcard bg-gray-50 dark:bg-gray-700 rounded-lg p-4 cursor-pointer" onclick="this.classList.toggle('flipped')">
-                <div class="flashcard-front">
-                    <p class="text-xs text-gray-400 mb-1">Term ${i + 1}</p>
-                    <p class="font-medium">${card.term}</p>
-                    <p class="text-xs text-indigo-500 mt-2">Click to reveal definition</p>
+    return cacheCoalesce('flashcards', async () => {
+        try {
+            const resp = await fetch(`/api/generate/${videoId}/assets/flashcards`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            contentCache.flashcards = true;
+            const container = document.getElementById('content-flashcards');
+            container.innerHTML = data.data.map((card, i) => `
+                <div class="flashcard bg-gray-50 dark:bg-gray-700 rounded-lg p-4 cursor-pointer" onclick="this.classList.toggle('flipped')">
+                    <div class="flashcard-front">
+                        <p class="text-xs text-gray-400 mb-1">Term ${i + 1}</p>
+                        <p class="font-medium">${card.term}</p>
+                        <p class="text-xs text-indigo-500 mt-2">Click to reveal definition</p>
+                    </div>
+                    <div class="flashcard-back hidden">
+                        <p class="text-xs text-gray-400 mb-1">Definition</p>
+                        <p class="text-sm">${card.definition}</p>
+                        <button onclick="event.stopPropagation(); openChat('${card.term}')" class="mt-3 text-xs px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                            💡 Teach me real-world usage
+                        </button>
+                    </div>
                 </div>
-                <div class="flashcard-back hidden">
-                    <p class="text-xs text-gray-400 mb-1">Definition</p>
-                    <p class="text-sm">${card.definition}</p>
-                    <button onclick="event.stopPropagation(); openChat('${card.term}')" class="mt-3 text-xs px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700">
-                        💡 Teach me real-world usage
-                    </button>
-                </div>
-            </div>
-        `).join('');
-        // Add flip logic
-        container.querySelectorAll('.flashcard').forEach(card => {
-            card.addEventListener('click', function() {
-                this.querySelector('.flashcard-front').classList.toggle('hidden');
-                this.querySelector('.flashcard-back').classList.toggle('hidden');
+            `).join('');
+            // Add flip logic
+            container.querySelectorAll('.flashcard').forEach(card => {
+                card.addEventListener('click', function() {
+                    this.querySelector('.flashcard-front').classList.toggle('hidden');
+                    this.querySelector('.flashcard-back').classList.toggle('hidden');
+                });
             });
-        });
-    } catch (e) {}
+        } catch (e) {}
+    });
 }
 
 // ── Load quiz (cached) ──
 async function loadQuiz() {
     if (contentCache.quiz) return;
-    try {
-        const resp = await fetch(`/api/generate/${videoId}/assets/quiz`);
-        if (!resp.ok) return;
-        const data = await resp.json();
-        contentCache.quiz = true;
-        const container = document.getElementById('content-quiz');
-        container.innerHTML = data.data.map((q, i) => `
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-                <p class="font-medium mb-2">${i + 1}. ${q.question}</p>
-                <div class="space-y-1">
-                    ${q.options.map((opt, j) => `
-                        <button onclick="checkAnswer(this, ${j}, ${q.answer_index})" class="block w-full text-left px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600 text-sm">
-                            ${String.fromCharCode(65 + j)}. ${opt}
-                        </button>
-                    `).join('')}
+    return cacheCoalesce('quiz', async () => {
+        try {
+            const resp = await fetch(`/api/generate/${videoId}/assets/quiz`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            contentCache.quiz = true;
+            const container = document.getElementById('content-quiz');
+            container.innerHTML = data.data.map((q, i) => `
+                <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                    <p class="font-medium mb-2">${i + 1}. ${q.question}</p>
+                    <div class="space-y-1">
+                        ${q.options.map((opt, j) => `
+                            <button onclick="checkAnswer(this, ${j}, ${q.answer_index})" class="block w-full text-left px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600 text-sm">
+                                ${String.fromCharCode(65 + j)}. ${opt}
+                            </button>
+                        `).join('')}
+                    </div>
                 </div>
-            </div>
-        `).join('');
-    } catch (e) {}
+            `).join('');
+        } catch (e) {}
+    });
 }
 
 function checkAnswer(btn, selected, correct) {
@@ -634,40 +710,42 @@ function preloadMarkmapScript() {
 
 async function loadMindmap() {
     if (contentCache.mindmap) return;
-    const container = document.getElementById('mindmap-container');
-    // Show a loading state immediately so the tab is never empty.
-    if (container && !container.querySelector('.mindmap-loading')) {
-        container.innerHTML = '<div class="mindmap-loading flex items-center justify-center h-full text-sm text-gray-400">⏳ Loading mindmap...</div>';
-    }
-    try {
-        // Fetch mindmap and topic_timestamps in parallel
-        const [mindmapResp, timestampsResp] = await Promise.all([
-            fetch(`/api/generate/${videoId}/assets/mindmap`),
-            fetch(`/api/generate/${videoId}/assets/topic_timestamps`),
-        ]);
-        if (!mindmapResp.ok) {
-            if (container) container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-gray-400">No mindmap yet. Click "Generate" to create learning materials.</div>';
-            return;
+    return cacheCoalesce('mindmap', async () => {
+        const container = document.getElementById('mindmap-container');
+        // Show a loading state immediately so the tab is never empty.
+        if (container && !container.querySelector('.mindmap-loading')) {
+            container.innerHTML = '<div class="mindmap-loading flex items-center justify-center h-full text-sm text-gray-400">⏳ Loading mindmap...</div>';
         }
-        const data = await mindmapResp.json();
-        mindmapData = data.data;
-        contentCache.mindmap = true;
-        // Build the parent map from the mindmap markdown so leaf-node clicks
-        // can fall back to ancestor timestamps.
-        mindmapParentMap = buildMindmapParentMap(mindmapData);
-        // Load topic timestamps if available
-        if (timestampsResp.ok) {
-            const tsData = await timestampsResp.json();
-            topicTimestamps = tsData.data || [];
-            contentCache.topicTimestamps = topicTimestamps;
+        try {
+            // Fetch mindmap and topic_timestamps in parallel
+            const [mindmapResp, timestampsResp] = await Promise.all([
+                fetch(`/api/generate/${videoId}/assets/mindmap`),
+                fetch(`/api/generate/${videoId}/assets/topic_timestamps`),
+            ]);
+            if (!mindmapResp.ok) {
+                if (container) container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-gray-400">No mindmap yet. Click "Generate" to create learning materials.</div>';
+                return;
+            }
+            const data = await mindmapResp.json();
+            mindmapData = data.data;
+            contentCache.mindmap = true;
+            // Build the parent map from the mindmap markdown so leaf-node clicks
+            // can fall back to ancestor timestamps.
+            mindmapParentMap = buildMindmapParentMap(mindmapData);
+            // Load topic timestamps if available
+            if (timestampsResp.ok) {
+                const tsData = await timestampsResp.json();
+                topicTimestamps = tsData.data || [];
+                contentCache.topicTimestamps = topicTimestamps;
+            }
+            // Wait for the Markmap script to be ready (already preloaded)
+            await preloadMarkmapScript();
+            renderMindmap(data.data);
+        } catch (e) {
+            console.error('Failed to load mindmap:', e);
+            if (container) container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Failed to load mindmap. Please try again.</div>';
         }
-        // Wait for the Markmap script to be ready (already preloaded)
-        await preloadMarkmapScript();
-        renderMindmap(data.data);
-    } catch (e) {
-        console.error('Failed to load mindmap:', e);
-        if (container) container.innerHTML = '<div class="flex items-center justify-center h-full text-sm text-red-400">Failed to load mindmap. Please try again.</div>';
-    }
+    });
 }
 
 function renderMindmap(markdown) {
