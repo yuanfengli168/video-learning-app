@@ -109,6 +109,83 @@ def test_video_view_found(client: TestClient):
     assert "lecture" in response.text
 
 
+# ── Transcript follow experiment (MVP1.1 — see doc/MVP1.0-PostRelease § Optimization #1) ──
+
+
+def _create_video(client: TestClient, title: str = "lecture") -> str:
+    """Helper: create a course, section, and uploaded video. Returns the video id."""
+    import io
+    course_resp = client.post(
+        "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+    )
+    course_id = course_resp.json()["course_id"]
+    section_resp = client.post(
+        f"/api/courses/{course_id}/sections",
+        json={"title": "Week 1"},
+        headers=_auth_headers(),
+    )
+    section_id = section_resp.json()["section_id"]
+    fake_video = io.BytesIO(b"fake video content")
+    upload_resp = client.post(
+        f"/api/videos/upload/{section_id}",
+        files={"file": (f"{title}.mp4", fake_video, "video/mp4")},
+        headers=_auth_headers(),
+    )
+    return upload_resp.json()["video_id"]
+
+
+def test_video_view_loads_transcript_follow_script(client: TestClient):
+    """The video page must include the deferred transcript-follow script so
+    TranscriptFollow is available before renderTranscript runs."""
+    with _mock_auth():
+        video_id = _create_video(client)
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    assert '<script src="/static/js/transcript-follow.js" defer></script>' in response.text
+
+
+def test_video_view_loads_transcript_follow_css(client: TestClient):
+    """The base template must include the transcript-follow CSS so the
+    .is-follow-active highlight is visible."""
+    with _mock_auth():
+        video_id = _create_video(client)
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    assert '/static/css/transcript-follow.css' in response.text
+
+
+def test_video_view_has_follow_dropdown(client: TestClient):
+    """The video page must show the follow-mode dropdown with the two
+    documented options and "Smart" as the default."""
+    with _mock_auth():
+        video_id = _create_video(client)
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    assert 'id="transcript-follow-mode"' in response.text
+    # Both options present, smart selected by default.
+    assert '<option value="smart" selected>Smart (default)</option>' in response.text
+    assert '<option value="always">Always scroll</option>' in response.text
+
+
+def test_base_template_stamps_user_email_meta_when_authenticated(client: TestClient):
+    """When the user is signed in, base.html must emit <meta name="x-user-email">
+    so the client-side localStorage key can be namespaced per-account."""
+    with _mock_auth():
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    assert 'name="x-user-email"' in response.text
+    assert FAKE_USER["email"] in response.text
+
+
+def test_base_template_omits_user_email_meta_when_anonymous(client: TestClient):
+    """When the user is not signed in, the meta tag must NOT be emitted
+    (avoids leaking any email stub and keeps the localStorage key as
+    'anon' for unauthenticated browsing)."""
+    response = client.get("/")
+    assert response.status_code == 200
+    assert 'name="x-user-email"' not in response.text
+
+
 def test_video_file_serving(client: TestClient):
     """Video file endpoint should serve the file."""
     import io
