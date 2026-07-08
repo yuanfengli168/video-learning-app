@@ -14,15 +14,40 @@ from app.config import settings
 from app.database import get_db
 from app.models import Asset, Course, Section, Video
 from app.services.markdown import simple_markdown
+from markupsafe import Markup
 
 router = APIRouter(tags=["frontend"])
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+
+
+def _md_filter(value: str) -> Markup:
+    """Jinja filter that converts markdown to HTML and marks the result
+    as safe (skips Jinja's autoescape).
+
+    Why Markup: without it, Jinja sees the filter's return value as a
+    plain string and HTML-escapes any `<` and `>` in it, which would
+    show the user `<h2>...</h2>` as literal text instead of rendered
+    headings. Wrapping in Markup tells Jinja "this string is
+    intentionally HTML; do not escape it".
+
+    Safety: the markdown comes from the LLM via /api/generate, which
+    is itself user-influenced (the user can pick which video to
+    transcribe). To keep this XSS-safe in the future, swap the
+    filter for one that runs the result through a sanitizer
+    (e.g. bleach) before returning Markup. For MVP1.1 the assumption
+    is that the LLM output is trusted (the user's own content) and
+    the rendering matches the JS simpleMarkdown byte-for-byte (see
+    tests/test_frontend.py::test_simple_markdown_matches_js_implementation).
+    """
+    return Markup(simple_markdown(value or ""))
+
+
 # Register the `md` Jinja filter used by video.html to pre-render the
 # summary HTML. Mirrors the JS `simpleMarkdown` function in
 # app/templates/video.html — the byte-equality test in
 # tests/test_frontend.py locks both implementations in lockstep.
-templates.env.filters["md"] = simple_markdown
+templates.env.filters["md"] = _md_filter
 
 
 def _ctx(

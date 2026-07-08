@@ -722,6 +722,40 @@ def test_video_view_ssr_marks_content_summary_with_prose_div(client: TestClient)
     assert "Generate Materials" not in cs_html
 
 
+def test_video_view_ssr_renders_real_html_not_escaped_markup(client: TestClient):
+    """Regression: the `md` Jinja filter must return a Markup-safe
+    string so the rendered HTML is NOT auto-escaped. Previously the
+    filter returned a plain string, so Jinja escaped `<h2>` to
+    `&lt;h2&gt;` and the user saw literal HTML tags instead of rendered
+    headings.
+
+    This test asserts on a heading's class attribute (which only
+    appears in the rendered HTML, not in the escaped version) so any
+    future return-to-plain-string regression fails loudly.
+    """
+    with _mock_auth():
+        video_id = _create_video_with_summary(
+            client, "## A Heading\n\nbody text"
+        )
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    cs_html = _content_summary_html(response.text)
+    # The rendered HTML contains the h2 class string.
+    assert 'class="text-lg font-semibold mt-4 mb-2"' in cs_html, (
+        "Expected the rendered <h2 class='text-lg font-semibold...'> "
+        "to appear in the response, but it was HTML-escaped to "
+        "&lt;h2 class=...&gt;. The `md` filter is likely returning a "
+        "plain string instead of markupsafe.Markup."
+    )
+    # Belt-and-braces: also check that the escaped form is NOT in the
+    # summary block. (It can appear elsewhere on the page e.g. inside
+    # the loadSummary JS string, but _content_summary_html already
+    # scopes us to #content-summary.)
+    assert "&lt;h2" not in cs_html
+    # And the heading text itself appears un-escaped.
+    assert "A Heading" in cs_html
+
+
 def test_video_view_ssr_includes_inline_cache_seed_initialSummaryHtml(client: TestClient):
     """The frontend reads the SSR'd content via
     `const initialSummaryHtml = document.getElementById('content-summary').innerHTML`
