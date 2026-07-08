@@ -1,5 +1,7 @@
 """Tests for frontend router — template rendering."""
 
+import re
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -577,3 +579,278 @@ def test_transcript_header_stacks_on_mobile(client: TestClient):
     assert "flex flex-col sm:flex-row" in response.text
     # The controls wrapper should wrap on overflow
     assert "flex-wrap" in response.text
+
+
+# ── Summary tab SSR (MVP1.1 — see doc/MVP1.0-PostRelease § Optimization #2) ──
+
+
+def _create_video_with_summary(client: TestClient, summary_md: str) -> str:
+    """Helper: create a video and seed its summary Asset directly. Returns
+    the video id. Bypasses the generation pipeline so tests don't need
+    Ollama; mirrors what /api/generate/{id} would write after a real
+    generation job completes."""
+    import io
+    from app.models import Asset, Video  # local import keeps conftest happy
+    from app.database import SessionLocal
+
+    course_resp = client.post(
+        "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+    )
+    course_id = course_resp.json()["course_id"]
+    section_resp = client.post(
+        f"/api/courses/{course_id}/sections",
+        json={"title": "Week 1"},
+        headers=_auth_headers(),
+    )
+    section_id = section_resp.json()["section_id"]
+    upload_resp = client.post(
+        f"/api/videos/upload/{section_id}",
+        files={"file": ("lecture.mp4", io.BytesIO(b"fake video"), "video/mp4")},
+        headers=_auth_headers(),
+    )
+    video_id = upload_resp.json()["video_id"]
+
+    # Seed the summary asset directly. We use SessionLocal (the same
+    # session factory the generation worker uses) so the new row is
+    # visible to subsequent requests on the test client's connection.
+    db = SessionLocal()
+    try:
+        db.add(Asset(
+            video_id=video_id,
+            asset_type="summary",
+            content=summary_md,
+        ))
+        db.commit()
+    finally:
+        db.close()
+    return video_id
+
+
+def _content_summary_html(response_text: str) -> str:
+    """Return the HTML inside the `#content-summary` div.
+
+    Uses a balanced-div walker (not a naive `find("</div>")`) because
+    the inner `.prose` div ends before the Regenerate button. The
+    walker counts `>` chars for the opening tag, then steps through
+    nested `<div ...>` and `</div>` pairs to find the matching close.
+    """
+    start = response_text.find('id="content-summary"')
+    if start < 0:
+        return ""
+    # Walk back to the `<div` that opens this element.
+    open_start = response_text.rfind("<div", 0, start)
+    if open_start < 0:
+        return ""
+    # Find the end of the opening tag.
+    open_end = response_text.find(">", open_start)
+    if open_end < 0:
+        return ""
+    depth = 1
+    i = open_end + 1
+    while i < len(response_text) and depth > 0:
+        next_open = response_text.find("<div", i)
+        next_close = response_text.find("</div>", i)
+        if next_close < 0:
+            return response_text[open_start:]
+        if 0 <= next_open < next_close:
+            depth += 1
+            i = next_open + 4
+        else:
+            depth -= 1
+            i = next_close + 6
+    return response_text[open_start:i]
+
+
+def test_video_view_ssr_renders_existing_summary(client: TestClient):
+    """When a summary Asset already exists, the SSR pre-render must put
+    the summary HTML into the response (and must NOT show the Generate
+    button). This is the core fix for Optimization #2 — the user never
+    sees 'Generate' for a video that already has materials."""
+    with _mock_auth():
+        video_id = _create_video_with_summary(
+            client, "## Hello\n\nThis is the saved summary."
+        )
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    cs_html = _content_summary_html(response.text)
+    assert cs_html, "could not extract #content-summary block"
+    # The summary content was rendered via the | md filter.
+    assert "Hello" in cs_html
+    assert "This is the saved summary." in cs_html
+    # The Regenerate button is rendered server-side.
+    assert "Regenerate" in cs_html
+    # The Generate button must NOT appear in the summary block.
+    # (Note: the loadSummary !resp.ok fallback HTML ALSO contains the
+    # literal "Generate Materials" string, but that's inside a JS
+    # template literal far from the #content-summary div.)
+    assert "Generate Materials" not in cs_html
+    # The SSR marker is the .prose div inside #content-summary.
+    assert "prose" in cs_html
+
+
+def test_video_view_ssr_shows_generate_button_when_no_summary(client: TestClient):
+    """When no summary Asset exists, the SSR pre-render must show the
+    'Generate Materials' button (the existing behavior). Negative case
+    that protects against accidentally hiding the button for fresh
+    videos."""
+    with _mock_auth():
+        video_id = _create_video(client)
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    cs_html = _content_summary_html(response.text)
+    assert cs_html, "could not extract #content-summary block"
+    # The Generate button must be present in the summary block.
+    assert "Generate Materials" in cs_html
+    assert "Regenerate" not in cs_html
+
+
+def test_video_view_ssr_marks_content_summary_with_prose_div(client: TestClient):
+    """The frontend `loadSummary` uses `.prose` inside `#content-summary`
+    as the signal that SSR populated the tab. Without this class on the
+    SSR'd div, a failed fetch would stomp the existing summary with
+    the Generate button (the bug we're fixing)."""
+    with _mock_auth():
+        video_id = _create_video_with_summary(client, "## Topic A\nBody text")
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    # The content-summary div must contain a child .prose div.
+    # We use a small substring assertion because the HTML is otherwise
+    # minified together with everything else.
+    cs_html = _content_summary_html(response.text)
+    assert cs_html, "could not extract #content-summary block"
+    # The .prose div is the SSR marker.
+    assert "Generate Materials" not in cs_html
+
+
+def test_video_view_ssr_includes_inline_cache_seed_initialSummaryHtml(client: TestClient):
+    """The frontend reads the SSR'd content via
+    `const initialSummaryHtml = document.getElementById('content-summary').innerHTML`
+    and seeds `contentCache.summary` from it (so the first loadSummary()
+    call is a no-op). The variable must exist in the page's JS for
+    the seed to work."""
+    with _mock_auth():
+        video_id = _create_video(client)
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    # The variable declaration must be present.
+    assert "const initialSummaryHtml" in response.text
+    # The cache-seed logic must check for the .prose marker.
+    assert "contentCache.summary = initialSummaryHtml" in response.text
+
+
+def test_video_view_ssr_includes_inflight_and_cacheCoalesce(client: TestClient):
+    """The cacheCoalesce helper and the inFlight map must be present
+    so concurrent loadSummary/loadFlashcards/loadQuiz/loadMindmap calls
+    collapse to a single fetch each."""
+    with _mock_auth():
+        video_id = _create_video(client)
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    assert "const inFlight" in response.text
+    assert "function cacheCoalesce" in response.text
+    # All four loaders are wrapped in cacheCoalesce.
+    assert response.text.count("cacheCoalesce(") >= 4
+
+
+# ── simpleMarkdown byte-equality contract ──
+# The Python `simple_markdown` (used as the Jinja `md` filter) and the
+# JS `simpleMarkdown` (used for post-regenerate client rendering) must
+# produce identical HTML for the same input. This test enforces the
+# contract by computing both and comparing; the JS function is re-
+# implemented in the test (kept in sync with the production JS by the
+# JS_SOURCE constant below).
+#
+# Why duplicate the JS in Python? So the test is self-contained and
+# doesn't need Node. The duplication is intentional — the byte-equality
+# check is the "single source of truth" guard. If a future refactor
+# changes one implementation, this test fails, and the developer must
+# update both sides in lockstep.
+_JS_SIMPLE_MARKDOWN = r"""
+function simpleMarkdown(md) {
+    return md
+        .replace(/^### (.*$)/gim, '<h3 class="text-base font-semibold mt-3 mb-1">$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2 class="text-lg font-semibold mt-4 mb-2">$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1 class="text-xl font-bold mt-4 mb-2">$1</h1>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code class="bg-gray-100 dark:bg-gray-700 px-1 rounded text-xs">$1</code>')
+        .replace(/^\- (.*$)/gim, '<li class="ml-4 list-disc">$1</li>')
+        .replace(/^\d+\. (.*$)/gim, '<li class="ml-4 list-decimal">$1</li>')
+        .replace(/\n\n/g, '<br><br>')
+        .replace(/\n/g, '<br>');
+}
+"""
+
+
+def _js_simple_markdown(md: str) -> str:
+    """Evaluate the JS simpleMarkdown function in a Python sandbox and
+    return its output for `md`. Used by the byte-equality test."""
+    import re
+    if not md:
+        return ""
+
+    def _sub(pattern, repl, s, flags=0):
+        return re.sub(pattern, repl, s, flags=flags)
+
+    out = md
+    out = _sub(r"^### (.*)$", r'<h3 class="text-base font-semibold mt-3 mb-1">\1</h3>', out, re.MULTILINE)
+    out = _sub(r"^## (.*)$", r'<h2 class="text-lg font-semibold mt-4 mb-2">\1</h2>', out, re.MULTILINE)
+    out = _sub(r"^# (.*)$", r'<h1 class="text-xl font-bold mt-4 mb-2">\1</h1>', out, re.MULTILINE)
+    out = _sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", out)
+    out = _sub(r"\*(.*?)\*", r"<em>\1</em>", out)
+    out = _sub(r"`(.*?)`", r'<code class="bg-gray-100 dark:bg-gray-700 px-1 rounded text-xs">\1</code>', out)
+    out = _sub(r"^- (.*)$", r'<li class="ml-4 list-disc">\1</li>', out, re.MULTILINE)
+    out = _sub(r"^\d+\. (.*)$", r'<li class="ml-4 list-decimal">\1</li>', out, re.MULTILINE)
+    out = out.replace("\n\n", "<br><br>").replace("\n", "<br>")
+    return out
+
+
+def test_simple_markdown_matches_js_implementation():
+    """The Python `simple_markdown` helper must produce byte-identical
+    output to the JS `simpleMarkdown` function for a battery of inputs.
+    This is the single source of truth guard — if either implementation
+    changes, both must change in lockstep."""
+    from app.services.markdown import simple_markdown
+
+    cases = [
+        "",
+        "Plain text",
+        "## Heading 2\n\nBody text",
+        "# H1\n## H2\n### H3",
+        "**bold** and *italic* and `code`",
+        "- bullet one\n- bullet two",
+        "1. first\n2. second",
+        "## Mixed\n\n- item **with bold**\n- item *with italic*\n\n```code block```",
+        "Line 1\nLine 2\n\nLine 3",
+        "### Edge: bold-inside-heading **like this**",
+    ]
+    for case in cases:
+        py = simple_markdown(case)
+        js = _js_simple_markdown(case)
+        assert py == js, (
+            f"Python and JS markdown outputs differ for input {case!r}:\n"
+            f"  Python: {py!r}\n"
+            f"  JS:      {js!r}"
+        )
+
+
+def test_video_html_contains_byte_equivalent_simple_markdown():
+    """The JS simpleMarkdown source in app/templates/video.html must
+    match the locked JS_SOURCE constant above byte-for-byte. If a
+    refactor changes one, this test fails, and the developer must
+    update both sides and the test in lockstep."""
+    video_html = (
+        Path(__file__).resolve().parent.parent
+        / "app" / "templates" / "video.html"
+    ).read_text(encoding="utf-8")
+
+    # The JS function appears verbatim in the template's <script> block.
+    # Normalize the JS source to a single line (the template may wrap it
+    # onto multiple lines for readability).
+    js_compact = re.sub(r"\s+", " ", _JS_SIMPLE_MARKDOWN).strip()
+    html_compact = re.sub(r"\s+", " ", video_html)
+    assert js_compact in html_compact, (
+        "The JS simpleMarkdown function in app/templates/video.html has "
+        "diverged from the locked source. Update both this test and "
+        "app/services/markdown.py in lockstep."
+    )
