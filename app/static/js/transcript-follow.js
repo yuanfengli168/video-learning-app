@@ -88,6 +88,7 @@
     let onMouseLeave = null;
     let rafId = null;        // one rAF in flight at a time
     let pendingIdx = -1;     // idx waiting for the rAF to fire
+    let pendingForce = false;// force flag of the latest scheduleScroll call
     let isHovered = false;   // true while mouse is over the panel
     let initialized = false;
 
@@ -96,32 +97,77 @@
      * pinned to the top of the visible area, with a 4px breathing
      * gap above it.
      *
-     * Why not scrollIntoView: see the header comment.
-     * Why not "center": top-anchored matches reading habits (the
-     * eye naturally lands at the top of a text block after a
-     * scroll, not the center).
+     * Why NOT `lineEl.offsetTop`:
+     *   offsetTop is measured from the element's offsetParent, which
+     *   is the NEAREST POSITIONED ancestor (position !== static).
+     *   The transcript container has `position: static` (no Tailwind
+     *   utility sets position on it), so its lines' offsetParent is
+     *   some distant ancestor — potentially the <body>. That means
+     *   offsetTop for line 0 could be 400-700px (the height of the
+     *   header + video player + everything above the transcript),
+     *   NOT 0. Setting container.scrollTop = offsetTop - 4 would
+     *   then scroll to line ~13 instead of line 0.
+     *
+     * Why `getBoundingClientRect` works:
+     *   getBoundingClientRect() always returns viewport-relative
+     *   positions, regardless of offsetParent. By subtracting the
+     *   container's viewport top from the line's viewport top and
+     *   adding container.scrollTop, we get the line's absolute
+     *   position within the scrollable content — which IS what we
+     *   need to set scrollTop to.
+     *
+     * Why not scrollIntoView: see the module header comment.
      */
     function scrollToTop(lineEl) {
         if (!container || !lineEl) return;
-        const desired = lineEl.offsetTop - 4;  // 4px gap
+        const containerRect = container.getBoundingClientRect();
+        const lineRect = lineEl.getBoundingClientRect();
+        // Line's absolute position in the scrollable content:
+        //   container.scrollTop = current scroll offset (content hidden above)
+        //   lineRect.top - containerRect.top = line's visible offset from
+        //   the top of the container's visible area (can be negative if
+        //   the line is scrolled out of view above)
+        const lineInContent = container.scrollTop + (lineRect.top - containerRect.top);
+        const desired = lineInContent - 4;  // 4px gap
         const max = Math.max(0, container.scrollHeight - container.clientHeight);
         container.scrollTop = Math.max(0, Math.min(desired, max));
     }
 
     /**
-     * rAF-throttled scroll update. We capture the latest pendingIdx
-     * and only do one scroll per animation frame — multiple
-     * `timeupdate` events firing within a single frame collapse to
-     * one scroll, eliminating jitter on rapid segment changes.
+     * rAF-throttled scroll update. Multiple timeupdate events
+     * firing within a single frame collapse to one scroll,
+     * eliminating jitter on rapid segment changes.
+     *
+     * `force` (default false) bypasses the isHovered gate. Used by
+     * the init handler and the mouseleave handler, both of which
+     * represent user actions that should override the hover-pause.
+     * The 2026-07-09 #2 review bug: the user opens a video page,
+     * the mouse is over the panel (or fires mouseenter for any
+     * reason on page load), isHovered is true, the rAF short-
+     * circuits, and the panel stays scrolled to wherever the
+     * browser initialized it (e.g. a restored scrollTop, or just
+     * not 0). The user sees lines from 00:10 even though the video
+     * is at 0:00 and the active highlight is on 00:00 — they
+     * can't see the highlighted line because it's off-screen.
+     *
+     * If a rAF is already pending, we don't schedule a new one —
+     * we just update pendingIdx and pendingForce so the rAF, when
+     * it runs, uses the LATEST values from the most recent
+     * scheduleScroll call. This matters for the init case: init
+     * calls scheduleScroll(0, true) [force], then a timeupdate
+     * before the rAF runs calls scheduleScroll(1, false) [no
+     * force]. The pending rAF should use idx=1 AND force=false
+     * (the latest), not the values from when it was scheduled.
      */
-    function scheduleScroll(idx) {
+    function scheduleScroll(idx, force) {
         pendingIdx = idx;
+        pendingForce = !!force;
         if (rafId !== null) return;  // already scheduled
         rafId = requestAnimationFrame(() => {
             rafId = null;
             if (!container) return;
             if (pendingIdx < 0) return;
-            if (isHovered) return;     // user is reading; don't yank
+            if (isHovered && !pendingForce) return;  // user is reading; don't yank
             const lines = container.querySelectorAll('.transcript-line');
             if (lines[pendingIdx]) {
                 scrollToTop(lines[pendingIdx]);
@@ -136,11 +182,10 @@
      * 4 Hz, segments last 5+ seconds).
      *
      * If `forceScroll` is true, schedule a scroll even when the line
-     * hasn't changed. Used by the mouseleave handler: while the
-     * mouse was over the panel, we suppressed scrolls; when the
-     * mouse leaves, we need to snap the panel back to the current
-     * active line even if it's the same one we showed before the
-     * hover.
+     * hasn't changed. Used by the mouseleave handler (panel snaps
+     * back when the user moves the mouse off) and by init() (the
+     * panel must snap to the active line on first open, regardless
+     * of hover state).
      */
     function highlightLine(idx, forceScroll) {
         if (!container) return;
@@ -152,7 +197,7 @@
             lines[idx].classList.add('is-follow-active');
         }
         if (idx !== lastActiveIndex || forceScroll) {
-            scheduleScroll(idx);
+            scheduleScroll(idx, forceScroll);
         }
         lastActiveIndex = idx;
     }
@@ -183,10 +228,17 @@
         isHovered = false;
         lastActiveIndex = -1;
         pendingIdx = -1;
+        pendingForce = false;
         rafId = null;
 
-        onTimeUpdate = updateActiveLine;
-        onSeeked = updateActiveLine;
+        // Wrap the event handlers so the event object (the first
+        // argument the browser passes) is dropped. Otherwise
+        // `updateActiveLine` would receive the event as its
+        // `forceScroll` parameter (which is truthy), and every
+        // timeupdate / seeked would force-scroll even when hovered.
+        const wrappedUpdate = function () { updateActiveLine(false); };
+        onTimeUpdate = wrappedUpdate;
+        onSeeked = wrappedUpdate;
         videoEl.addEventListener('timeupdate', onTimeUpdate);
         videoEl.addEventListener('seeked', onSeeked);
 
@@ -206,9 +258,13 @@
         container.addEventListener('mouseenter', onMouseEnter);
         container.addEventListener('mouseleave', onMouseLeave);
 
-        // Seed the initial highlight (if the video has already
-        // loaded metadata and currentTime > 0, e.g. on a remount).
-        updateActiveLine();
+        // Seed the initial highlight AND force a scroll to the
+        // active line, bypassing the isHovered gate. The user just
+        // opened the page; the panel MUST show the line at
+        // currentTime (typically 0:00) at the top, regardless of
+        // whether the mouse happens to be over the panel. See
+        // doc/manualTodo.txt 2026-07-09 #1 (the screenshot bug).
+        updateActiveLine(true);
         initialized = true;
     }
 
@@ -239,6 +295,7 @@
         onMouseEnter = null;
         onMouseLeave = null;
         pendingIdx = -1;
+        pendingForce = false;
         lastActiveIndex = -1;
         isHovered = false;
         initialized = false;

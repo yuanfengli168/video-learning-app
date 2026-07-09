@@ -68,25 +68,58 @@ class FakeContainer extends FakeEventTarget {
         this.scrollHeight = 1000;       // arbitrary — controls the clamp
         this.clientHeight = 200;        // arbitrary — controls the clamp
         this._lines = [];               // FakeLine[]
+        // Simulate the container being 500px from the top of the page.
+        // This is the key to testing the getBoundingClientRect path:
+        // if we used offsetTop directly (which would be the same as
+        // viewport top when there's no scrolling), the tests would
+        // pass even with the broken offsetTop approach. By placing
+        // the container at y=500, line 0 would have viewport top=500
+        // (offsetTop in the old broken world would be 500+, not 0).
+        this._viewportTop = 500;
     }
-    setLines(lines) { this._lines = lines; }
+    setLines(lines) {
+        this._lines = lines;
+        // Give each line a back-reference so its getBoundingClientRect
+        // can reflect the current scrollTop.
+        lines.forEach(line => { line._container = this; });
+    }
     querySelectorAll(sel) {
         if (sel === '.transcript-line') return this._lines;
         return [];
+    }
+    getBoundingClientRect() {
+        return {
+            top: this._viewportTop,
+            bottom: this._viewportTop + this.clientHeight,
+        };
     }
 }
 
 
 class FakeLine {
-    constructor(offsetTop) {
-        this.offsetTop = offsetTop;
+    // `contentOffset` is the line's position in the scrollable content
+    // (i.e., what you'd see as the CSS `offsetTop` IF the container were
+    // the offsetParent). We use this instead of `offsetTop` directly to
+    // simulate the real browser where offsetTop might be relative to the
+    // body, not the container.
+    constructor(contentOffset) {
+        this._contentOffset = contentOffset;
         this.offsetHeight = 20;        // arbitrary line height
+        this._container = null;        // set by FakeContainer.setLines
         this.classList = {
             _set: new Set(),
             add(c) { this._set.add(c); },
             remove(c) { this._set.delete(c); },
             contains(c) { return this._set.has(c); },
         };
+    }
+    // Simulate how getBoundingClientRect works in the real browser:
+    // the line's viewport y = container's viewport y + (content offset - scrollTop)
+    getBoundingClientRect() {
+        const containerTop = this._container ? this._container._viewportTop : 0;
+        const scrollTop = this._container ? this._container.scrollTop : 0;
+        const top = containerTop + (this._contentOffset - scrollTop);
+        return { top, bottom: top + this.offsetHeight };
     }
 }
 
@@ -314,7 +347,7 @@ test('integration: timeupdate highlights the active line', () => {
     runRafs(win);
     // After rAF fires, scrollTop should reflect line 1's offsetTop.
     // The scrollToTop function uses offsetTop - 4 (4px gap).
-    assert.equal(container.scrollTop, lines[1].offsetTop - 4);
+    assert.equal(container.scrollTop, lines[1]._contentOffset - 4);
 });
 
 test('integration: seeked updates the highlight without needing timeupdate', () => {
@@ -338,7 +371,7 @@ test('integration: seeked updates the highlight without needing timeupdate', () 
     assert.equal(lines[2].classList.contains('is-follow-active'), true);
     assert.equal(lines[1].classList.contains('is-follow-active'), false);
     runRafs(win);
-    assert.equal(container.scrollTop, lines[2].offsetTop - 4);
+    assert.equal(container.scrollTop, lines[2]._contentOffset - 4);
 });
 
 test('integration: mouseenter pauses auto-scroll; mouseleave resumes it', () => {
@@ -376,7 +409,7 @@ test('integration: mouseenter pauses auto-scroll; mouseleave resumes it', () => 
     container.dispatch('mouseleave');
     // mouseleave re-runs updateActiveLine, which schedules a new rAF.
     runRafs(win);
-    assert.equal(container.scrollTop, lines[1].offsetTop - 4,
+    assert.equal(container.scrollTop, lines[1]._contentOffset - 4,
         'mouseleave should resume scrolling and snap to active line');
 });
 
@@ -406,7 +439,7 @@ test('integration: rAF batches rapid timeupdate events into one scroll', () => {
     // Run it.
     runRafs(win);
     // scrollTop should reflect the LATEST line (index 1, offsetTop=30).
-    assert.equal(container.scrollTop, lines[1].offsetTop - 4);
+    assert.equal(container.scrollTop, lines[1]._contentOffset - 4);
 });
 
 test('integration: destroy() removes all listeners', () => {
@@ -464,4 +497,97 @@ test('integration: re-init on the same elements does not double-fire', () => {
         'Line 0 should be active after re-init');
     assert.equal(lines[1].classList.contains('is-follow-active'), false,
         'Line 1 should NOT still be active after re-init (destroy worked)');
+});
+
+test('integration: init() forces a scroll to the active line (bypasses hover gate)', () => {
+    // Regression test for the 2026-07-09 #2 review bug (the screenshot):
+    //   - User opens a video page.
+    //   - The video is at 0:00, segments exist from 0.0 onwards.
+    //   - The browser has the panel scrolled to some non-zero position
+    //     (e.g. a previous session's scroll position, or autoscroll).
+    //   - The user has the mouse over the panel (mouseenter fired).
+    //   - The active line is correctly set to line 0 (00:00).
+    //   - But the user can't see it because the panel is scrolled
+    //     down — they see lines starting at 00:10 instead.
+    //   - They think the video is at 0:10 even though it's at 0:00.
+    //
+    // The fix: init() must force a scroll to the active line,
+    // bypassing the isHovered gate. The user just opened the page;
+    // they expect to see the line at currentTime (typically 0:00)
+    // at the top, regardless of where the mouse is.
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    // Simulate the browser having the panel scrolled to a non-zero
+    // position (e.g. from a previous session restore).
+    container.scrollTop = 500;
+    const lines = [new FakeLine(0), new FakeLine(30), new FakeLine(60)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    TF.init({
+        container,
+        video,
+        segmentsProvider: () => [
+            { start: 0, end: 1 },
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+        ],
+    });
+    // The user's mouse is over the panel — mouseenter fires AFTER
+    // init() resets isHovered. Simulate that.
+    container.dispatch('mouseenter');
+    // Run the rAFs. The seed rAF from init() should have scrolled
+    // the panel to line 0 (offsetTop=0, clamped to 0) despite the
+    // hover gate.
+    runRafs(win);
+    assert.equal(container.scrollTop, 0,
+        'init() must scroll to the active line (line 0) regardless of hover state');
+    // Highlight should also be on line 0.
+    assert.equal(lines[0].classList.contains('is-follow-active'), true);
+    assert.equal(lines[1].classList.contains('is-follow-active'), false);
+    assert.equal(lines[2].classList.contains('is-follow-active'), false);
+});
+
+test('integration: timeupdate with newer idx overwrites pending rAF force flag', () => {
+    // The 2026-07-09 #2 review sub-bug: the pending rAF's `force`
+    // flag was captured at SCHEDULE time, not at RUN time. So if
+    // init() scheduled a forced rAF, then a timeupdate before the
+    // rAF ran called scheduleScroll again with force=false, the
+    // rAF would still use force=true. This sub-bug caused the
+    // panel to scroll even when the user had hovered and didn't
+    // want it to.
+    //
+    // Fix: scheduleScroll now stores force in pendingForce (a
+    // closure variable that's updated on every call), and the rAF
+    // reads pendingForce at RUN time.
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    const lines = [new FakeLine(0), new FakeLine(30), new FakeLine(60)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    TF.init({
+        container,
+        video,
+        segmentsProvider: () => [
+            { start: 0, end: 1 },
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+        ],
+    });
+    // Now there's a pending rAF from init (force=true, idx=0).
+    // User hovers BEFORE the rAF runs.
+    container.dispatch('mouseenter');
+    // User's video advances to line 1 (a timeupdate fires) before
+    // the rAF runs. This call to scheduleScroll(1, false) should
+    // UPDATE the pending rAF to use idx=1 AND force=false.
+    video.setCurrentTime(1.5);
+    video.dispatch('timeupdate');
+    // Run the rAFs. With the fix, the rAF uses the LATEST values
+    // (idx=1, force=false), so it should respect isHovered and
+    // NOT scroll.
+    runRafs(win);
+    assert.equal(container.scrollTop, 0,
+        'rAF should use the latest force=false (from timeupdate), not the stale force=true (from init)');
+    // Highlight should be on line 1 (latest), not line 0.
+    assert.equal(lines[1].classList.contains('is-follow-active'), true);
+    assert.equal(lines[0].classList.contains('is-follow-active'), false);
 });
