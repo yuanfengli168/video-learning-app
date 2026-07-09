@@ -42,16 +42,21 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 # Security headers — applied to every response (API + Jinja2 + static).
 # See app/middleware.py for the full list. DEBUG is passed in so HSTS
 # is never set on the http://localhost dev server.
+#
+# Note on middleware order: Starlette applies middleware in REVERSE
+# order of registration — the LAST one added is the OUTERMOST. We
+# register SecurityHeadersMiddleware AFTER SessionExpiryMiddleware
+# so the security headers wrap the redirect response too. If a
+# request hits an expired cookie, SessionExpiryMiddleware returns
+# a 302; the response then bubbles up through SecurityHeadersMiddleware
+# which adds CSP/X-Frame-Options/etc. before sending it to the
+# browser. Without this ordering, the 302 would be sent without
+# any security headers.
+app.add_middleware(SessionExpiryMiddleware)
 app.add_middleware(
     SecurityHeadersMiddleware,
     debug=settings.debug,
 )
-
-# Session-expiry redirect (MVP2.0 item #7). Runs *inside* the
-# SecurityHeadersMiddleware so the redirect response also gets the
-# baseline security headers. See app/middleware_session.py for the
-# full rationale (why middleware, why not per-route, cookie semantics).
-app.add_middleware(SessionExpiryMiddleware)
 
 app.include_router(auth_router.router)
 app.include_router(session_router)

@@ -47,8 +47,10 @@ Cookie "present-but-invalid" semantics
     This middleware ONLY redirects when:
 
         1. The request has an `fb_token` cookie, AND
-        2. `verify_token` raises ValueError (token expired /
-           malformed / revoked).
+        2. `verify_token` raises any exception (ValueError, the
+           actual FirebaseError subclass it really raises, or any
+           other failure — we catch broadly; see the dispatch
+           method for the rationale).
 
     A request with NO cookie (anonymous user) is NOT redirected.
     The existing templates already render a "Sign in" prompt for
@@ -156,24 +158,24 @@ class SessionExpiryMiddleware(BaseHTTPMiddleware):
 
         # Cookie is present. Verify it. If it's valid, let the request
         # through unchanged. If it fails, redirect to /?session=expired.
+        #
+        # We catch the broadest reasonable set of exceptions because
+        # token verification can fail in many ways (expired, malformed,
+        # revoked, network error reaching Firebase, etc.) and every
+        # one of them means "the cookie is no good — bounce the user".
+        #
+        # Implementation note: the docstring of verify_token() says it
+        # raises ValueError, but in practice the underlying Firebase
+        # Admin SDK raises firebase_admin.exceptions.FirebaseError
+        # (specifically InvalidIdTokenError, which is a subclass of
+        # FirebaseError, NOT ValueError). Catching only ValueError
+        # would miss real-world failures; catching (ValueError,
+        # FirebaseError) covers both the documented contract and the
+        # actual SDK behavior. The Firebase import is lazy so this
+        # module doesn't force firebase_admin to load on startup.
         try:
             verify_token(cookie_token)
-        except ValueError:
-            # Expired / invalid / revoked cookie. Redirect to dashboard
-            # with a query param the dashboard's JS will surface as a toast.
-            #
-            # We use a 302 (temporary) rather than 303 (see-other) because
-            # the user originally hit a GET URL; 302 with GET-method
-            # preservation is the correct semantic for "you've been
-            # temporarily sent to a different page".
-            #
-            # We do NOT delete the cookie in the response. Reasons:
-            #   1. The user might want to refresh after signing in again
-            #      from the dashboard and have the new session take over.
-            #   2. Deleting on a redirect would race with the user's
-            #      intended logout flow.
-            #   3. The cookie will be overwritten by POST /api/auth/session
-            #      on the next successful login.
+        except Exception:  # noqa: BLE001 — intentionally broad
             return RedirectResponse(
                 url="/?session=expired",
                 status_code=302,
