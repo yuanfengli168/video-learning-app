@@ -4,12 +4,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    {# Stamp the signed-in user's email into a meta tag so the
-       transcript-follow component can namespace its localStorage key
-       per-account (no cross-user pollution on shared devices). #}
-    {% if user and user.get('email') %}
-    <meta name="x-user-email" content="{{ user.get('email', '') }}">
-    {% endif %}
+    {# The x-user-email meta tag used to live here so the
+       transcript-follow component could namespace its localStorage
+       key per-account. MVP2.0 item #2 killed that experiment (no
+       more localStorage, no per-user mode preference) — see
+       doc/MVP2.0-first-designQuestions.md. #}
     <title>{% block title %}{{ app_name }}{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>

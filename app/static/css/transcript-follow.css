@@ -4,6 +4,10 @@
  * added/removed by app/static/js/transcript-follow.js. Designed to
  * compose with the existing search-highlight classes without
  * overriding them: the search ring stays more prominent.
+ *
+ * MVP2.0 item #2: the only style we need now is the highlight itself
+ * (the active line). The MVP1.1 experiment also had a dropdown
+ * styling and per-mode colors; both are gone.
  */
 .transcript-line.is-follow-active {
     background-color: rgba(99, 102, 241, 0.12); /* indigo-500 @ 12% */
