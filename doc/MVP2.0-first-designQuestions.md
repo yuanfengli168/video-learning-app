@@ -99,6 +99,10 @@
 
 ## Milestones:
 
+### TL;DR for tomorrow's session (2026-07-10)
+
+**#19 — Duplicate video detection.** Discuss B1–B5 in [Appendix B](#appendix-b--duplicate-detection-design-questions) before coding. My default answers are there; user picks. Then implement: hash-on-upload + 409 + (auto-skip on bulk / confirm on single).
+
 ### 2026-07-09 — MVP2.0.0a + MVP2.0.1 wave 1 closed out
 
 End-of-day status, all work on branch `MVP2.0` (10 commits ahead of `main`, all pushed).
@@ -135,6 +139,7 @@ End-of-day status, all work on branch `MVP2.0` (10 commits ahead of `main`, all 
 
 - Doc cleanup pass (the 3 doc items above)
 - #19 — Duplicate video detection (hash-based) + confirm UI — **new, user-asked**
+  - **Discuss 5 design questions B1–B5 in Appendix B first** — see the "Recommendation" block for my default answers; user picks final
 - #9 — Mindmap node count for long videos (repro / data-gathering commit first)
 - #10 — Alembic migrations (schema-versioning safety net)
 - #11 — Celery + Redis task queue (parallelism + restart-safety for transcribe jobs)
