@@ -14,7 +14,7 @@
 | 8 | **Persisted "Generate Materials" state on re-login** | ✅ Done | — |
 | 9 | **Prompt tuning: stable mindmap node count for long videos** | ✅ In, but **first commit = data-gathering** (repro the issue, count nodes/min across video lengths) before any prompt change | Assumption may be right but unverified |
 | 10 | **Alembic migrations** (PostgreSQL part deferred) | ✅ Alembic in MVP2.0; PostgreSQL → MVP3 | Alembic = schema-versioning safety net we need before any #1-scale changes |
-| 11 | **Celery + Redis task queue** | ✅ In, but **after** #1 lands | Solves "no parallelism" + "jobs lost on restart" |
+| 11 | **Celery + Redis task queue** | ✅ In, **next-up** (after #9 repro, before #19) | Solves "no parallelism" + "jobs lost on restart"; #1 has now landed so the queue is the next bottleneck users will feel |
 | 12 | **S3 / MinIO for storage** | ⏭️ Deferred to MVP3 | Per user call |
 | 13 | **Auto-download recording: separate "first video" vs "rest" modes** | ⏭️ Deferred | Per user call |
 | 14 | **Public API (OpenAPI) + API key auth + rate limiting** | ⏭️ Deferred | Per user call |
@@ -22,6 +22,7 @@
 | 16 | **OAuth2 + Stripe (paid memberships)** | ✅ In, **low priority** | — |
 | 17 | **Docker + Kubernetes deployment** | ⏭️ Deferred | Per user call |
 | 18 | **Smart/Always transcript scroll modes** (restore as 2 extra options alongside current Top-anchor default) | ⏭️ Deferred to MVP3 | 4 open design Qs → see [Appendix A](#appendix-a--smartalways-modes-deferred-design-questions) |
+| 19 | **Duplicate video detection on upload (hash-based + confirm UI)** | 🆕 Open (planned 2026-07-10) | sha256 of file → check `(user_id, content_hash)` index → if match, return 409 with `{duplicate: true, existing: {...}}` so the UI can offer "Skip" / "Upload anyway". No re-transcribe, no disk waste. See [Appendix B](#appendix-b--duplicate-detection-design-questions) |
 
 ## design
 
@@ -133,6 +134,7 @@ End-of-day status, all work on branch `MVP2.0` (10 commits ahead of `main`, all 
 ### Open items for tomorrow
 
 - Doc cleanup pass (the 3 doc items above)
+- #19 — Duplicate video detection (hash-based) + confirm UI — **new, user-asked**
 - #9 — Mindmap node count for long videos (repro / data-gathering commit first)
 - #10 — Alembic migrations (schema-versioning safety net)
 - #11 — Celery + Redis task queue (parallelism + restart-safety for transcribe jobs)
@@ -150,3 +152,29 @@ End-of-day status, all work on branch `MVP2.0` (10 commits ahead of `main`, all 
 | A4 | **Both restored modes must use `getBoundingClientRect` (not `offsetTop`)** | Not a question — a constraint. The old `scrollContainerToCenter` had the same `offsetTop`-relative-to-body bug as the top-anchor mode. Any MVP3 restore must rewrite both scroll helpers with `getBoundingClientRect`. Implementation is straightforward once A1–A3 are decided. |
 
 **Status:** Deferred to MVP3. When MVP3 planning starts, answer A1–A3 and implement A4.
+## Appendix B — Duplicate detection: design questions
+
+> **Context:** User noticed that re-uploading the same file creates a second `Video` row + second file on disk + second auto-pipeline (so 2× Whisper + 2× Ollama). They asked for "tell me if I accidentally uploaded an existing video, and ask if I still want to upload." Three design questions must be answered before implementation starts.
+
+| # | Question | Options / Notes |
+|---|---|---|
+| B1 | **Match granularity?** | (a) **Exact byte match (sha256)** — catches "I uploaded the same file twice", fast (~1s for 100MB streamed). Recommended default. (b) **Same `(section_id, filename)`** — free, no hashing, but breaks the moment a user renames the file. (c) **Perceptual hash** — catches "I re-encoded the same video" but is much more code (ffmpeg + phash + tolerance threshold). Defer to MVP3. |
+| B2 | **What counts as "the same user" for matching?** | (a) Per-user (recommended) — same file uploaded to two different user accounts is fine, just don't dupe within a user's own library. Requires joining `videos → sections → courses` to filter by `courses.user_id`. (b) Global — any user uploading the same hash is rejected. Avoid unless there are real privacy concerns. |
+| B3 | **Confirm-before-upload UI flow?** | (a) **Auto-skip on bulk, confirm-on-single** — bulk upload is more repetitive so auto-skip is the right default; single upload shows "looks like a dupe, upload anyway?" (b) **Always confirm** — consistent UX, more clicks. (c) **Always skip silently** — too aggressive; user loses work. Needs user decision. |
+| B4 | **Same content, different section — dupe or not?** | Recommend: **not a dupe.** The user's intent may be to put the same intro video in two different modules. The hash match is only a dupe within `(user_id, section_id, content_hash)`. |
+| B5 | **Hash storage cost** | sha256 of a 500MB file is 32 bytes per row. With 1000 videos, 32KB total. Trivial. Just store on `videos.content_hash String(64) NOT NULL` (NOT NULL after a one-time backfill of existing rows with NULL → some sentinel, or just allow NULL until re-uploaded). |
+
+**Recommendation** (for tomorrow's commit):
+- B1 = (a) sha256, streaming
+- B2 = (a) per-user
+- B3 = (a) auto-skip on bulk, confirm on single
+- B4 = different section = not a dupe
+- B5 = String(64), allow NULL for existing rows
+
+**Files to touch:**
+- `app/models/video.py` — add `content_hash: Mapped[str | None]` column
+- `app/routers/videos.py` — compute hash during the save (read in 4MB chunks to avoid loading huge files into memory), check existing `(user_id, content_hash)` before INSERT
+- `app/templates/course.html` + `app/templates/dashboard.html` — handle 409 in the upload JS, show confirm prompt
+- `tests/test_videos.py` — fixture uploads a known file, second upload returns 409 with existing metadata
+
+**Status:** Awaiting user confirmation on B1–B5 before implementation. Default plan above.
