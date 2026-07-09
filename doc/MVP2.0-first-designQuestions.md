@@ -5,7 +5,7 @@
 | # | Title | Status for MVP2 | Notes |
 |---|---|---|---|
 | 1 | **Auto-transcribe + auto-generate on upload** | ✅ In, top priority | Chains `upload → transcribe → generate` |
-| 2 | **Single "top-anchor" transcript follow mode (kill smart/always)** | ✅ Implementation + tests done; **awaiting user verification** before push | One behavior, hover-to-pause, seek-handler |
+| 2 | **Single "top-anchor" transcript follow mode** | ✅ Done + pushed (`05525ee`) | Top-anchor is the default; smart/always deferred to MVP3 → see [#18](#18-smartalways-transcript-modes) |
 | 3 | **Multi-file / non-blocking upload w/ 2 GB per-file cap** | ✅ In | Keep error/rate-limit UI; per-file ceiling; partial success |
 | 4 | **Filename numbering (2. …, 3. …) on download** | ✅ Done | — |
 | 5 | **YouTube / URL downloader (yt-dlp)** | ❌ Removed from MVP2 | — |
@@ -21,6 +21,7 @@
 | 15 | **MCP server** | ⏭️ Deferred | Per user call |
 | 16 | **OAuth2 + Stripe (paid memberships)** | ✅ In, **low priority** | — |
 | 17 | **Docker + Kubernetes deployment** | ⏭️ Deferred | Per user call |
+| 18 | **Smart/Always transcript scroll modes** (restore as 2 extra options alongside current Top-anchor default) | ⏭️ Deferred to MVP3 | 4 open design Qs → see [Appendix A](#appendix-a--smartalways-modes-deferred-design-questions) |
 
 ## design
 
@@ -92,3 +93,18 @@
 ### Q3 — Is the #9 mindmap hypothesis actually correct?
 
 **A.** Unknown. The user's observation is plausible (4 nodes @ 2 min, <4 @ 12 min for the same first 2 min) but we have three competing hypotheses (fixed-total-N, token-budget truncation, novelty-skipping), and the right fix depends on which one is true. **Resolution:** First commit is a **repro / data-gathering** task — generate mindmaps for 2, 5, 12, 30 min versions of the same source and count nodes per minute — *before* touching the prompt.
+
+---
+
+## Appendix A — Smart/Always modes: deferred design questions
+
+> **Context:** MVP2.0 shipped the "top-anchor" transcript follow mode as the single default (active line always pinned to the top of the panel). The old MVP1.1 smart/always modes were removed. User asked to bring them back as optional extras in MVP3. Four design questions must be answered before that work starts.
+
+| # | Question | Options / Notes |
+|---|---|---|
+| A1 | **Mode names in the dropdown?** | Suggestion: "Top (default)" / "Smart" / "Center". Or keep original names "Smart" and "Always". Needs user decision. |
+| A2 | **Persist the selected mode in localStorage?** | Old code persisted per-user-email (needed the `x-user-email` meta we removed). Options: (a) persist by a fixed key, no per-user namespacing; (b) no persistence at all — user re-picks each load; (c) re-add the email meta tag for this purpose only. |
+| A3 | **Dropdown placement?** | Old location: "Follow: [dropdown]" inline next to "📜 Transcript" heading. Same position, or somewhere else? |
+| A4 | **Both restored modes must use `getBoundingClientRect` (not `offsetTop`)** | Not a question — a constraint. The old `scrollContainerToCenter` had the same `offsetTop`-relative-to-body bug as the top-anchor mode. Any MVP3 restore must rewrite both scroll helpers with `getBoundingClientRect`. Implementation is straightforward once A1–A3 are decided. |
+
+**Status:** Deferred to MVP3. When MVP3 planning starts, answer A1–A3 and implement A4.
