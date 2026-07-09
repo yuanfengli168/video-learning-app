@@ -119,3 +119,57 @@ These tests fail loudly if anyone reorders the routes back to a shadowing positi
 
 **Lesson:** When adding a new route to a file that already has a `/{param}/...` route, declare the new route BEFORE the parameterised one. Add a structural test that asserts the order, because behavioural tests in TestClient won't catch the regression.
 
+
+---
+
+### ✅ RESOLVED [july 9 2026] — 0-byte upload crashes auto-pipeline
+
+**Symptom:** Bulk-uploaded 30 videos, 1 came back as `status=error` with:
+
+```
+[Errno 1094995529] Invalid data found when processing input: 
+'uploads/d2c902a1-a04b-42eb-a2df-98fb12ce1040.webm'
+```
+
+The other 29 went through fine.
+
+**Root cause:** The file was 0 bytes:
+
+```
+$ ls -la uploads/d2c902a1-...webm
+-rw-r--r--  1 jackyli  staff  0 Jul  9 23:16 ...webm
+$ file ...webm
+...webm: empty
+```
+
+The upload path only validated the **upper** size bound:
+
+```python
+file_size = os.path.getsize(file_path)
+if file_size > MAX_FILE_SIZE:  # 2 GB cap
+    raise HTTPException(413, "too large")
+```
+
+It never validated the **lower** bound. So a 0-byte file (browser cancelled, network reset, or wrong file picked) was happily saved to `uploads/` and queued for transcription. Whisper then crashed when it tried to decode empty audio.
+
+**Possible cause of the 0-byte file in this case:** Likely a browser-side hiccup during the 30-file bulk upload — one file's `File` object had no body when the request hit the server. Hard to prove without a browser-side trace.
+
+**Actual fix:** Add a `file_size == 0` check before the size cap. In `upload_video` (single), reject with 400. In `upload_bulk_videos`, mark as `skipped` with a clear error so the rest of the batch continues.
+
+```python
+if file_size == 0:
+    os.remove(file_path)
+    raise HTTPException(
+        status_code=400,
+        detail="File is empty (0 bytes). The upload may have been cancelled or the source file is broken.",
+    )
+```
+
+**Tests:** 3 new in `tests/test_videos.py`:
+- `test_upload_rejects_zero_byte_file` — single upload returns 400
+- `test_upload_zero_byte_does_not_create_db_row` — no orphan file on disk, no DB row
+- `test_upload_bulk_skips_zero_byte_file` — bulk: 0-byte skipped, others continue
+
+**Why TestClient didn't catch it originally:** A 0-byte upload only happens via a real browser's `FileList` (cancelled/dropped file). The unit tests always sent non-empty `io.BytesIO(b"x")` data, so the file was never 0 bytes.
+
+**Lesson:** When validating file uploads, check both bounds of the size range, not just the upper one. Empty files are surprisingly common (cancelled uploads, network resets, browser quirks with `FileList` from `<input multiple>`).

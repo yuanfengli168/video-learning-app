@@ -86,6 +86,19 @@ async def upload_video(
         shutil.copyfileobj(file.file, buffer)
 
     file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        # Edge case: browser sent an empty file (cancelled upload, network
+        # reset, or the user picked the wrong file). Without this check
+        # we'd happily save a 0-byte .webm and then the auto-pipeline
+        # would crash with "[Errno 1094995529] Invalid data found when
+        # processing input" because Whisper can't decode empty audio.
+        # Discovered 2026-07-09 when 1 of 30 bulk-uploaded videos was
+        # 0 bytes — see doc/Blockers.md.
+        os.remove(file_path)
+        raise HTTPException(
+            status_code=400,
+            detail="File is empty (0 bytes). The upload may have been cancelled or the source file is broken.",
+        )
     if file_size > MAX_FILE_SIZE:
         os.remove(file_path)
         raise HTTPException(
@@ -189,6 +202,18 @@ async def upload_bulk_videos(
             continue
 
         file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            # 0-byte file — same edge case as in upload_video. Skipped
+            # rather than 400 because bulk upload reports per-file
+            # outcomes. See doc/Blockers.md for context.
+            os.remove(file_path)
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": "File is empty (0 bytes). Upload may have been cancelled or the source file is broken.",
+            })
+            skipped += 1
+            continue
         if file_size > MAX_FILE_SIZE:
             os.remove(file_path)
             gb = file_size / (1024 ** 3)

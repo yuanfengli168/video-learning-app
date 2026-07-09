@@ -604,6 +604,75 @@ def test_upload_bulk_empty_files(client: TestClient):
     assert resp.status_code == 422  # FastAPI validation error for empty list
 
 
+# ── MVP2.0 #20 — 0-byte upload rejection (discovered 2026-07-09) ───────────
+# Bulk-uploading 30 videos, 1 of them saved as a 0-byte file. The auto-pipeline
+# crashed with "[Errno 1094995529] Invalid data found when processing input"
+# because Whisper can't decode empty audio. The old code only checked the
+# UPPER bound (file_size > MAX_FILE_SIZE) — never the LOWER bound.
+
+def test_upload_rejects_zero_byte_file(client: TestClient):
+    """Single upload of a 0-byte file is rejected with 400."""
+    _, section_id = _create_course_and_section(client)
+
+    fake_file = io.BytesIO(b"")  # 0 bytes
+    with _mock_auth():
+        response = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("video.mp4", fake_file, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 400
+    assert "empty" in response.json()["detail"].lower()
+
+
+def test_upload_zero_byte_does_not_create_db_row(client: TestClient):
+    """When upload is rejected, no Video row is created and no file
+    remains on disk."""
+    import os
+    _, section_id = _create_course_and_section(client)
+    uploads_before = set(os.listdir("uploads/")) if os.path.exists("uploads/") else set()
+
+    fake_file = io.BytesIO(b"")
+    with _mock_auth():
+        response = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("video.mp4", fake_file, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 400
+
+    # No new file on disk
+    uploads_after = set(os.listdir("uploads/")) if os.path.exists("uploads/") else set()
+    new_files = uploads_after - uploads_before
+    # Filter to only the .mp4 ones we may have added — should be empty
+    assert not any(f.endswith(".mp4") for f in new_files), f"unexpected new files: {new_files}"
+
+
+def test_upload_bulk_skips_zero_byte_file(client: TestClient):
+    """Bulk upload: a 0-byte file is reported as 'skipped' with a clear
+    error message. Other files in the batch continue processing."""
+    _, section_id = _create_course_and_section(client)
+    files = [
+        ("files", ("good.mp4", io.BytesIO(b"v"), "video/mp4")),
+        ("files", ("empty.webm", io.BytesIO(b""), "video/webm")),
+        ("files", ("also_good.mp4", io.BytesIO(b"w"), "video/mp4")),
+    ]
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload-bulk/{section_id}",
+            files=files,
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["queued"] == 2
+    assert data["skipped"] == 1
+    skipped = [r for r in data["results"] if r["status"] == "skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["filename"] == "empty.webm"
+    assert "empty" in skipped[0]["error"].lower()
+
+
 # ── MVP2.0 #1 + #3 fix — route shadowing regression guard ───────────────────
 # This is a STRUCTURAL test, not a behavioural one. It documents that the
 # literal path strings `/upload-bulk/{section_id}` and `/{video_id}/transcribe`
