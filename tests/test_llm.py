@@ -60,6 +60,54 @@ def test_extract_json_nested():
     assert result["list"] == [1, 2, 3]
 
 
+def test_extract_json_with_sure_preamble():
+    """LLMs sometimes add a 'Sure! Here is the JSON:' preamble before
+    the JSON object. The new strategy-3 (strip preamble) should handle
+    that. This was the actual failure mode in the 4-video bulk upload
+    on july 9 2026 (see doc/Blockers.md)."""
+    text = 'Sure! Here is the JSON:\n\n{"summary": "ok", "mindmap": "ok"}'
+    result = _extract_json(text)
+    assert result == {"summary": "ok", "mindmap": "ok"}
+
+
+def test_extract_json_with_certainly_preamble():
+    """Another common preamble variation."""
+    text = 'Certainly! Here you go:\n\n{"key": "value"}'
+    result = _extract_json(text)
+    assert result == {"key": "value"}
+
+
+def test_extract_json_with_of_course_preamble():
+    """Yet another variation, lower-case."""
+    text = 'of course,\n{"answer": 42}'
+    result = _extract_json(text)
+    assert result == {"answer": 42}
+
+
+def test_extract_json_failure_includes_raw_response():
+    """When all strategies fail, the error message should include
+    a preview of the raw response so the job log is self-explanatory.
+    Without this, debugging requires re-running with extra logging."""
+    text = "This response has no JSON at all, just prose about cats."
+    with pytest.raises(ValueError) as exc_info:
+        _extract_json(text)
+    msg = str(exc_info.value)
+    assert "Could not extract" in msg
+    assert "cats" in msg, f"Error message should include raw response: {msg!r}"
+    assert "len=" in msg, f"Error message should include response length: {msg!r}"
+
+
+def test_extract_json_failure_truncates_long_response():
+    """If the raw response is huge, the error preview should be
+    truncated to keep job logs readable."""
+    text = "x" * 1000  # 1000 chars of garbage
+    with pytest.raises(ValueError) as exc_info:
+        _extract_json(text)
+    msg = str(exc_info.value)
+    # Should mention truncation indicator
+    assert "..." in msg or len(msg) < 2000
+
+
 # ── generate_materials tests ──
 
 

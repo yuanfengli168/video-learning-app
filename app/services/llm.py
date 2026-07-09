@@ -58,18 +58,29 @@ Rules:
 
 
 def _extract_json(text: str) -> dict[str, Any]:
-    """Extract JSON from a text response, handling markdown code fences.
+    """Extract JSON from a text response, handling markdown code fences
+    and the LLM's habit of adding prose around the JSON object.
 
-    Tries to find a JSON object in the response, even if wrapped in
-    ```json ... ``` fences or has extra text.
+    Tries four strategies in order, returning the first one that produces
+    a valid dict:
+
+    1. Direct parse — response is pure JSON
+    2. Code fence — response is wrapped in ```json ... ```
+    3. Strip preamble — strip a leading "Sure! Here is the JSON:" / etc.,
+       then direct parse (LLM sometimes adds a sentence before the JSON)
+    4. Brace match — find the outermost { ... } block
+
+    If all four fail, raises ValueError with the raw response included in
+    the message so the failure is debuggable from the job log alone
+    (no need to re-run with debug logging).
     """
-    # Try direct parse first
+    # Strategy 1: direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Try to find JSON in code fences
+    # Strategy 2: code fence
     fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if fence_match:
         try:
@@ -77,7 +88,24 @@ def _extract_json(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # Try to find the first { ... } block
+    # Strategy 3: strip a leading prose preamble
+    # Common LLM preambles: "Sure!", "Here is the JSON:", "Of course!",
+    # "Certainly!", sometimes followed by a newline. Strip them and retry
+    # the direct parse. This handles responses like:
+    #   "Sure! Here is the JSON:\n\n{ ... }"
+    stripped = re.sub(
+        r"^\s*(sure|here is|here's|certainly|of course|okay|ok)[\s!,.]*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if stripped != text:
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 4: outermost { ... } block
     brace_match = re.search(r"\{.*\}", text, re.DOTALL)
     if brace_match:
         try:
@@ -85,7 +113,13 @@ def _extract_json(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    raise ValueError("Could not extract valid JSON from LLM response")
+    # All strategies failed. Raise with the raw response (truncated to
+    # 500 chars) included in the error so the job log is self-explanatory.
+    preview = text[:500] + ("..." if len(text) > 500 else "")
+    raise ValueError(
+        f"Could not extract valid JSON from LLM response "
+        f"(len={len(text)}). Raw response preview: {preview!r}"
+    )
 
 
 def generate_materials(
