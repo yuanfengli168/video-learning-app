@@ -42,17 +42,22 @@ async def list_whisper_models() -> dict[str, list[str]]:
     return {"models": AVAILABLE_MODELS}
 
 
-@router.post("/upload/{section_id}")
+@router.post("/upload/{section_id}", status_code=202)
 async def upload_video(
     section_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user),
-) -> dict[str, str]:
-    """Upload a video file to a section.
+) -> dict[str, Any]:
+    """Upload a video and queue auto-transcribe + auto-generate.
 
-    Saves the file to the uploads directory and creates a Video record
-    with status 'pending'.
+    Saves the file to the uploads directory, creates a Video record
+    with status 'queued', and immediately chains transcribe → generate
+    as a BackgroundTask. Returns 202 with the video_id so the UI
+    can redirect to the video page and start polling /status.
+
+    MVP2.0 #1: auto-pipeline (always ON, default Whisper model 'base').
     """
     # Validate section exists and belongs to user's course
     section = db.get(Section, section_id)
@@ -88,7 +93,7 @@ async def upload_video(
             detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024**3)} GB",
         )
 
-    # Create video record
+    # Create video record and queue auto-pipeline
     video = Video(
         id=video_id,
         title=Path(file.filename).stem,
@@ -96,12 +101,24 @@ async def upload_video(
         file_path=str(file_path),
         file_size=file_size,
         section_id=section_id,
-        status="pending",
+        status="queued",
     )
+    # Start the transcribe job tracker so the UI can poll /status
+    # immediately after the upload completes, before the background
+    # task has a chance to update it.
+    transcribe_job = start_job(
+        video_id,
+        "transcribe",
+        total=100,
+        message="Queued for auto-processing (transcribe → generate)...",
+    )
+    video.last_transcribe_job = serialize_job(transcribe_job)
     db.add(video)
     db.commit()
 
-    return {"video_id": video_id, "status": "uploaded"}
+    background_tasks.add_task(_run_auto_pipeline, video_id, "base")
+
+    return {"video_id": video_id, "status": "queued", "auto_process": True}
 
 
 @router.post("/{video_id}/transcribe", status_code=202)
@@ -274,6 +291,170 @@ def _run_transcribe_job(video_id: str, model_name: str) -> None:
             db.rollback()
     finally:
         db.close()
+
+
+def _run_auto_pipeline(video_id: str, model_name: str = "base") -> None:
+    """Background chain: transcribe → generate for a newly uploaded video.
+
+    MVP2.0 #1: called as a BackgroundTask from upload_video. The
+    transcribe job is already registered in the DB before this runs
+    (so the UI can poll /status immediately). This function:
+      1. Calls _run_transcribe_job (same module) — sets up Whisper,
+         writes the transcript Asset, marks the job completed.
+      2. If transcription succeeded, sets up the generate job tracker
+         and calls _run_generate_job (lazy-imported from generation.py
+         to avoid coupling at module load time).
+
+    Runs in the same process (BackgroundTasks, no worker queue yet —
+    that's #11 / MVP2.0.3).
+    """
+    # Step 1: Run transcription. The job was already started in
+    # upload_video, so _run_transcribe_job can find it via get_job().
+    _run_transcribe_job(video_id, model_name)
+
+    # Check if transcription succeeded before attempting generation.
+    transcribe_job = get_job(video_id, "transcribe")
+    if not transcribe_job or transcribe_job.get("status") != "completed":
+        return  # Transcription failed — skip generation
+
+    # Step 2: Set up the generate job tracker and hand off to the worker.
+    db = SessionLocal()
+    try:
+        video = db.get(Video, video_id)
+        if not video:
+            return
+        transcript_asset = db.execute(
+            select(Asset).where(
+                Asset.video_id == video_id, Asset.asset_type == "transcript"
+            )
+        ).scalar_one_or_none()
+        if not transcript_asset:
+            return  # Transcript not found — should not happen after a completed transcribe
+
+        video.status = "generating"
+        gen_job = start_job(
+            video_id,
+            "generate",
+            total=100,
+            message="Auto-pipeline: starting LLM generation...",
+        )
+        video.last_generate_job = serialize_job(gen_job)
+        db.commit()
+    finally:
+        db.close()
+
+    # Lazy import avoids coupling videos.py to generation.py at module
+    # load time while still sharing the implementation cleanly.
+    from app.routers.generation import _run_generate_job
+    _run_generate_job(video_id)
+
+
+@router.post("/upload-bulk/{section_id}")
+async def upload_bulk_videos(
+    section_id: str,
+    files: list[UploadFile],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Upload multiple videos at once and queue auto-processing for each.
+
+    Per-file 2 GB cap — files that exceed it are skipped with a warning;
+    other files in the batch continue processing. The response lists
+    every file's outcome so the UI can show per-file status.
+
+    MVP2.0 #3: multi-file / non-blocking upload.
+    """
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    course = db.get(Course, section.course_id)
+    if not course or course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your course")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    results: list[dict[str, Any]] = []
+    queued = 0
+    skipped = 0
+
+    for upload_file in files:
+        filename = upload_file.filename or ""
+        ext = Path(filename).suffix.lower()
+
+        if ext not in ALLOWED_EXTENSIONS:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": f"File type '{ext}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+            })
+            skipped += 1
+            continue
+
+        video_id = str(uuid.uuid4())
+        saved_filename = f"{video_id}{ext}"
+        file_path = settings.upload_path / saved_filename
+
+        try:
+            with open(file_path, "wb") as buf:
+                shutil.copyfileobj(upload_file.file, buf)
+        except Exception as exc:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": f"Failed to save file: {exc}",
+            })
+            skipped += 1
+            continue
+
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_FILE_SIZE:
+            os.remove(file_path)
+            gb = file_size / (1024 ** 3)
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": f"File too large ({gb:.1f} GB). Max: {MAX_FILE_SIZE // (1024 ** 3)} GB",
+            })
+            skipped += 1
+            continue
+
+        video = Video(
+            id=video_id,
+            title=Path(filename).stem,
+            filename=filename,
+            file_path=str(file_path),
+            file_size=file_size,
+            section_id=section_id,
+            status="queued",
+        )
+        transcribe_job = start_job(
+            video_id,
+            "transcribe",
+            total=100,
+            message="Queued for auto-processing (transcribe \u2192 generate)...",
+        )
+        video.last_transcribe_job = serialize_job(transcribe_job)
+        db.add(video)
+        db.commit()
+
+        background_tasks.add_task(_run_auto_pipeline, video_id, "base")
+
+        results.append({
+            "filename": filename,
+            "video_id": video_id,
+            "status": "queued",
+        })
+        queued += 1
+
+    return {
+        "results": results,
+        "total": len(files),
+        "queued": queued,
+        "skipped": skipped,
+    }
 
 
 @router.get("/{video_id}/status")

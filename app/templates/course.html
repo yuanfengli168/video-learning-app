@@ -45,7 +45,7 @@
                         <span class="text-xs px-2 py-1 rounded
                             {% if video.status == 'ready' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
                             {% elif video.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                            {% elif video.status == 'transcribing' or video.status == 'generating' %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
+                            {% elif video.status in ('transcribing', 'generating', 'queued') %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
                             {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
                             {{ video.status }}
                         </span>
@@ -55,7 +55,7 @@
                     {% endfor %}
                     <!-- Upload button -->
                     <div class="pt-2">
-                        <input type="file" id="upload-{{ section.id }}" class="hidden" accept="video/*" onchange="uploadVideo('{{ section.id }}', this)">
+                        <input type="file" id="upload-{{ section.id }}" class="hidden" accept="video/*" multiple onchange="uploadVideo('{{ section.id }}', this)">
                         <button onclick="document.getElementById('upload-{{ section.id }}').click()" class="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
                             + Upload Video
                         </button>
@@ -93,16 +93,35 @@ async function createSection(e) {
     else { alert('Failed to create section'); }
 }
 async function uploadVideo(sectionId, input) {
-    const file = input.files[0];
-    if (!file) return;
-    const formData = new FormData();
-    formData.append('file', file);
-    const resp = await fetch('/api/videos/upload/' + sectionId, {
-        method: 'POST',
-        body: formData,
-    });
-    if (resp.ok) { location.reload(); }
-    else { alert('Upload failed: ' + (await resp.json()).detail); }
+    const files = Array.from(input.files || []);
+    if (files.length === 0) return;
+
+    if (files.length === 1) {
+        // Single file: use the regular endpoint and redirect to video page
+        const form = new FormData();
+        form.append('file', files[0]);
+        const resp = await fetch('/api/videos/upload/' + sectionId, { method: 'POST', body: form });
+        if (resp.ok) {
+            const data = await resp.json();
+            window.location.href = '/video/' + data.video_id;
+        } else {
+            alert('Upload failed: ' + (await resp.json()).detail);
+        }
+    } else {
+        // Multiple files: use bulk endpoint and reload to show results
+        const form = new FormData();
+        for (const f of files) form.append('files', f);
+        const resp = await fetch('/api/videos/upload-bulk/' + sectionId, { method: 'POST', body: form });
+        if (resp.ok) {
+            const data = await resp.json();
+            const msg = `Queued: ${data.queued}, Skipped: ${data.skipped}.`
+                + (data.skipped > 0 ? '\n\nSkipped files:\n' + data.results.filter(r => r.status === 'skipped').map(r => `${r.filename}: ${r.error}`).join('\n') : '');
+            alert(msg);
+            location.reload();
+        } else {
+            alert('Bulk upload failed: ' + (await resp.json()).detail);
+        }
+    }
 }
 </script>
 {% endblock %}

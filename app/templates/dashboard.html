@@ -28,9 +28,9 @@
                 </select>
             </div>
             <button type="button" id="dashboard-upload-btn" class="mt-4 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
-                Choose Video
+                Choose Video(s)
             </button>
-            <input type="file" id="upload-input" class="hidden" accept="video/*">
+            <input type="file" id="upload-input" class="hidden" accept="video/*" multiple>
             <!-- Drag-and-drop visual feedback (set by JS) -->
             <p id="dashboard-upload-status" class="mt-2 text-xs text-gray-500 min-h-[1rem]"></p>
         {% else %}
@@ -125,8 +125,9 @@ async function createCourse(e) {
         alert('Failed to create course: ' + (err.detail || 'Unknown error'));
     }
 }
-// Dashboard upload — actually uploads to the section picked in
-// the dropdown. Supports both file-picker and drag-and-drop.
+// Dashboard upload — uploads to the section picked in the dropdown.
+// Supports single-file (legacy path) and multi-file (bulk endpoint).
+// MVP2.0 #1 + #3: auto-pipeline always ON; bulk accepts multiple files.
 function uploadToSection(sectionId, file) {
     if (!sectionId) {
         alert('Please pick a section to upload to.');
@@ -149,13 +150,13 @@ function uploadToSection(sectionId, file) {
     .then(({ok, data}) => {
         if (ok) {
             if (status) {
-                status.textContent = `✅ Uploaded "${file.name}". Redirecting...`;
+                status.textContent = `✅ "${file.name}" uploaded — auto-processing started. Opening video page...`;
                 status.classList.remove('text-indigo-600', 'dark:text-indigo-400');
                 status.classList.add('text-green-600', 'dark:text-green-400');
             }
-            // Reload the page so the dashboard reflects the new video
-            // (the user is redirected automatically by location.reload).
-            setTimeout(() => location.reload(), 1200);
+            // Redirect to the video page so the user can watch the
+            // live transcribe → generate progress bars.
+            setTimeout(() => { window.location.href = '/video/' + data.video_id; }, 1000);
         } else {
             if (status) {
                 status.textContent = `❌ Upload failed: ${data.detail || 'Unknown error'}`;
@@ -169,6 +170,49 @@ function uploadToSection(sectionId, file) {
             status.textContent = `❌ Upload error: ${err.message}`;
             status.classList.remove('text-indigo-600', 'dark:text-indigo-400');
             status.classList.add('text-red-500', 'dark:text-red-400');
+        }
+    });
+}
+
+function uploadMultipleToSection(sectionId, files) {
+    // MVP2.0 #3: bulk upload. Sends all files in one request and
+    // shows a per-file result list in the status area.
+    if (!sectionId) { alert('Please pick a section to upload to.'); return; }
+    if (!files || files.length === 0) return;
+    const status = document.getElementById('dashboard-upload-status');
+    if (status) {
+        status.textContent = `⏳ Uploading ${files.length} file(s)...`;
+        status.className = 'mt-2 text-xs text-indigo-600 dark:text-indigo-400 min-h-[1rem]';
+    }
+    const form = new FormData();
+    for (const f of files) form.append('files', f);
+    fetch('/api/videos/upload-bulk/' + sectionId, { method: 'POST', body: form })
+    .then(resp => resp.json().then(data => ({ ok: resp.ok, data })))
+    .then(({ ok, data }) => {
+        if (!status) return;
+        if (!ok) {
+            status.textContent = `❌ Bulk upload failed: ${data.detail || 'Unknown error'}`;
+            status.className = 'mt-2 text-xs text-red-500 dark:text-red-400 min-h-[1rem]';
+            return;
+        }
+        // Show per-file results
+        const lines = data.results.map(r =>
+            r.status === 'queued'
+                ? `✅ ${r.filename} — queued`
+                : `⚠️ ${r.filename} — skipped: ${r.error}`
+        );
+        const summary = `${data.queued} queued, ${data.skipped} skipped`;
+        status.innerHTML = lines.map(l => `<div>${escapeHtml(l)}</div>`).join('') +
+            `<div class="font-medium mt-1">${escapeHtml(summary)}</div>`;
+        status.className = 'mt-2 text-xs min-h-[1rem] ' +
+            (data.skipped > 0 ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400');
+        // Reload after a brief pause so the new videos appear in the list
+        if (data.queued > 0) setTimeout(() => location.reload(), 2500);
+    })
+    .catch(err => {
+        if (status) {
+            status.textContent = `❌ Bulk upload error: ${err.message}`;
+            status.className = 'mt-2 text-xs text-red-500 dark:text-red-400 min-h-[1rem]';
         }
     });
 }
@@ -202,10 +246,14 @@ function initDashboardUpload() {
 
     // File-picker change
     input.addEventListener('change', () => {
-        const file = input.files && input.files[0];
-        if (!file) return;
+        const files = input.files;
+        if (!files || files.length === 0) return;
         const sectionId = getDashboardSelectedSectionId();
-        uploadToSection(sectionId, file);
+        if (files.length === 1) {
+            uploadToSection(sectionId, files[0]);
+        } else {
+            uploadMultipleToSection(sectionId, files);
+        }
         // Reset the input so the same file can be re-selected if needed
         input.value = '';
     });
