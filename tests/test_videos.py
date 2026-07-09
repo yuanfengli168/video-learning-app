@@ -5,6 +5,12 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+# Save a reference to the real _run_auto_pipeline BEFORE the no_auto_pipeline
+# autouse fixture (conftest.py) replaces it. Module-level code runs at import
+# time, which is before any pytest fixtures are set up.
+import app.routers.videos as _videos_module
+_REAL_RUN_AUTO_PIPELINE = _videos_module._run_auto_pipeline
+
 FAKE_USER = {"uid": "test-user-uid", "email": "test@example.com"}
 
 
@@ -45,7 +51,7 @@ def test_list_whisper_models(client: TestClient):
 
 
 def test_upload_video(client: TestClient):
-    """Should upload a video file."""
+    """Should upload a video file and queue auto-processing (MVP2.0 #1)."""
     course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
@@ -55,9 +61,10 @@ def test_upload_video(client: TestClient):
             files={"file": ("test.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert "video_id" in response.json()
-    assert response.json()["status"] == "uploaded"
+    assert response.json()["status"] == "queued"
+    assert response.json()["auto_process"] is True
 
 
 def test_upload_invalid_extension(client: TestClient):
@@ -105,7 +112,7 @@ def test_get_video(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == "lecture"
-    assert data["status"] == "pending"
+    assert data["status"] == "queued"  # MVP2.0 #1: auto-pipeline queued on upload
     assert data["has_transcript"] is False
 
 
@@ -327,3 +334,271 @@ def test_transcribe_failure_sets_error_status(client: TestClient):
             f"/api/videos/{video_id}", headers=_auth_headers()
         )
     assert get_resp.json()["status"] == "error"
+
+
+# ── MVP2.0 #1 — Auto-pipeline tests ──────────────────────────────────────────
+
+def test_upload_returns_202_and_queued_status(client: TestClient):
+    """Upload endpoint returns 202 + status 'queued' + auto_process=True."""
+    _, section_id = _create_course_and_section(client)
+    fake = io.BytesIO(b"fake video content")
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("v.mp4", fake, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "queued"
+    assert data["auto_process"] is True
+    assert "video_id" in data
+
+
+def test_upload_creates_transcribe_job_immediately(client: TestClient):
+    """The transcribe job tracker is started at upload time, before the
+    background task runs, so the UI can poll /status right away."""
+    from app.jobs import get_job
+    _, section_id = _create_course_and_section(client)
+    fake = io.BytesIO(b"fake")
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("v.mp4", fake, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = resp.json()["video_id"]
+    job = get_job(video_id, "transcribe")
+    assert job is not None
+    assert job["status"] == "running"  # queued state appears as "running" initially
+
+
+def test_auto_pipeline_chains_transcribe_then_generate(client: TestClient):
+    """_run_auto_pipeline calls transcribe then generate in order."""
+    _, section_id = _create_course_and_section(client)
+    called_order: list[str] = []
+
+    def fake_transcribe(vid: str, model: str) -> None:
+        # Simulate transcription succeeding: mark job completed + save transcript.
+        from app.jobs import get_job, finish_job
+        job = get_job(vid, "transcribe")
+        if job:
+            finish_job(job, status="completed")
+        from app.database import SessionLocal
+        from app.models import Asset, Video
+        from app.services.transcription import transcript_to_json
+        with SessionLocal() as db:
+            v = db.get(Video, vid)
+            if v:
+                v.status = "ready"
+                db.add(Asset(
+                    video_id=vid,
+                    asset_type="transcript",
+                    content=transcript_to_json({
+                        "segments": [{"start": 0.0, "end": 1.0, "text": "Hi"}],
+                        "language": "en",
+                        "duration": 1.0,
+                    }),
+                ))
+                db.commit()
+        called_order.append("transcribe")
+
+    def fake_generate(vid: str) -> None:
+        called_order.append("generate")
+
+    # Upload (no_auto_pipeline autouse fixture suppresses the background call)
+    fake = io.BytesIO(b"fake")
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("v.mp4", fake, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = resp.json()["video_id"]
+
+    # Call the REAL pipeline (saved at module level before the autouse
+    # fixture replaced it) with the transcribe + generate steps mocked.
+    with (
+        patch("app.routers.videos._run_transcribe_job", side_effect=fake_transcribe),
+        patch("app.routers.generation._run_generate_job", side_effect=fake_generate),
+    ):
+        _REAL_RUN_AUTO_PIPELINE(video_id, "base")
+
+    assert called_order == ["transcribe", "generate"], (
+        f"Expected transcribe then generate, got: {called_order}"
+    )
+
+
+def test_auto_pipeline_skips_generate_if_transcription_fails(client: TestClient):
+    """If transcription fails, generation must NOT be called."""
+    _, section_id = _create_course_and_section(client)
+    generate_called = []
+
+    def fake_transcribe_fail(vid: str, model: str) -> None:
+        from app.jobs import get_job, finish_job
+        job = get_job(vid, "transcribe")
+        if job:
+            finish_job(job, status="failed", error="Whisper failed")
+        from app.database import SessionLocal
+        from app.models import Video
+        with SessionLocal() as db:
+            v = db.get(Video, vid)
+            if v:
+                v.status = "error"
+                db.commit()
+
+    def fake_generate(vid: str) -> None:
+        generate_called.append(vid)
+
+    fake = io.BytesIO(b"fake")
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("v.mp4", fake, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = resp.json()["video_id"]
+
+    with (
+        patch("app.routers.videos._run_transcribe_job", side_effect=fake_transcribe_fail),
+        patch("app.routers.generation._run_generate_job", side_effect=fake_generate),
+    ):
+        _REAL_RUN_AUTO_PIPELINE(video_id, "base")
+
+    assert generate_called == [], "generate must NOT be called when transcription fails"
+
+
+# ── MVP2.0 #3 — Bulk upload tests ─────────────────────────────────────────────
+
+def test_upload_bulk_queues_all_valid_files(client: TestClient):
+    """Bulk endpoint queues all valid files and returns per-file results."""
+    _, section_id = _create_course_and_section(client)
+    files = [
+        ("files", ("a.mp4", io.BytesIO(b"v1"), "video/mp4")),
+        ("files", ("b.webm", io.BytesIO(b"v2"), "video/webm")),
+    ]
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload-bulk/{section_id}",
+            files=files,
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert data["queued"] == 2
+    assert data["skipped"] == 0
+    statuses = [r["status"] for r in data["results"]]
+    assert statuses == ["queued", "queued"]
+    video_ids = [r["video_id"] for r in data["results"]]
+    assert len(set(video_ids)) == 2  # each file got a unique video_id
+
+
+def test_upload_bulk_skips_invalid_extension(client: TestClient):
+    """Bulk endpoint skips files with disallowed extensions."""
+    _, section_id = _create_course_and_section(client)
+    files = [
+        ("files", ("video.mp4", io.BytesIO(b"v"), "video/mp4")),
+        ("files", ("doc.pdf", io.BytesIO(b"d"), "application/pdf")),
+    ]
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload-bulk/{section_id}",
+            files=files,
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["queued"] == 1
+    assert data["skipped"] == 1
+    skipped = [r for r in data["results"] if r["status"] == "skipped"]
+    assert skipped[0]["filename"] == "doc.pdf"
+    assert "not allowed" in skipped[0]["error"]
+
+
+def test_upload_bulk_skips_file_exceeding_2gb(client: TestClient):
+    """Bulk endpoint skips a file that exceeds the 2 GB cap."""
+    import os
+    _, section_id = _create_course_and_section(client)
+
+    def fake_getsize(path: str) -> int:
+        # Make every file appear larger than 2 GB
+        return 3 * 1024 * 1024 * 1024
+
+    files = [
+        ("files", ("big.mp4", io.BytesIO(b"x"), "video/mp4")),
+        ("files", ("small.mp4", io.BytesIO(b"y"), "video/mp4")),
+    ]
+    with (
+        patch("app.routers.videos.os.path.getsize", side_effect=fake_getsize),
+        _mock_auth(),
+    ):
+        resp = client.post(
+            f"/api/videos/upload-bulk/{section_id}",
+            files=files,
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["queued"] == 0
+    assert data["skipped"] == 2
+    for r in data["results"]:
+        assert r["status"] == "skipped"
+        assert "too large" in r["error"]
+
+
+def test_upload_bulk_partial_success(client: TestClient):
+    """One valid file + one over-limit file: partial success."""
+    import os
+    _, section_id = _create_course_and_section(client)
+    call_count = [0]
+
+    def size_side_effect(path: str) -> int:
+        call_count[0] += 1
+        # First file: 100 bytes (valid). Second file: 3 GB (over limit).
+        return 100 if call_count[0] == 1 else 3 * 1024 * 1024 * 1024
+
+    files = [
+        ("files", ("good.mp4", io.BytesIO(b"v"), "video/mp4")),
+        ("files", ("huge.mp4", io.BytesIO(b"w"), "video/mp4")),
+    ]
+    with (
+        patch("app.routers.videos.os.path.getsize", side_effect=size_side_effect),
+        _mock_auth(),
+    ):
+        resp = client.post(
+            f"/api/videos/upload-bulk/{section_id}",
+            files=files,
+            headers=_auth_headers(),
+        )
+    data = resp.json()
+    assert data["queued"] == 1
+    assert data["skipped"] == 1
+    queued = [r for r in data["results"] if r["status"] == "queued"]
+    skipped = [r for r in data["results"] if r["status"] == "skipped"]
+    assert queued[0]["filename"] == "good.mp4"
+    assert skipped[0]["filename"] == "huge.mp4"
+
+
+def test_upload_bulk_wrong_section(client: TestClient):
+    """Bulk endpoint returns 404 for non-existent section."""
+    files = [("files", ("v.mp4", io.BytesIO(b"x"), "video/mp4"))]
+    with _mock_auth():
+        resp = client.post(
+            "/api/videos/upload-bulk/nonexistent-section",
+            files=files,
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 404
+
+
+def test_upload_bulk_empty_files(client: TestClient):
+    """Bulk endpoint returns 400 when no files are provided."""
+    _, section_id = _create_course_and_section(client)
+    with _mock_auth():
+        resp = client.post(
+            f"/api/videos/upload-bulk/{section_id}",
+            files=[],
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 422  # FastAPI validation error for empty list

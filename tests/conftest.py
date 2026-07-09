@@ -85,3 +85,27 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
     """Provide a FastAPI test client with the test database."""
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def no_auto_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Globally mock _run_auto_pipeline to a no-op for all tests.
+
+    MVP2.0 #1: every video upload now queues an auto-pipeline background
+    task (transcribe → generate). The TestClient runs BackgroundTasks
+    synchronously, so without this fixture every test that uploads a
+    video would also trigger Whisper + Ollama (or fail with an import
+    error) and leave the video in 'error' state.
+
+    Tests that specifically want to exercise auto-pipeline behavior
+    should use:
+
+        with patch("app.routers.videos._run_auto_pipeline") as mock_ap:
+            ...
+
+    to override this fixture for their scope.
+    """
+    monkeypatch.setattr(
+        "app.routers.videos._run_auto_pipeline",
+        lambda video_id, model_name="base": None,
+    )

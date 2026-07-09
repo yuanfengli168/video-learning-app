@@ -165,7 +165,13 @@ def test_status_endpoint_returns_404_for_unknown_video(client: TestClient):
 
 
 def test_status_endpoint_returns_no_jobs_initially(client: TestClient):
-    """A freshly uploaded video should have no transcribe or generate jobs."""
+    """A freshly uploaded video starts with a transcribe job already queued.
+
+    MVP2.0 #1: upload now starts the transcribe job tracker immediately
+    so the UI can poll /status right away. The no_auto_pipeline fixture
+    (conftest.py) prevents the actual Whisper/Ollama work from running,
+    but the job record itself IS created in the upload handler.
+    """
     _, section_id = _create_course_and_section(client)
     video_id = _upload_video(client, section_id)
 
@@ -177,10 +183,12 @@ def test_status_endpoint_returns_no_jobs_initially(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["video_id"] == video_id
-    assert data["video_status"] == "pending"
-    assert data["transcribe_job"] is None
+    assert data["video_status"] == "queued"
+    # Transcribe job is started at upload time so the UI can poll
+    assert data["transcribe_job"] is not None
+    assert data["transcribe_job"]["status"] == "running"
+    # Generate job not started yet (starts after transcribe completes)
     assert data["generate_job"] is None
-    assert data["eta_text"]["transcribe"] is None
     assert data["eta_text"]["generate"] is None
 
 
