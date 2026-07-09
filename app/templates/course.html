@@ -32,12 +32,20 @@
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
             <button onclick="toggleSection('{{ section.id }}')" class="w-full flex items-center justify-between p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50">
                 <span class="font-medium">📂 {{ section.title }}</span>
-                <span class="text-sm text-gray-400">{{ section.videos | length }} video(s)</span>
+                <span class="flex items-center space-x-3">
+                    <span class="text-sm text-gray-400">{{ section.videos | length }} video(s)</span>
+                    <button onclick="event.stopPropagation(); sortSection('{{ section.id }}')" id="sort-btn-{{ section.id }}" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500" title="Toggle sort direction">
+                        ↑ asc
+                    </button>
+                </span>
             </button>
             <div id="section-{{ section.id }}" class="hidden border-t border-gray-200 dark:border-gray-700">
-                <div class="p-4 space-y-2">
+                <div class="p-4 space-y-2" data-video-list>
                     {% for video in section.videos %}
-                    <a href="/video/{{ video.id }}" class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                    <a href="/video/{{ video.id }}"
+                       data-sort-key="{{ video.title | natural_sort_key_str }}"
+                       data-title="{{ video.title | lower }}"
+                       class="video-row flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50">
                         <span class="flex items-center space-x-2">
                             <span>🎬</span>
                             <span>{{ video.title }}</span>
@@ -80,6 +88,103 @@ function hideCreateSection() {
 }
 function toggleSection(id) {
     document.getElementById('section-' + id).classList.toggle('hidden');
+}
+
+// ── Video sort (MVP2.0 — client-side, per-section) ─────────────────────────
+// Default order: ascending by natural sort key (leading number then title).
+// The sort is persisted in localStorage so the user's choice survives reloads.
+//
+// The natural sort key is computed on the server (see natural_sort_key in
+// app/models/video.py) and emitted as data-sort-key on each row. This JS
+// function is a thin re-orderer that uses the pre-computed key, so it
+// cannot disagree with the server. (If a video's title is edited later
+// without re-sorting, the key is stale — that's fine, the user can toggle
+// to re-trigger the sort.)
+
+const SORT_DIRECTION_KEY_PREFIX = 'video_sort_dir:';
+
+function getStoredSortDirection(sectionId) {
+    try {
+        const v = localStorage.getItem(SORT_DIRECTION_KEY_PREFIX + sectionId);
+        return v === 'desc' ? 'desc' : 'asc';  // default asc
+    } catch (e) {
+        return 'asc';
+    }
+}
+
+function setStoredSortDirection(sectionId, direction) {
+    try {
+        localStorage.setItem(SORT_DIRECTION_KEY_PREFIX + sectionId, direction);
+    } catch (e) {
+        // localStorage blocked (Tracking Prevention etc.) — just skip persistence
+    }
+}
+
+function sortSection(sectionId) {
+    const list = document.querySelector('#section-' + sectionId + ' [data-video-list]');
+    if (!list) return;
+    const rows = Array.from(list.querySelectorAll('a.video-row'));
+    if (rows.length < 2) return;  // no need to sort a single row
+
+    const currentDir = getStoredSortDirection(sectionId);
+    const newDir = currentDir === 'asc' ? 'desc' : 'asc';
+    setStoredSortDirection(sectionId, newDir);
+
+    // Sort by the server-computed data-sort-key. Lexicographic compare
+    // works because the key is "N:title" where N is the leading number
+    // (padded via the server's natural_sort_key). 999999 is the sentinel
+    // for "no leading number" so unnumbered titles always sort last in
+    // asc / first in desc.
+    const cmp = (a, b) => {
+        const ka = a.getAttribute('data-sort-key') || '';
+        const kb = b.getAttribute('data-sort-key') || '';
+        if (newDir === 'asc') return ka.localeCompare(kb);
+        return kb.localeCompare(ka);
+    };
+    rows.sort(cmp);
+
+    // Re-append in sorted order. The upload button is the last child and
+    // is NOT a `.video-row`, so it's preserved at the end.
+    rows.forEach(row => list.appendChild(row));
+
+    // Update the sort button label
+    const btn = document.getElementById('sort-btn-' + sectionId);
+    if (btn) {
+        btn.textContent = newDir === 'asc' ? '↑ asc' : '↓ desc';
+    }
+}
+
+function applyStoredSortOnLoad() {
+    // Auto-apply each section's stored sort direction on page load so the
+    // user's choice persists across reloads.
+    document.querySelectorAll('[data-video-list]').forEach(list => {
+        const sectionId = list.closest('[id^="section-"]')?.id?.replace('section-', '');
+        if (!sectionId) return;
+        const dir = getStoredSortDirection(sectionId);
+        if (dir === 'desc') {
+            // Trigger a single desc sort (which toggles state from asc→desc)
+            // by directly calling the sort logic, not the toggle (which would
+            // also flip localStorage back to asc).
+            const rows = Array.from(list.querySelectorAll('a.video-row'));
+            if (rows.length < 2) return;
+            rows.sort((a, b) => {
+                const ka = a.getAttribute('data-sort-key') || '';
+                const kb = b.getAttribute('data-sort-key') || '';
+                return kb.localeCompare(ka);
+            });
+            rows.forEach(row => list.appendChild(row));
+        }
+        // Update button label
+        const btn = document.getElementById('sort-btn-' + sectionId);
+        if (btn) btn.textContent = dir === 'asc' ? '↑ asc' : '↓ desc';
+    });
+}
+
+// Run on DOMContentLoaded
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyStoredSortOnLoad);
+} else {
+    applyStoredSortOnLoad();
 }
 async function createSection(e) {
     e.preventDefault();

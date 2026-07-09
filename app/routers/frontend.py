@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user_optional
 from app.config import settings
 from app.database import get_db
 from app.models import Asset, Course, Section, Video
+from app.models.video import natural_sort_key, natural_sort_key_str
 from app.services.markdown import simple_markdown
 from markupsafe import Markup
 
@@ -48,6 +49,27 @@ def _md_filter(value: str) -> Markup:
 # app/templates/video.html — the byte-equality test in
 # tests/test_frontend.py locks both implementations in lockstep.
 templates.env.filters["md"] = _md_filter
+
+
+def _natural_sort_key_filter(title: str) -> tuple[int, str]:
+    """Jinja filter wrapper for the model's natural_sort_key.
+
+    The same function is called by app/templates/course.html to compute
+    data-sort-key for each video row, so the JS sort in the browser
+    uses the same ordering as the server. Both implementations are
+    unit-tested — see tests/test_model_video.py and tests/test_frontend.py.
+    """
+    return natural_sort_key(title)
+
+
+def _natural_sort_key_str_filter(title: str) -> str:
+    """Jinja filter wrapper for natural_sort_key_str — a lexicographically
+    sortable string encoding of the same key, ready for data-sort-key."""
+    return natural_sort_key_str(title)
+
+
+templates.env.filters["natural_sort_key"] = _natural_sort_key_filter
+templates.env.filters["natural_sort_key_str"] = _natural_sort_key_str_filter
 
 
 def _ctx(
