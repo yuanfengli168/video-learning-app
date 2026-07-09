@@ -5,7 +5,7 @@
 | # | Title | Status for MVP2 | Notes |
 |---|---|---|---|
 | 1 | **Auto-transcribe + auto-generate on upload** | ✅ In, top priority | Chains `upload → transcribe → generate` |
-| 2 | **Single "top-anchor" transcript follow mode (kill smart/always)** | ✅ In, top priority | One behavior, hover-to-pause, seek-handler |
+| 2 | **Single "top-anchor" transcript follow mode (kill smart/always)** | ✅ Implementation + tests done; **awaiting user verification** before push | One behavior, hover-to-pause, seek-handler |
 | 3 | **Multi-file / non-blocking upload w/ 2 GB per-file cap** | ✅ In | Keep error/rate-limit UI; per-file ceiling; partial success |
 | 4 | **Filename numbering (2. …, 3. …) on download** | ✅ Done | — |
 | 5 | **YouTube / URL downloader (yt-dlp)** | ❌ Removed from MVP2 | — |
@@ -51,6 +51,14 @@
 
 ### Status log (2026-07-09)
 
+- **#2 — Single "top-anchor" transcript follow mode: implementation + tests done, awaiting user verification.**
+  - Branch: `MVP2.0` (not yet pushed; user wants to review the diff before push)
+  - Commits (newest → oldest):
+    - `f55c6c6` — *part B, tests + fix* — rewrite of `tests/test_transcript_follow.mjs` (17 tests via a tiny DOM shim: pure helpers, source-level guards, public surface locks, integration) and `tests/test_transcript_follow.py`; updates to `tests/test_frontend.py` and `tests/test_main.py` to drop the dropdown/meta expectations and add negative asserts (the old API must NOT reappear in the served JS); a `forceScroll` parameter added to the JS while writing the integration tests (mouseleave was leaving the panel unscrolled when the active line hadn't changed).
+    - `e5ca10f` — *part A, implementation* — `app/static/js/transcript-follow.js` rewritten to the single top-anchor mode (rAF-throttled scroll, `seeked` listener, hover-to-pause via `mouseenter`/`mouseleave`, no setMode/getMode/storageKey); dropdown removed from `app/templates/video.html`; `x-user-email` meta removed from `app/templates/base.html`; comment-only update to `app/static/css/transcript-follow.css`.
+  - Test results: 320/320 passing (was 319 after #7; +1 from the merged frontend tests, +17 from the .mjs suite).
+  - Public API after #2: `window.TranscriptFollow = { init({container, video, segmentsProvider}), destroy() }` + `_internals.findActiveSegment`. No modes, no localStorage, no per-user meta.
+
 - **#7 — Session-expiry redirect: implementation + tests done, awaiting user verification.**
   - Branch: `MVP2.0` (not yet pushed; user wants to review the diff before push)
   - Commits (newest → oldest, on `MVP2.0` ahead of `origin/main` by 3):
@@ -58,6 +66,7 @@
     - `2b40fc9` — *part B, tests* — `tests/test_session_expiry_middleware.py` (26 tests, 100% coverage on `app/middleware_session.py`).
     - `814a98a` — *part A, implementation* — new `app/middleware_session.py`; `app/main.py` mount; `app/templates/base.html` toast trigger + `showToast` move; `app/templates/video.html` local `showToast` removal.
   - Test results: 319/319 passing; project overall coverage 87% (unchanged from baseline; new file at 100%).
+| **MVP2.0.0a — Transcript follow rewrite** (small) | #2 ✅ done (awaiting verification) | JS-only; sibling of MVP2.0.0 |
   - Verified behaviors: protected SSR routes redirect on bad cookie; anonymous visits stay put; `/api/*` keeps 401 JSON; `/login`, `/static/*`, `/api/auth/session` always reachable; 302 carries CSP + X-Frame-Options + X-Content-Type-Options; toast fires once and self-clears via `history.replaceState`.
 
 
