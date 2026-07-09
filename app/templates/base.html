@@ -266,6 +266,63 @@
             }
             filterSidebarCourses();
         }
+
+        // ── Toast notification (MVP2.0 item #7) ──
+        //
+        // Moved to base.html so it works on every page, not just
+        // video.html. Previously lived only in video.html, which
+        // meant the session-expired redirect (which lands on the
+        // dashboard) had no toast to show. Single definition here
+        // is the source of truth; video.html now references
+        // window.showToast (which is set below).
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-6 right-6 z-[200] px-4 py-3 rounded-lg shadow-lg text-sm max-w-sm transition-opacity duration-300';
+            if (type === 'error') {
+                toast.classList.add('bg-red-100', 'dark:bg-red-900/40', 'text-red-700', 'dark:text-red-300', 'border', 'border-red-300', 'dark:border-red-700');
+            } else {
+                toast.classList.add('bg-indigo-100', 'dark:bg-indigo-900/40', 'text-indigo-700', 'dark:text-indigo-300', 'border', 'border-indigo-300', 'dark:border-indigo-700');
+            }
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+        // Expose for pages that load after this (e.g. video.html)
+        // without re-declaring the function. See the cleanup in
+        // video.html — that page no longer defines showToast locally.
+        window.showToast = showToast;
+
+        // ── Session-expired toast trigger ──
+        //
+        // SessionExpiryMiddleware (app/middleware_session.py) bounces
+        // protected-SSR requests with an expired cookie to
+        // /?session=expired. We detect the query param on page load,
+        // show a one-time toast, and strip the param from the URL so
+        // a page refresh doesn't re-trigger the toast.
+        //
+        // We use history.replaceState (not a navigation) so the user
+        // stays on the dashboard without a re-fetch — the dashboard
+        // already rendered with the right (anonymous) state.
+        (function () {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                if (params.get('session') === 'expired') {
+                    showToast('Your session has expired. Please sign in again.', 'error');
+                    params.delete('session');
+                    const qs = params.toString();
+                    const newUrl = window.location.pathname + (qs ? '?' + qs : '');
+                    window.history.replaceState({}, '', newUrl);
+                }
+            } catch (e) {
+                // If URLSearchParams / history API is unavailable
+                // (very old browsers, JS disabled), the toast just
+                // doesn't show. The user will still land on the
+                // dashboard and see the normal "Sign in" prompt.
+            }
+        })();
     </script>
     {% block scripts %}{% endblock %}
 </body>

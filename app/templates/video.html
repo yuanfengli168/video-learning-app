@@ -1312,24 +1312,10 @@ function highlightTranscriptRange(start, end) {
     }
 }
 
-// Non-blocking toast notification. Replaces the intrusive alert() so
-// the user can keep interacting with the mindmap.
-function showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = 'fixed bottom-6 right-6 z-[200] px-4 py-3 rounded-lg shadow-lg text-sm max-w-sm transition-opacity duration-300';
-    if (type === 'error') {
-        toast.classList.add('bg-red-100', 'dark:bg-red-900/40', 'text-red-700', 'dark:text-red-300', 'border', 'border-red-300', 'dark:border-red-700');
-    } else {
-        toast.classList.add('bg-indigo-100', 'dark:bg-indigo-900/40', 'text-indigo-700', 'dark:text-indigo-300', 'border', 'border-indigo-300', 'dark:border-indigo-700');
-    }
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
+// Non-blocking toast notification. Definition lives in base.html
+// (see app/templates/base.html — added in MVP2.0 item #7) so it's
+// available on every page. This file used to define showToast
+// locally; the function is now exposed as window.showToast.
 function jumpToTopic(topicName) {
     const result = findTopicTimestampWithAncestors(topicName, mindmapParentMap);
     if (!result) {

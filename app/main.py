@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db
 from app.middleware import SecurityHeadersMiddleware
+from app.middleware_session import SessionExpiryMiddleware
 from app.routers import auth as auth_router
 from app.routers import chat as chat_router
 from app.routers import courses as courses_router
@@ -45,6 +46,12 @@ app.add_middleware(
     SecurityHeadersMiddleware,
     debug=settings.debug,
 )
+
+# Session-expiry redirect (MVP2.0 item #7). Runs *inside* the
+# SecurityHeadersMiddleware so the redirect response also gets the
+# baseline security headers. See app/middleware_session.py for the
+# full rationale (why middleware, why not per-route, cookie semantics).
+app.add_middleware(SessionExpiryMiddleware)
 
 app.include_router(auth_router.router)
 app.include_router(session_router)
