@@ -602,3 +602,42 @@ def test_upload_bulk_empty_files(client: TestClient):
             headers=_auth_headers(),
         )
     assert resp.status_code == 422  # FastAPI validation error for empty list
+
+
+# ── MVP2.0 #1 + #3 fix — route shadowing regression guard ───────────────────
+# This is a STRUCTURAL test, not a behavioural one. It documents that the
+# literal path strings `/upload-bulk/{section_id}` and `/{video_id}/transcribe`
+# must be registered in this order. FastAPI matches routes in declaration
+# order, so a route with a more-specific literal path that comes AFTER a
+# parameterised `/{video_id}/...` route will be shadowed in production.
+#
+# The test in TestClient currently passes either way (Starlette's path
+# resolution prefers literal-prefix routes over parameterised ones at
+# lookup time, even when declared later), but production uvicorn behaviour
+# differs — see doc/Blockers.md for the postmortem.
+
+def test_upload_bulk_route_registered_before_transcribe_route():
+    """`/upload-bulk/{section_id}` must be declared before
+    `/{video_id}/transcribe` to avoid being shadowed in production."""
+    import app.routers.videos as videos_mod
+    paths = [r.path for r in videos_mod.router.routes]
+    bulk_idx = paths.index("/api/videos/upload-bulk/{section_id}")
+    transcribe_idx = paths.index("/api/videos/{video_id}/transcribe")
+    assert bulk_idx < transcribe_idx, (
+        f"Route shadowing bug: /upload-bulk/{{section_id}} (index {bulk_idx}) "
+        f"must be declared BEFORE /{{video_id}}/transcribe (index {transcribe_idx}). "
+        f"Otherwise POST /api/videos/upload-bulk/<id> matches "
+        f"/{{video_id}}/transcribe with video_id='upload-bulk' and returns 404."
+    )
+
+
+def test_upload_route_registered_before_transcribe_route():
+    """Same shadowing concern for the single-file upload route."""
+    import app.routers.videos as videos_mod
+    paths = [r.path for r in videos_mod.router.routes]
+    upload_idx = paths.index("/api/videos/upload/{section_id}")
+    transcribe_idx = paths.index("/api/videos/{video_id}/transcribe")
+    assert upload_idx < transcribe_idx, (
+        f"Route shadowing bug: /upload/{{section_id}} (index {upload_idx}) "
+        f"must be declared BEFORE /{{video_id}}/transcribe (index {transcribe_idx})."
+    )

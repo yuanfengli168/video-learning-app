@@ -121,6 +121,121 @@ async def upload_video(
     return {"video_id": video_id, "status": "queued", "auto_process": True}
 
 
+@router.post("/upload-bulk/{section_id}")
+async def upload_bulk_videos(
+    section_id: str,
+    files: list[UploadFile],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Upload multiple videos at once and queue auto-processing for each.
+
+    Per-file 2 GB cap — files that exceed it are skipped with a warning;
+    other files in the batch continue processing. The response lists
+    every file's outcome so the UI can show per-file status.
+
+    MVP2.0 #3: multi-file / non-blocking upload.
+
+    NOTE on route ordering: this route is intentionally registered
+    BEFORE `/{video_id}/transcribe` below. FastAPI matches routes in
+    declaration order — if this came after `/{video_id}/transcribe`,
+    a request to `/upload-bulk/<section_id>` would be shadowed by
+    `/{video_id}/transcribe` with video_id="upload-bulk" and 404.
+    See doc/Blockers.md for the postmortem.
+    """
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    course = db.get(Course, section.course_id)
+    if not course or course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your course")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    results: list[dict[str, Any]] = []
+    queued = 0
+    skipped = 0
+
+    for upload_file in files:
+        filename = upload_file.filename or ""
+        ext = Path(filename).suffix.lower()
+
+        if ext not in ALLOWED_EXTENSIONS:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": f"File type '{ext}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+            })
+            skipped += 1
+            continue
+
+        video_id = str(uuid.uuid4())
+        saved_filename = f"{video_id}{ext}"
+        file_path = settings.upload_path / saved_filename
+
+        try:
+            with open(file_path, "wb") as buf:
+                shutil.copyfileobj(upload_file.file, buf)
+        except Exception as exc:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": f"Failed to save file: {exc}",
+            })
+            skipped += 1
+            continue
+
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_FILE_SIZE:
+            os.remove(file_path)
+            gb = file_size / (1024 ** 3)
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": f"File too large ({gb:.1f} GB). Max: {MAX_FILE_SIZE // (1024 ** 3)} GB",
+            })
+            skipped += 1
+            continue
+
+        video = Video(
+            id=video_id,
+            title=Path(filename).stem,
+            filename=filename,
+            file_path=str(file_path),
+            file_size=file_size,
+            section_id=section_id,
+            status="queued",
+        )
+        transcribe_job = start_job(
+            video_id,
+            "transcribe",
+            total=100,
+            message="Queued for auto-processing (transcribe → generate)...",
+        )
+        video.last_transcribe_job = serialize_job(transcribe_job)
+        db.add(video)
+        db.commit()
+
+        background_tasks.add_task(_run_auto_pipeline, video_id, "base")
+
+        results.append({
+            "filename": filename,
+            "video_id": video_id,
+            "status": "queued",
+        })
+        queued += 1
+
+    return {
+        "results": results,
+        "total": len(files),
+        "queued": queued,
+        "skipped": skipped,
+    }
+
+
 @router.post("/{video_id}/transcribe", status_code=202)
 async def transcribe(
     video_id: str,
@@ -347,115 +462,6 @@ def _run_auto_pipeline(video_id: str, model_name: str = "base") -> None:
     # load time while still sharing the implementation cleanly.
     from app.routers.generation import _run_generate_job
     _run_generate_job(video_id)
-
-
-@router.post("/upload-bulk/{section_id}")
-async def upload_bulk_videos(
-    section_id: str,
-    files: list[UploadFile],
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
-) -> dict[str, Any]:
-    """Upload multiple videos at once and queue auto-processing for each.
-
-    Per-file 2 GB cap — files that exceed it are skipped with a warning;
-    other files in the batch continue processing. The response lists
-    every file's outcome so the UI can show per-file status.
-
-    MVP2.0 #3: multi-file / non-blocking upload.
-    """
-    section = db.get(Section, section_id)
-    if not section:
-        raise HTTPException(status_code=404, detail="Section not found")
-
-    course = db.get(Course, section.course_id)
-    if not course or course.user_id != user.get("uid", ""):
-        raise HTTPException(status_code=403, detail="Not your course")
-
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided")
-
-    results: list[dict[str, Any]] = []
-    queued = 0
-    skipped = 0
-
-    for upload_file in files:
-        filename = upload_file.filename or ""
-        ext = Path(filename).suffix.lower()
-
-        if ext not in ALLOWED_EXTENSIONS:
-            results.append({
-                "filename": filename,
-                "status": "skipped",
-                "error": f"File type '{ext}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
-            })
-            skipped += 1
-            continue
-
-        video_id = str(uuid.uuid4())
-        saved_filename = f"{video_id}{ext}"
-        file_path = settings.upload_path / saved_filename
-
-        try:
-            with open(file_path, "wb") as buf:
-                shutil.copyfileobj(upload_file.file, buf)
-        except Exception as exc:
-            results.append({
-                "filename": filename,
-                "status": "skipped",
-                "error": f"Failed to save file: {exc}",
-            })
-            skipped += 1
-            continue
-
-        file_size = os.path.getsize(file_path)
-        if file_size > MAX_FILE_SIZE:
-            os.remove(file_path)
-            gb = file_size / (1024 ** 3)
-            results.append({
-                "filename": filename,
-                "status": "skipped",
-                "error": f"File too large ({gb:.1f} GB). Max: {MAX_FILE_SIZE // (1024 ** 3)} GB",
-            })
-            skipped += 1
-            continue
-
-        video = Video(
-            id=video_id,
-            title=Path(filename).stem,
-            filename=filename,
-            file_path=str(file_path),
-            file_size=file_size,
-            section_id=section_id,
-            status="queued",
-        )
-        transcribe_job = start_job(
-            video_id,
-            "transcribe",
-            total=100,
-            message="Queued for auto-processing (transcribe \u2192 generate)...",
-        )
-        video.last_transcribe_job = serialize_job(transcribe_job)
-        db.add(video)
-        db.commit()
-
-        background_tasks.add_task(_run_auto_pipeline, video_id, "base")
-
-        results.append({
-            "filename": filename,
-            "video_id": video_id,
-            "status": "queued",
-        })
-        queued += 1
-
-    return {
-        "results": results,
-        "total": len(files),
-        "queued": queued,
-        "skipped": skipped,
-    }
-
 
 @router.get("/{video_id}/status")
 async def get_video_status(

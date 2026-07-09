@@ -83,3 +83,39 @@ Firebase Auth popup mode also creates a hidden iframe at `firebaseapp.com/__/aut
 **Why so many incorrect intermediate fixes:**
 The real errors (`window.opener is null`, `ERR_BLOCKED_BY_RESPONSE`) only appear in the *popup window's* DevTools console — not on the parent page. The parent page only sees `auth/popup-closed-by-user`, which looks like a user action. The wrong hypothesis ("authorized domain missing", "needs signInWithPopup directly") sent the investigation in circles.
 
+---
+
+### ✅ RESOLVED [july 9 2026] — Bulk upload returned 404 "Not Found" from the course page
+
+**Symptom:** User selected 3 video files on `/course/<id>` and clicked upload. The page alerted "Bulk upload failed: Not Found". The browser Network tab showed `POST /api/videos/upload-bulk/<real-section-id>` → `404 {"detail":"Not Found"}` with no server-side log of any handler running.
+
+**Root cause: FastAPI route shadowing.**
+
+In `app/routers/videos.py` the routes were declared in this order:
+1. `POST /api/videos/upload/{section_id}` (line 45) ✓ matches single upload
+2. `POST /api/videos/{video_id}/transcribe` (line 124) ✗ shadows #3
+3. `POST /api/videos/upload-bulk/{section_id}` (line 352) ✗ never reached
+
+FastAPI matches routes in declaration order. When the user POSTed to `/api/videos/upload-bulk/6d7...`, FastAPI matched `POST /{video_id}/transcribe` first with `video_id="upload-bulk"`. The transcribe handler then called `db.get(Video, "upload-bulk")`, found nothing, and raised `HTTPException(404, "Video not found")` — the "Not Found" the user saw.
+
+Single upload worked only because `POST /upload/{section_id}` was declared BEFORE `POST /{video_id}/transcribe`. The bulk route was added later (in a new `bulk upload` part A commit) and was added AFTER the transcribe route in the file, so it landed after the shadowing line and was invisible to the router.
+
+**Why the unit tests didn't catch it:**
+- All 6 existing bulk tests use `TestClient` and pass with the old route order.
+- `TestClient` (Starlette's path lookup) appears to prefer literal-prefix routes over parameterised ones even when declared later, so `POST /api/videos/upload-bulk/<id>` matched the bulk handler in tests but not in production uvicorn.
+- The bug was a **production-only** behaviour that TestClient did not reproduce.
+
+**Actual fix:** Move the `POST /upload-bulk/{section_id}` route declaration to be **before** `POST /{video_id}/transcribe`. After the move, both production uvicorn and TestClient route the request to the bulk handler correctly.
+
+Verified with `curl -X POST http://localhost:8000/api/videos/upload-bulk/<real-section-id> -F files=@file.mp4`:
+- Before fix: `{"detail":"Not Found"}` (route shadowed)
+- After fix: `{"detail":"Not authenticated. Provide a Bearer token."}` (route resolved → auth check) ✓
+
+**Regression guard:** Added two structural tests in `tests/test_videos.py`:
+- `test_upload_bulk_route_registered_before_transcribe_route` — asserts the route order
+- `test_upload_route_registered_before_transcribe_route` — same for the single-upload route
+
+These tests fail loudly if anyone reorders the routes back to a shadowing position. They don't test the *behaviour* (which TestClient already covers), they test the *structure* (the only thing that actually broke in production).
+
+**Lesson:** When adding a new route to a file that already has a `/{param}/...` route, declare the new route BEFORE the parameterised one. Add a structural test that asserts the order, because behavioural tests in TestClient won't catch the regression.
+
