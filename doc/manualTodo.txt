@@ -1,0 +1,11 @@
+[jul092026] 
+1. smart, always all not working properly, need a stop, like not move at all thing, only
+stop at the first line selected
+2. looks like the prompt for glm5.2 for longer video have less mindmap nodes, need to manually make sure
+    - example that in 2 miinutes there are 4 but in 12minte (first 2minute are same) then less nodes
+
+3. when logged out session expire still can see video but can't find anything like generated summary
+
+4. for the auto download, it v8 will record from the first until the last and called the last still usefull.
+4.1, but need a separate to just auto re restart when 2nd or new loaded. you understand?
+4.2: can we add number in front of the video with 2. ..... for filename?
