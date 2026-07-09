@@ -4,13 +4,13 @@
 
 | # | Title | Status for MVP2 | Notes |
 |---|---|---|---|
-| 1 | **Auto-transcribe + auto-generate on upload** | ✅ In, top priority | Chains `upload → transcribe → generate` |
+| 1 | **Auto-transcribe + auto-generate on upload** | ✅ Done + pushed (`7e70fe3`, `b4d612f`) | Chains `upload → transcribe → generate` as a FastAPI BackgroundTask; `status='queued'` is set at upload so the UI can poll `/status` immediately |
 | 2 | **Single "top-anchor" transcript follow mode** | ✅ Done + pushed (`05525ee`) | Top-anchor is the default; smart/always deferred to MVP3 → see [#18](#18-smartalways-transcript-modes) |
-| 3 | **Multi-file / non-blocking upload w/ 2 GB per-file cap** | ✅ In | Keep error/rate-limit UI; per-file ceiling; partial success |
-| 4 | **Filename numbering (2. …, 3. …) on download** | ✅ Done | — |
+| 3 | **Multi-file / non-blocking upload w/ 2 GB per-file cap** | ✅ Done + pushed (`7e70fe3`, `b4d612f`) | Per-file 2 GB cap with partial success; UI alerts queued vs skipped counts |
+| 4 | **Video sort by leading filename number on course page** | ✅ Done + pushed (`dd35bc1`) | Client-side sort, default asc, per-section `↑ asc / ↓ desc` button, choice persisted in localStorage; unnumbered videos sort last in asc / first in desc |
 | 5 | **YouTube / URL downloader (yt-dlp)** | ❌ Removed from MVP2 | — |
 | 6 | **Default output language for Chinese (S vs T)** | ✅ In, but in a later wave | Tied to #9; not blocking |
-| 7 | **Session-expiry redirect on protected video pages** | ✅ Implementation + tests done; **awaiting user verification** before push | One of the small UX items |
+| 7 | **Session-expiry redirect on protected video pages** | ✅ Done + pushed (`814a98a`, `2b40fc9`, `67d980b`) | One of the small UX items |
 | 8 | **Persisted "Generate Materials" state on re-login** | ✅ Done | — |
 | 9 | **Prompt tuning: stable mindmap node count for long videos** | ✅ In, but **first commit = data-gathering** (repro the issue, count nodes/min across video lengths) before any prompt change | Assumption may be right but unverified |
 | 10 | **Alembic migrations** (PostgreSQL part deferred) | ✅ Alembic in MVP2.0; PostgreSQL → MVP3 | Alembic = schema-versioning safety net we need before any #1-scale changes |
@@ -50,7 +50,9 @@
   - **rejected — A (top banner):** would push the page layout down on arrival; overkill for a non-actionable info ("you need to sign in" is the action, the banner isn't).
   - **rejected — C (inline next to sign-in card):** redundant with the existing sign-in affordance; user has to look at a specific spot to see the message.
 
-### Status log (2026-07-09)
+### Status log
+
+> **Snapshot from earlier in the day (2026-07-09) — kept for commit-hash traceability.** The current status of every item is in the **Milestones** table at the top of this document. If you're reading this section for "is it done?", look at Milestones, not here.
 
 - **#2 — Single "top-anchor" transcript follow mode: implementation + tests done, awaiting user verification.**
   - Branch: `MVP2.0` (not yet pushed; user wants to review the diff before push)
@@ -67,18 +69,18 @@
     - `2b40fc9` — *part B, tests* — `tests/test_session_expiry_middleware.py` (26 tests, 100% coverage on `app/middleware_session.py`).
     - `814a98a` — *part A, implementation* — new `app/middleware_session.py`; `app/main.py` mount; `app/templates/base.html` toast trigger + `showToast` move; `app/templates/video.html` local `showToast` removal.
   - Test results: 319/319 passing; project overall coverage 87% (unchanged from baseline; new file at 100%).
-| **MVP2.0.0a — Transcript follow rewrite** (small) | #2 ✅ done (awaiting verification) | JS-only; sibling of MVP2.0.0 |
   - Verified behaviors: protected SSR routes redirect on bad cookie; anonymous visits stay put; `/api/*` keeps 401 JSON; `/login`, `/static/*`, `/api/auth/session` always reachable; 302 carries CSP + X-Frame-Options + X-Content-Type-Options; toast fires once and self-clears via `history.replaceState`.
 
 
 ### Suggested MVP2.0 phasing
 
-| Wave | Items | Theme |
-|---|---|---|
-| **MVP2.0.0 — UX polish** (small, low-risk) | #7 ✅ done (awaiting verification) | 1 small item, ~half day |
-| **MVP2.0.1 — Auto-pipeline** | #1, #2, #3, #9 (repro only), #10 (Alembic) | The bulk of MVP2; biggest UX win is #1 |
-| **MVP2.0.2 — i18n + prompt tuning** | #6, #9 (now with the data we gathered) | Polishes the auto-pipeline |
-| **MVP2.0.3 — Queue + payments** | #11, #16 (low-priority) | Infrastructure for scale + monetization |
+| Wave | Items | Theme | Status (2026-07-09) |
+|---|---|---|---|
+| **MVP2.0.0 — UX polish** (small, low-risk) | #7 | ~half day | ✅ **Done** (3 commits, 26 tests) |
+| **MVP2.0.0a — Transcript follow rewrite** (small) | #2 | JS-only; sibling of MVP2.0.0 | ✅ **Done** (3 commits, 17 .mjs tests + regression guards) |
+| **MVP2.0.1 — Auto-pipeline** *(in progress)* | #1, #2, #3 ✅; #9, #10 still open | Biggest UX win is #1 | **Wave 1 done** (auto-pipeline + bulk upload). #9 (repro) and #10 (Alembic) still to land. |
+| **MVP2.0.2 — i18n + prompt tuning** | #6, #9 (now with the data we gathered) | Polishes the auto-pipeline | ⏳ Blocked on #9 repro |
+| **MVP2.0.3 — Queue + payments** | #11, #16 (low-priority) | Infrastructure for scale + monetization | ⏳ Future |
 
 ## questions
 
@@ -94,7 +96,47 @@
 
 **A.** Unknown. The user's observation is plausible (4 nodes @ 2 min, <4 @ 12 min for the same first 2 min) but we have three competing hypotheses (fixed-total-N, token-budget truncation, novelty-skipping), and the right fix depends on which one is true. **Resolution:** First commit is a **repro / data-gathering** task — generate mindmaps for 2, 5, 12, 30 min versions of the same source and count nodes per minute — *before* touching the prompt.
 
----
+## Milestones:
+
+### 2026-07-09 — MVP2.0.0a + MVP2.0.1 wave 1 closed out
+
+End-of-day status, all work on branch `MVP2.0` (10 commits ahead of `main`, all pushed).
+
+| Item | Status | Commit(s) | Verified? |
+|---|---|---|---|
+| #2 — Single "top-anchor" transcript follow mode | ✅ Done + pushed | `e5ca10f`, `f55c6c6`, `05525ee` | ✅ User verified live |
+| #7 — Session-expiry redirect on protected SSR routes | ✅ Done + pushed | `814a98a`, `2b40fc9`, `67d980b` | ✅ User verified live |
+| #1 — Auto-transcribe + auto-generate on upload | ✅ Done + pushed | `7e70fe3`, `b4d612f` | ✅ User verified live (4-video bulk run completed) |
+| #3 — Multi-file / non-blocking upload w/ 2 GB cap | ✅ Done + pushed | `7e70fe3`, `b4d612f` | ✅ User verified live (4 files → 4 ready) |
+| **#4 — Filename numbering (natural sort)** *(new today)* | ✅ Done + pushed | `dd35bc1` | ✅ Per user request — default asc, sort button on each section |
+| **Bulk-upload route shadowing fix** *(discovered live today)* | ✅ Done + pushed | `dbeed50` | ✅ Verified via curl + user re-test |
+| **LLM JSON parser hardening** *(discovered live today)* | ✅ Done + pushed | `e8de51b` | ✅ Verified by re-running failed video 1 → all 4 ready |
+
+**Test results:** 347/347 passing, **87% overall coverage**.
+- New today: +17 tests (was 330, +2 route-shadowing regression guards, +5 LLM parser strategies, +10 natural_sort_key).
+- 100% coverage on `app/models/video.py`, `app/services/llm.py`, `app/middleware_session.py`, `app/services/markdown.py`, all `app/auth/*`, all `app/middleware*`, all `app/services/__init__`.
+- Lower-coverage modules are background-worker code paths (`routers/generation.py` 47%, `routers/videos.py` 71%) — deliberately integration-tested, not unit-tested, because they exercise real Whisper + Ollama.
+
+**Postmortems added to `doc/Blockers.md`:**
+- ✅ Transcript scroll bug (`offsetTop` vs `getBoundingClientRect`) — committed 2026-07-09
+- ✅ Bulk-upload route shadowing (FastAPI route order vs `/{param}/...`) — committed 2026-07-09
+
+**Design doc updates (this commit):**
+- Row #1: "✅ In, top priority" → "✅ Done + pushed" — committed 2026-07-09
+- Row #2: confirmed done + pushed (`05525ee`) — already updated previously
+- Row #3: "✅ In" → "✅ Done + pushed" — committed 2026-07-09
+- Row #4 (sort) — added today
+- Row #7: confirmed done + pushed — already updated previously
+- §4 AI Pipeline in `doc/design.md` — pending (still describes manual click-to-transcribe)
+- `doc/MVP1.0-PostRelease.md` row #6 — pending (still says `status='pending'`, now `'queued'`)
+
+### Open items for tomorrow
+
+- Doc cleanup pass (the 3 doc items above)
+- #9 — Mindmap node count for long videos (repro / data-gathering commit first)
+- #10 — Alembic migrations (schema-versioning safety net)
+- #11 — Celery + Redis task queue (parallelism + restart-safety for transcribe jobs)
+- #6 — Default output language for Chinese (tied to #9)
 
 ## Appendix A — Smart/Always modes: deferred design questions
 
