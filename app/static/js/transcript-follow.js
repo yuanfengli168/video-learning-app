@@ -134,8 +134,15 @@
      * the rAF-throttled scroll schedule. No scroll if the active
      * line hasn't actually changed (common — timeupdate fires
      * 4 Hz, segments last 5+ seconds).
+     *
+     * If `forceScroll` is true, schedule a scroll even when the line
+     * hasn't changed. Used by the mouseleave handler: while the
+     * mouse was over the panel, we suppressed scrolls; when the
+     * mouse leaves, we need to snap the panel back to the current
+     * active line even if it's the same one we showed before the
+     * hover.
      */
-    function highlightLine(idx) {
+    function highlightLine(idx, forceScroll) {
         if (!container) return;
         const lines = container.querySelectorAll('.transcript-line');
         if (lastActiveIndex >= 0 && lines[lastActiveIndex]) {
@@ -144,7 +151,7 @@
         if (idx >= 0 && lines[idx]) {
             lines[idx].classList.add('is-follow-active');
         }
-        if (idx !== lastActiveIndex) {
+        if (idx !== lastActiveIndex || forceScroll) {
             scheduleScroll(idx);
         }
         lastActiveIndex = idx;
@@ -155,12 +162,16 @@
      * two events differ in how often they fire (timeupdate ~4 Hz
      * on natural playback; seeked once per user seek), but they
      * ultimately want the same answer: which line is active now?
+     *
+     * `forceScroll` is true when called from the mouseleave handler:
+     * while hovered, scrolls were suppressed; we need to snap back
+     * even if the active line hasn't changed.
      */
-    function updateActiveLine() {
+    function updateActiveLine(forceScroll) {
         if (!videoEl || !getSegments) return;
         const segs = getSegments();
         if (!segs) return;
-        highlightLine(findActiveSegment(videoEl.currentTime, segs));
+        highlightLine(findActiveSegment(videoEl.currentTime, segs), forceScroll);
     }
 
     function init(opts) {
@@ -187,7 +198,10 @@
         onMouseEnter = function () { isHovered = true; };
         onMouseLeave = function () {
             isHovered = false;
-            updateActiveLine();
+            // forceScroll=true so the panel snaps to the current
+            // active line even if it's the same line that was shown
+            // before the hover (the prior update was scroll-suppressed).
+            updateActiveLine(true);
         };
         container.addEventListener('mouseenter', onMouseEnter);
         container.addEventListener('mouseleave', onMouseLeave);

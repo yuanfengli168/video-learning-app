@@ -31,14 +31,25 @@ def test_unknown_route_returns_404(client: TestClient):
 def test_static_serves_transcript_follow_js(client: TestClient):
     """The static mount must serve the transcript-follow JS file with 200
     and a non-empty body. Guards against accidental removal of the
-    `app.mount('/static', ...)` line in app/main.py."""
+    `app.mount('/static', ...)` line in app/main.py.
+
+    MVP2.0 item #2: the file is the SINGLE-MODE variant — no
+    shouldScroll, no setMode. The asserts below lock the new contract.
+    """
     response = client.get("/static/js/transcript-follow.js")
     assert response.status_code == 200
     body = response.text
     assert "window.TranscriptFollow" in body
     assert "findActiveSegment" in body
-    assert "shouldScroll" in body
-    assert len(body) > 200  # actual file is ~3.5 KB
+    # The removed smart/always API must NOT be in the served file.
+    assert "shouldScroll" not in body, (
+        "transcript-follow.js should NOT export shouldScroll — the "
+        "smart/always experiment is gone in MVP2.0."
+    )
+    assert "setMode" not in body, (
+        "transcript-follow.js should NOT export setMode — single mode only."
+    )
+    assert len(body) > 200  # actual file is ~5 KB
 
 
 def test_static_serves_transcript_follow_css(client: TestClient):

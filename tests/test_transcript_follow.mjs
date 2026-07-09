@@ -1,10 +1,23 @@
 // tests/test_transcript_follow.mjs
 //
-// Unit tests for the pure helpers exposed by app/static/js/transcript-follow.js.
-// We load the production source in a sandbox with a fake `window` and
-// assert against `window.TranscriptFollow._internals`. This way the
-// production file is the single source of truth — if a refactor changes
-// the helper semantics, the test fails here too.
+// Unit tests for app/static/js/transcript-follow.js (MVP2.0 item #2).
+//
+// What we test:
+//   1. Pure helpers on _internals (findActiveSegment).
+//   2. Source-level regression: the JS must NOT use scrollIntoView
+//      (it would scroll the nearest scrollable ancestor — the
+//      browser window on long pages — pushing the video out of
+//      view; see commit 3c2c895 for the original bug).
+//   3. Integration behavior via a tiny DOM shim:
+//      - On timeupdate, the active line gets .is-follow-active.
+//      - On seeked, the highlight updates immediately (no play needed).
+//      - On mouseenter, auto-scroll is suspended (no scrollTop change).
+//      - On mouseleave, auto-scroll resumes (scrollTop updates to
+//        match the current active line).
+//      - rAF-throttled: many timeupdate events in one frame collapse
+//        into one scroll.
+//      - destroy() removes all listeners (re-init on same elements
+//        doesn't double-fire).
 //
 // Run with: `node --test tests/test_transcript_follow.mjs`
 // or via the pytest wrapper in tests/test_transcript_follow.py.
@@ -21,20 +34,143 @@ const SRC = readFileSync(
     'utf8'
 );
 
-// Sandbox: run the IIFE with a fake window. The IIFE assigns
-// `window.TranscriptFollow = { init, setMode, getMode, destroy, _internals }`.
-const window = {};
-const fn = new Function('window', SRC);
-fn(window);
-const T = window.TranscriptFollow._internals;
+
+// ── Tiny DOM shim ───────────────────────────────────────────────────────────
+//
+// jsdom is overkill for what we need: a fake window with a `requestAnimationFrame`
+// that we control manually. We mock just enough of the DOM for the IIFE to
+// install `window.TranscriptFollow`. The init() tests below create the elements
+// they need and exercise the event handlers directly.
+
+
+class FakeEventTarget {
+    constructor() {
+        this._listeners = {};
+    }
+    addEventListener(type, fn) {
+        (this._listeners[type] = this._listeners[type] || []).push(fn);
+    }
+    removeEventListener(type, fn) {
+        const arr = this._listeners[type] || [];
+        const i = arr.indexOf(fn);
+        if (i >= 0) arr.splice(i, 1);
+    }
+    dispatch(type, evt = {}) {
+        for (const fn of (this._listeners[type] || [])) fn(evt);
+    }
+}
+
+
+class FakeContainer extends FakeEventTarget {
+    constructor() {
+        super();
+        this.scrollTop = 0;
+        this.scrollHeight = 1000;       // arbitrary — controls the clamp
+        this.clientHeight = 200;        // arbitrary — controls the clamp
+        this._lines = [];               // FakeLine[]
+    }
+    setLines(lines) { this._lines = lines; }
+    querySelectorAll(sel) {
+        if (sel === '.transcript-line') return this._lines;
+        return [];
+    }
+}
+
+
+class FakeLine {
+    constructor(offsetTop) {
+        this.offsetTop = offsetTop;
+        this.offsetHeight = 20;        // arbitrary line height
+        this.classList = {
+            _set: new Set(),
+            add(c) { this._set.add(c); },
+            remove(c) { this._set.delete(c); },
+            contains(c) { return this._set.has(c); },
+        };
+    }
+}
+
+
+class FakeVideo extends FakeEventTarget {
+    constructor() {
+        super();
+        this.currentTime = 0;
+    }
+    setCurrentTime(t) { this.currentTime = t; }
+}
+
+
+function makeWindow() {
+    // Holds the rAF queue and the window.TranscriptFollow handle.
+    //
+    // The IIFE source uses `requestAnimationFrame(...)` as a free
+    // variable, which in a browser resolves on `window` (== global).
+    // In Node, we need to put our shim on BOTH `globalThis` (so the
+    // IIFE sees it) and the returned win object (so we can drive
+    // the queue from tests).
+    const win = {
+        _rafQueue: [],
+        requestAnimationFrame: (cb) => { win._rafQueue.push(cb); return win._rafQueue.length; },
+        cancelAnimationFrame: (id) => { delete win._rafQueue[id - 1]; },
+    };
+    globalThis.requestAnimationFrame = win.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = win.cancelAnimationFrame;
+    return win;
+}
+
+
+function cleanupGlobalThis() {
+    // Remove the rAF shims so the next test installs a fresh queue.
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+}
+
+
+function runRafs(win) {
+    // Drain the queue. Each rAF callback may schedule another rAF, so we
+    // iterate until the queue stops growing. In practice 1-2 passes is enough.
+    //
+    // We snapshot the current queue length and only run those entries.
+    // A callback that calls rAF pushes a new entry at the new length,
+    // which is then drained by the next outer pass. This way an
+    // undefined slot left by cancelAnimationFrame (which delete[]s
+    // an index) never gets visited.
+    while (win._rafQueue.length > 0) {
+        const snapshot = win._rafQueue.slice();
+        win._rafQueue.length = 0;
+        for (const cb of snapshot) {
+            if (typeof cb === 'function') cb();
+        }
+        // Loop again if any callback scheduled a new rAF (now in _rafQueue).
+    }
+}
+
+
+function loadTranscriptFollow() {
+    const win = makeWindow();
+    const fn = new Function('window', SRC);
+    fn(win);
+    // We intentionally leave the rAF shims on globalThis so the
+    // IIFE's free `requestAnimationFrame` reference resolves.
+    // Tests that loadTranscriptFollow again will overwrite the
+    // shim with a new queue.
+    return { win, TF: win.TranscriptFollow };
+}
+
+
+// ── 1. Pure helper tests ────────────────────────────────────────────────────
 
 test('findActiveSegment: returns -1 for empty input', () => {
+    const { TF } = loadTranscriptFollow();
+    const T = TF._internals;
     assert.equal(T.findActiveSegment(0, []), -1);
     assert.equal(T.findActiveSegment(5, null), -1);
     assert.equal(T.findActiveSegment(5, undefined), -1);
 });
 
 test('findActiveSegment: returns -1 when no segment contains the time', () => {
+    const { TF } = loadTranscriptFollow();
+    const T = TF._internals;
     const segs = [{ start: 0, end: 1 }, { start: 2, end: 3 }];
     assert.equal(T.findActiveSegment(1.5, segs), -1);
     assert.equal(T.findActiveSegment(-1, segs), -1);
@@ -42,6 +178,8 @@ test('findActiveSegment: returns -1 when no segment contains the time', () => {
 });
 
 test('findActiveSegment: returns the correct index for in-range time', () => {
+    const { TF } = loadTranscriptFollow();
+    const T = TF._internals;
     const segs = [
         { start: 0, end: 1 },
         { start: 1, end: 2 },
@@ -56,132 +194,24 @@ test('findActiveSegment: returns the correct index for in-range time', () => {
 test('findActiveSegment: half-open interval — segment.end is exclusive', () => {
     // Critical for not double-highlighting: at t=1.0, segment 1 starts
     // (not segment 0 which ends at 1.0).
+    const { TF } = loadTranscriptFollow();
+    const T = TF._internals;
     const segs = [{ start: 0, end: 1.0 }, { start: 1.0, end: 2.0 }];
     assert.equal(T.findActiveSegment(1.0, segs), 1);
     assert.equal(T.findActiveSegment(0.999, segs), 0);
 });
 
-test('shouldScroll: "always" mode always returns true', () => {
-    const cr = { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 };
-    assert.equal(T.shouldScroll({ top: 50, bottom: 60, height: 10 }, cr, 'always'), true);
-    assert.equal(T.shouldScroll({ top: 50, bottom: 50, height: 0 }, cr, 'always'), true);
-});
 
-test('shouldScroll: "smart" mode returns false when line is in the safe zone', () => {
-    // container height 100, default buffer 0.2 → safe zone is [20, 80]
-    const cr = { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 };
-    assert.equal(T.shouldScroll({ top: 30, bottom: 40, height: 10 }, cr, 'smart'), false);
-    assert.equal(T.shouldScroll({ top: 60, bottom: 70, height: 10 }, cr, 'smart'), false);
-    // At the very edge of the safe zone (top=20 or bottom=80), still in
-    // (the comparison is strict < and >).
-    assert.equal(T.shouldScroll({ top: 20, bottom: 30, height: 10 }, cr, 'smart'), false);
-    assert.equal(T.shouldScroll({ top: 70, bottom: 80, height: 10 }, cr, 'smart'), false);
-});
+// ── 2. Source-level regression tests ────────────────────────────────────────
 
-test('shouldScroll: "smart" mode returns true when line is above the safe zone', () => {
-    // Real DOMRect (from getBoundingClientRect) has top/bottom/left/right/width/height.
-    const cr = { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 };
-    assert.equal(T.shouldScroll({ top: 5, bottom: 15, height: 10 }, cr, 'smart'), true);
-    assert.equal(T.shouldScroll({ top: 0, bottom: 10, height: 10 }, cr, 'smart'), true);
-});
-
-test('shouldScroll: "smart" mode returns true when line is below the safe zone', () => {
-    const cr = { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 };
-    assert.equal(T.shouldScroll({ top: 85, bottom: 95, height: 10 }, cr, 'smart'), true);
-    assert.equal(T.shouldScroll({ top: 90, bottom: 100, height: 10 }, cr, 'smart'), true);
-});
-
-test('shouldScroll: respects custom bufferFraction', () => {
-    // buffer=0.3 → safe zone is the inner 40% ([30, 70])
-    const cr = { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 };
-    // Line at top=35 is INSIDE the safe zone (35 > 30).
-    assert.equal(T.shouldScroll({ top: 35, bottom: 45, height: 10 }, cr, 'smart', 0.3), false);
-    // Line at top=20 is ABOVE the safe zone (20 < 30).
-    assert.equal(T.shouldScroll({ top: 20, bottom: 30, height: 10 }, cr, 'smart', 0.3), true);
-    // Line at top=80 is BELOW the safe zone (80 > 70).
-    assert.equal(T.shouldScroll({ top: 80, bottom: 90, height: 10 }, cr, 'smart', 0.3), true);
-});
-
-test('shouldScroll: buffer >= 0.5 produces an empty or inverted safe zone (always scroll)', () => {
-    // At buffer=0.5 with height=100, safe zone is [50, 50] — a single
-    // point. Any non-zero-height line is at least slightly out of it.
-    // At buffer=1.0, safeTop=100 and safeBottom=0, so the zone is
-    // inverted/empty: every line triggers a scroll. We never use these
-    // values in production, but the contract should be explicit.
-    const cr = { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100 };
-    assert.equal(T.shouldScroll({ top: 50, bottom: 55, height: 5 }, cr, 'smart', 0.5), true);
-    assert.equal(T.shouldScroll({ top: 49, bottom: 50, height: 1 }, cr, 'smart', 1.0), true);
-});
-
-test('public surface: window.TranscriptFollow exposes the documented API', () => {
-    // The dropdown in video.html calls these by name; a rename here
-    // would silently break the integration. Lock the contract.
-    assert.equal(typeof window.TranscriptFollow.init, 'function');
-    assert.equal(typeof window.TranscriptFollow.setMode, 'function');
-    assert.equal(typeof window.TranscriptFollow.getMode, 'function');
-    assert.equal(typeof window.TranscriptFollow.destroy, 'function');
-    assert.equal(typeof window.TranscriptFollow._internals, 'object');
-});
-
-test('storageKey: lowercases the email', () => {
-    assert.equal(T.storageKey('Alice@Example.COM'), 'transcript.followMode.alice@example.com');
-    assert.equal(T.storageKey('bob@x.io'), 'transcript.followMode.bob@x.io');
-    assert.equal(T.storageKey(''), 'transcript.followMode.anon');
-    assert.equal(T.storageKey(null), 'transcript.followMode.anon');
-    assert.equal(T.storageKey(undefined), 'transcript.followMode.anon');
-});
-
-test('readPersistedMode/writePersistedMode: round-trips through localStorage', () => {
-    // The production code reads from window.localStorage. Node 18's
-    // built-in localStorage is not present, so we attach a tiny shim
-    // for the duration of this test.
-    const hadLocalStorage = typeof globalThis.localStorage !== 'undefined';
-    if (!hadLocalStorage) {
-        const store = new Map();
-        globalThis.localStorage = {
-            getItem: (k) => (store.has(k) ? store.get(k) : null),
-            setItem: (k, v) => store.set(k, String(v)),
-            removeItem: (k) => store.delete(k),
-            clear: () => store.clear(),
-            key: (i) => Array.from(store.keys())[i] || null,
-            get length() { return store.size; },
-        };
-    }
-    const key = T.storageKey('test-roundtrip@example.com');
-    // Clean up any prior state.
-    globalThis.localStorage.removeItem(key);
-
-    // Default when nothing is stored.
-    assert.equal(T.readPersistedMode('test-roundtrip@example.com'), 'smart');
-
-    // Write 'always' and read it back.
-    T.writePersistedMode('test-roundtrip@example.com', 'always');
-    assert.equal(T.readPersistedMode('test-roundtrip@example.com'), 'always');
-
-    // Write 'smart' and read it back.
-    T.writePersistedMode('test-roundtrip@example.com', 'smart');
-    assert.equal(T.readPersistedMode('test-roundtrip@example.com'), 'smart');
-
-    // Garbage in storage is ignored, default 'smart' returned.
-    globalThis.localStorage.setItem(key, 'something-weird');
-    assert.equal(T.readPersistedMode('test-roundtrip@example.com'), 'smart');
-
-    // Clean up.
-    globalThis.localStorage.removeItem(key);
-});
-
-// ── Source-level regression: transcript scroll must be container-only ──
-//
-// Why this exists: scrollIntoView() scrolls the nearest scrollable
-// ancestor, which on a long page is the BROWSER WINDOW — that scrolls
-// the whole page and pushes the video out of view. The fix is to
-// manually set `container.scrollTop` instead. This source-level test
-// fails loudly if anyone re-introduces scrollIntoView in the
-// transcript-follow code, so the regression is caught in CI rather
-// than reported by users.
-test('transcript-follow does NOT use scrollIntoView (it would scroll the window)', () => {
-    // Strip comments so an `// scrollIntoView` mention in a comment
-    // doesn't false-positive the test.
+test('transcript-follow does NOT use scrollIntoView (regression guard)', () => {
+    // scrollIntoView would scroll the nearest scrollable ancestor,
+    // which on long pages is the BROWSER WINDOW. That scrolls the
+    // whole page and pushes the video player out of view. The
+    // fix (commit 3c2c895) is to assign container.scrollTop
+    // directly. If a future change re-introduces scrollIntoView,
+    // this test fails loudly in CI rather than in the user's
+    // browser.
     const codeOnly = SRC
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/\/\/.*$/gm, '');
@@ -192,22 +222,246 @@ test('transcript-follow does NOT use scrollIntoView (it would scroll the window)
         + 'scrolls the nearest scrollable ancestor (the browser window '
         + 'on long pages). This scrolls the whole page and pushes the '
         + 'video player out of view. Use `container.scrollTop = ...` '
-        + 'to scroll ONLY the transcript container. See the '
-        + 'scrollContainerToCenter helper for the correct pattern.'
+        + 'to scroll ONLY the transcript container.'
     );
 });
 
-// The container-scroll helper uses pure DOM arithmetic (no
-// scrollIntoView, no smooth behavior, no browser window scroll). This
-// source-level test confirms the helper is wired up and avoids the
-// banned APIs.
-test('scrollContainerToCenter uses container.scrollTop, not scrollIntoView', () => {
-    // Find the helper function in the source.
-    const m = SRC.match(/function\s+scrollContainerToCenter[\s\S]*?\n\s{4}\}/);
-    assert.ok(m, 'scrollContainerToCenter function must be defined');
-    const helper = m[0];
-    assert.match(helper, /container\.scrollTop\s*=/,
-        'scrollContainerToCenter must assign container.scrollTop');
-    assert.equal(helper.includes('scrollIntoView'), false,
-        'scrollContainerToCenter must not use scrollIntoView');
+test('transcript-follow no longer exposes smart/always modes', () => {
+    // MVP2.0 item #2: the dropdown is gone, the modes are gone. If a
+    // future change resurrects them, the test fails so we know to
+    // reconsider.
+    assert.equal(
+        /['"]smart['"]\s*:\s*['"]smart['"]|['"]always['"]\s*:\s*['"]always['"]|setMode|getMode|storageKey|readPersistedMode|writePersistedMode|shouldScroll/.test(SRC),
+        false,
+        'transcript-follow.js still references the removed smart/always '
+        + 'API. The MVP2.0 contract is a single top-anchor mode with '
+        + 'no dropdown, no localStorage, no per-mode branches.'
+    );
+});
+
+test('transcript-follow listens to seeked (not just timeupdate)', () => {
+    // The highlight must update the instant the user drags the
+    // timeline. timeupdate only fires on natural playback, so without
+    // a seeked handler the highlight lags until the user hits play.
+    assert.match(SRC, /['"]seeked['"]/, 'Must listen to the seeked event');
+    assert.match(SRC, /timeupdate/, 'Must still listen to timeupdate');
+});
+
+test('transcript-follow has hover-to-pause via mouseenter/mouseleave', () => {
+    assert.match(SRC, /['"]mouseenter['"]/, 'Must listen to mouseenter');
+    assert.match(SRC, /['"]mouseleave['"]/, 'Must listen to mouseleave');
+});
+
+test('transcript-follow uses requestAnimationFrame for scroll', () => {
+    // rAF batching: many timeupdate events in one frame collapse to one
+    // scroll. Without rAF the scrollTop assignment would happen on
+    // every timeupdate (~4 Hz) and jitter on rapid changes.
+    assert.match(SRC, /requestAnimationFrame/, 'Must use rAF for scroll batching');
+    assert.match(SRC, /cancelAnimationFrame/, 'Must cancel rAF on destroy');
+});
+
+
+// ── 3. Public surface ───────────────────────────────────────────────────────
+
+test('public surface: window.TranscriptFollow exposes init + destroy only', () => {
+    const { TF } = loadTranscriptFollow();
+    // The contract after MVP2.0 item #2: init, destroy, _internals.
+    // No setMode, no getMode — those are gone.
+    assert.equal(typeof TF.init, 'function');
+    assert.equal(typeof TF.destroy, 'function');
+    assert.equal(typeof TF._internals, 'object');
+    // Specifically: the removed API is GONE.
+    assert.equal(TF.setMode, undefined, 'setMode must be removed (MVP2.0 #2)');
+    assert.equal(TF.getMode, undefined, 'getMode must be removed (MVP2.0 #2)');
+});
+
+test('_internals: only findActiveSegment is exposed', () => {
+    const { TF } = loadTranscriptFollow();
+    const T = TF._internals;
+    assert.equal(typeof T.findActiveSegment, 'function');
+    assert.equal(T.shouldScroll, undefined, 'shouldScroll is gone');
+    assert.equal(T.storageKey, undefined, 'storageKey is gone');
+    assert.equal(T.readPersistedMode, undefined, 'readPersistedMode is gone');
+    assert.equal(T.writePersistedMode, undefined, 'writePersistedMode is gone');
+});
+
+
+// ── 4. Integration: init wires the events; destroy unwires them ─────────────
+
+test('integration: timeupdate highlights the active line', () => {
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    const lines = [new FakeLine(0), new FakeLine(30), new FakeLine(60)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    TF.init({
+        container,
+        video,
+        segmentsProvider: () => [
+            { start: 0, end: 1 },
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+        ],
+    });
+    video.setCurrentTime(1.5);
+    video.dispatch('timeupdate');
+    // Index 1 should be active, index 0 should not.
+    assert.equal(lines[1].classList.contains('is-follow-active'), true);
+    assert.equal(lines[0].classList.contains('is-follow-active'), false);
+    assert.equal(lines[2].classList.contains('is-follow-active'), false);
+    // The scroll should be scheduled (rAF in queue).
+    assert.equal(win._rafQueue.length >= 1, true, 'rAF should be scheduled');
+    runRafs(win);
+    // After rAF fires, scrollTop should reflect line 1's offsetTop.
+    // The scrollToTop function uses offsetTop - 4 (4px gap).
+    assert.equal(container.scrollTop, lines[1].offsetTop - 4);
+});
+
+test('integration: seeked updates the highlight without needing timeupdate', () => {
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    const lines = [new FakeLine(0), new FakeLine(30), new FakeLine(60)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    TF.init({
+        container,
+        video,
+        segmentsProvider: () => [
+            { start: 0, end: 1 },
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+        ],
+    });
+    // Seek to t=2.5 (index 2). No timeupdate dispatched — only seeked.
+    video.setCurrentTime(2.5);
+    video.dispatch('seeked');
+    assert.equal(lines[2].classList.contains('is-follow-active'), true);
+    assert.equal(lines[1].classList.contains('is-follow-active'), false);
+    runRafs(win);
+    assert.equal(container.scrollTop, lines[2].offsetTop - 4);
+});
+
+test('integration: mouseenter pauses auto-scroll; mouseleave resumes it', () => {
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    const lines = [new FakeLine(0), new FakeLine(30), new FakeLine(60)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    TF.init({
+        container,
+        video,
+        segmentsProvider: () => [
+            { start: 0, end: 1 },
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+        ],
+    });
+    // User hovers the panel.
+    container.dispatch('mouseenter');
+    // Move video to line 1 and fire timeupdate.
+    video.setCurrentTime(1.5);
+    video.dispatch('timeupdate');
+    // Highlight class is added (cheap, no scroll).
+    assert.equal(lines[1].classList.contains('is-follow-active'), true);
+    // rAF was scheduled but its callback will short-circuit because
+    // isHovered === true. After running rAFs, scrollTop should NOT
+    // have changed.
+    const scrollBefore = container.scrollTop;
+    runRafs(win);
+    assert.equal(container.scrollTop, scrollBefore,
+        'mouseleave should pause auto-scroll (scrollTop unchanged)');
+
+    // User leaves the panel; auto-scroll should resume and snap to
+    // the current active line.
+    container.dispatch('mouseleave');
+    // mouseleave re-runs updateActiveLine, which schedules a new rAF.
+    runRafs(win);
+    assert.equal(container.scrollTop, lines[1].offsetTop - 4,
+        'mouseleave should resume scrolling and snap to active line');
+});
+
+test('integration: rAF batches rapid timeupdate events into one scroll', () => {
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    const lines = [new FakeLine(0), new FakeLine(30), new FakeLine(60)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    TF.init({
+        container,
+        video,
+        segmentsProvider: () => [
+            { start: 0, end: 1 },
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+        ],
+    });
+    // Fire 5 timeupdate events in the same frame (before any rAF runs).
+    for (let t = 1.0; t <= 1.4; t += 0.1) {
+        video.setCurrentTime(t);
+        video.dispatch('timeupdate');
+    }
+    // Exactly one rAF should be queued (the rest short-circuited).
+    assert.equal(win._rafQueue.length, 1,
+        `Expected 1 rAF queued, got ${win._rafQueue.length}`);
+    // Run it.
+    runRafs(win);
+    // scrollTop should reflect the LATEST line (index 1, offsetTop=30).
+    assert.equal(container.scrollTop, lines[1].offsetTop - 4);
+});
+
+test('integration: destroy() removes all listeners', () => {
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    const lines = [new FakeLine(0), new FakeLine(30), new FakeLine(60)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    TF.init({
+        container,
+        video,
+        segmentsProvider: () => [
+            { start: 0, end: 1 },
+            { start: 1, end: 2 },
+            { start: 2, end: 3 },
+        ],
+    });
+    TF.destroy();
+    // After destroy, timeupdate should not change anything.
+    const linesSnapshot = lines.map(l => l.classList.contains('is-follow-active'));
+    video.setCurrentTime(1.5);
+    video.dispatch('timeupdate');
+    runRafs(win);
+    // No class should have been added.
+    const linesAfter = lines.map(l => l.classList.contains('is-follow-active'));
+    assert.deepEqual(linesAfter, linesSnapshot);
+});
+
+test('integration: re-init on the same elements does not double-fire', () => {
+    // After destroy(), init() should leave the DOM in a clean state.
+    // A re-init on the same container/video must produce only one
+    // active line, not two.
+    const { TF, win } = loadTranscriptFollow();
+    const container = new FakeContainer();
+    const lines = [new FakeLine(0), new FakeLine(30)];
+    container.setLines(lines);
+    const video = new FakeVideo();
+    const segs = () => [{ start: 0, end: 1 }, { start: 1, end: 2 }];
+
+    TF.init({ container, video, segmentsProvider: segs });
+    video.setCurrentTime(1.5);
+    video.dispatch('timeupdate');
+    runRafs(win);
+    // First init: line 1 active.
+    assert.equal(lines[1].classList.contains('is-follow-active'), true);
+    assert.equal(lines[0].classList.contains('is-follow-active'), false);
+
+    // Re-init: same container/video, new time.
+    TF.init({ container, video, segmentsProvider: segs });
+    video.setCurrentTime(0.5);
+    video.dispatch('timeupdate');
+    runRafs(win);
+    // Now line 0 should be active and line 1 should NOT still be active.
+    assert.equal(lines[0].classList.contains('is-follow-active'), true,
+        'Line 0 should be active after re-init');
+    assert.equal(lines[1].classList.contains('is-follow-active'), false,
+        'Line 1 should NOT still be active after re-init (destroy worked)');
 });

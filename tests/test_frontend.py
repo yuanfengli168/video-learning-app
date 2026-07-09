@@ -156,36 +156,40 @@ def test_video_view_loads_transcript_follow_css(client: TestClient):
     assert '/static/css/transcript-follow.css' in response.text
 
 
-def test_video_view_has_follow_dropdown(client: TestClient):
-    """The video page must show the follow-mode dropdown with the two
-    documented options and "Smart" as the default."""
+def test_video_view_does_not_have_follow_dropdown(client: TestClient):
+    """MVP2.0 item #2: the follow-mode dropdown is GONE.
+
+    The transcript now uses a single top-anchor mode with no user-
+    selectable variant. If a dropdown reappears, it must come with
+    a new contract — the assumption that 'one behavior, no modes'
+    holds is what this test guards.
+    """
     with _mock_auth():
         video_id = _create_video(client)
         response = client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
-    assert 'id="transcript-follow-mode"' in response.text
-    # Both options present, smart selected by default.
-    assert '<option value="smart" selected>Smart (default)</option>' in response.text
-    assert '<option value="always">Always scroll</option>' in response.text
+    assert 'id="transcript-follow-mode"' not in response.text
+    assert '<option value="smart"' not in response.text
+    assert '<option value="always"' not in response.text
 
 
-def test_base_template_stamps_user_email_meta_when_authenticated(client: TestClient):
-    """When the user is signed in, base.html must emit <meta name="x-user-email">
-    so the client-side localStorage key can be namespaced per-account."""
+def test_base_template_does_not_stamp_user_email_meta(client: TestClient):
+    """MVP2.0 item #2: the x-user-email meta is GONE.
+
+    It existed only so the transcript-follow component could
+    namespace its localStorage key per-account. The MVP2.0
+    component has no localStorage, so the meta has no consumer.
+    We assert both states (authenticated and anonymous) — the
+    tag must never be emitted, regardless of who is signed in.
+    """
     with _mock_auth():
         response = client.get("/", headers=_auth_headers())
     assert response.status_code == 200
-    assert 'name="x-user-email"' in response.text
-    assert FAKE_USER["email"] in response.text
-
-
-def test_base_template_omits_user_email_meta_when_anonymous(client: TestClient):
-    """When the user is not signed in, the meta tag must NOT be emitted
-    (avoids leaking any email stub and keeps the localStorage key as
-    'anon' for unauthenticated browsing)."""
-    response = client.get("/")
-    assert response.status_code == 200
     assert 'name="x-user-email"' not in response.text
+    # And the user's email itself must not be inlined anywhere in
+    # the HTML head — defense in depth (the meta was the only
+    # path that put it there, but the test catches future leaks).
+    assert FAKE_USER["email"] not in response.text.split("</head>")[0]
 
 
 def test_video_file_serving(client: TestClient):
