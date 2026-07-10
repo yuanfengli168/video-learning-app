@@ -129,3 +129,194 @@
 - **Done?** Delete the item entirely. The CHANGELOG captures the user-facing record.
 
 This file is intentionally **flat and unstructured** — it's a parking lot, not a roadmap. The roadmap lives in `doc/MVP1.0-successfullyFinished.md` §10 (Recommended next steps) and `doc/design.md` §2 (MVP2).
+
+## 4. One-shot re-run of yesterday's 4 LLM-failed videos
+
+**Idea:** On 2026-07-09, 4 of 30 bulk-uploaded videos (#6, #34, #35, #36) failed
+in the LLM step with `Could not extract valid JSON from LLM response (len=0)`.
+The transcripts are intact; only the materials generation step needs to be
+re-run. Build a small CLI script (or a one-off DB fix) that re-runs
+`_run_generate_job` for any video with `g_status='failed'` and `g_error LIKE
+'%len=0%'`.
+
+**Why valuable:**
+- The 4 videos have working transcripts but no mindmap/quiz/flashcards
+- User wants to discuss "script vs Regenerate button vs skip" tomorrow, but
+  having the data ready means the discussion is about UX not data recovery
+- Future-proofs: same script can be reused if Ollama flakes again
+
+**Approach:**
+- A small `scripts/retry_failed_generate.py` that:
+  1. Finds all `videos` with `json_extract(last_generate_job, '$.error')` matching
+     the empty-response pattern
+  2. Re-runs `_run_generate_job(video_id, model_name='base')` synchronously
+  3. Reports success/failure per video
+- Dry-run flag (`--dry-run`) so the user can preview what would be retried
+- Logs each retried video's `video_id` so we can verify in the UI afterward
+
+**Effort:** ~30 min including tests for the helper function
+(`find_failed_generate_videos(db) -> list[str]`).
+
+**Dependencies:** None.
+
+**Status:** Not started. Tomorrow's session.
+
+---
+
+## 5. "Retry all failed" button in the section view
+
+**Idea:** On the course page (section view), add a button next to each section
+header that says "Retry all failed". It hits a new bulk endpoint that re-queues
+the LLM step for every video in that section that has `status='error'` and
+`g_status='failed'`. The user gets one toast: "Retried 4 videos (2 succeeded,
+2 still failing)".
+
+**Why valuable:** Today, the only way to retry a failed generation is to click
+"Generate" on each individual video page. With 4 failed out of 30, that's 4
+clicks + 4 page loads. One button: 1 click. As the library grows, this matters
+more (imagine 50 videos, 10 failed).
+
+**Approach:**
+- New endpoint: `POST /api/courses/{course_id}/sections/{section_id}/retry-failed`
+- Body: none. Iterates `section.videos`, finds those with `g_status='failed'`,
+  kicks off `_run_generate_job` as a `BackgroundTask` per video
+- Returns: `{retried: int, succeeded: int, failed: int, video_ids: [...]}`
+- UI: button in section header, disabled if no failed videos, with a spinner
+  while in progress
+- Same endpoint can be reused for the dashboard "Retry all failed across all
+  sections" view in the future
+
+**Effort:** ~1 day (endpoint + tests + UI button + spinner state + toast)
+
+**Dependencies:** Depends on the per-video retry logic from #6. Should be done
+after #6.
+
+**Status:** Not started. Tomorrow's session.
+
+---
+
+## 6. "Retry this video" button on the video page
+
+**Idea:** On the video player page, when `status='error'`, show a "Retry
+generation" button instead of (or next to) the current error message. Clicking
+it calls `POST /api/videos/{id}/generate` which kicks off `_run_generate_job`
+as a BackgroundTask. UI polls `/status` and shows a progress bar.
+
+**Why valuable:** Today, after a video fails, the user has to:
+1. Notice the error
+2. Navigate to the video page
+3. Click "Generate" (which re-runs the same LLM call that just failed)
+4. Wait for it to finish
+5. Hope this time it works
+
+A dedicated "Retry" button with a fresh status poll makes the recovery
+flow obvious. The backend logic already exists (`_run_generate_job`); we just
+need a thin endpoint + UI button.
+
+**Approach:**
+- New endpoint: `POST /api/videos/{id}/generate` (or rename the existing
+  `POST /{video_id}/transcribe` to be more general)
+- Idempotent: if the video is already in `generating` state, return 409
+- UI: on the video page, when `status='error'`, show a yellow "Retry
+  generation" button. On click, optimistic UI: status badge flips to
+  "generating", start polling `/status`
+
+**Effort:** ~0.5 day (small endpoint + tests + button + status poll)
+
+**Dependencies:** None. Could ship before #5.
+
+**Status:** Not started. Tomorrow's session.
+
+---
+
+## 7. Export transcript as .md
+
+**Idea:** On the video page, add a "Download transcript" dropdown with three
+options: Markdown (.md), JSON (.json), Plain text (.txt). Each hits a new
+endpoint that returns the transcript in the requested format as a file
+attachment.
+
+**Why valuable:** Users have asked for export in different formats. Today the
+only way to get the transcript is to read it from the UI. With an export:
+- .md → paste into Obsidian, Notion, blog posts
+- .json → programmatic use (e.g. feed into another AI tool)
+- .txt → grep-friendly, simple paste into Word
+
+**Why .md for the first format:** It matches the existing `summary` and
+`mindmap` formats, so users have a consistent experience.
+
+**Approach (just the .md part of this):**
+- New endpoint: `GET /api/videos/{id}/transcript/export?format=md`
+- Response: `Content-Disposition: attachment; filename="{title}.md"` + body
+- Body format:
+  ```markdown
+  # {video.title}
+
+  **Duration:** {duration}s | **Language:** {language} | **Exported:** {date}
+
+  ## Transcript
+
+  [00:00] 第一段文字
+  [00:03] 第二段文字
+  ...
+  ```
+- Tests: format matches expected output, content-type, filename
+
+**Effort:** ~2-3 hours
+
+**Dependencies:** None. Independent of #8 and #9.
+
+**Status:** Not started. Tomorrow's session.
+
+---
+
+## 8. Export transcript as .json
+
+**Idea:** Same as #7 but JSON. Returns the raw `Asset` content (already
+stored as JSON in the DB) with proper `Content-Disposition` so the browser
+downloads it.
+
+**Why valuable:** Programmatic use — feed into another tool, build a
+custom analysis, etc.
+
+**Approach:**
+- Same endpoint as #7 with `?format=json`
+- Body: the exact JSON from `assets.content` for `asset_type='transcript'`
+- Content-Type: `application/json; charset=utf-8`
+- Filename: `{title}.json`
+- Tests: matches the stored asset, content-type correct, JSON parses
+
+**Effort:** ~1 hour (literally just returns the existing asset)
+
+**Dependencies:** #7 (same endpoint, just another format value)
+
+**Status:** Not started. Tomorrow's session.
+
+---
+
+## 9. Export transcript as .txt
+
+**Idea:** Same as #7 and #8 but plain text. One segment per line, format:
+`[00:00:15] 文字内容`. No markdown, no JSON, just text. Useful for grep, Word
+paste, reading on a phone.
+
+**Why valuable:** Lowest-friction export. No formatting to deal with. Easy
+to share.
+
+**Approach:**
+- Same endpoint with `?format=txt`
+- Body: each segment rendered as `[HH:MM:SS] {text}\n` (note: HH, not MM —
+  durations over 1 hour are common)
+- Content-Type: `text/plain; charset=utf-8`
+- Filename: `{title}.txt`
+- Tests: format matches, timestamps padded correctly (including >1h
+  durations)
+
+**Effort:** ~1 hour
+
+**Dependencies:** #7 (same endpoint)
+
+**Status:** Not started. Tomorrow's session.
+
+---
+
