@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models import Course, Section, Video
-from app.services.retry import find_failed_generate_videos
+from app.services.retry import (
+    find_failed_generate_videos,
+    find_failed_transcribe_videos,
+)
 
 router = APIRouter(prefix="/api/courses", tags=["courses"])
 
@@ -212,17 +215,28 @@ async def retry_failed_section_videos(
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Re-queue the LLM step for every video in this section whose
-    last_generate_job ended in 'failed' state.
+    """Re-queue the failed step (transcribe OR generate) for every
+    video in this section whose status is 'error'.
+
+    A video can fail in two places:
+    - last_transcribe_job.status='failed' (e.g. 0-byte file,
+      unsupported codec) — needs re-transcribing.
+    - last_generate_job.status='failed' (e.g. LLM empty body,
+      JSON parse error) — needs re-generating.
+
+    We re-queue whichever step failed. For transcribe failures, the
+    full auto-pipeline (transcribe → generate) runs again because
+    that's what `_run_transcribe_job` does after a fresh upload.
+    For generate-only failures, we just call `_run_generate_job`.
 
     Used by the "Retry all failed" button on the course page. Each
     retry runs as a FastAPI BackgroundTask so the response is
     immediate; the UI polls /status per video to show progress.
 
     Returns:
-        {retried: int, video_ids: [...]} so the UI can show
-        "Retrying N videos" and the user can click into any one
-        to see the per-video progress.
+        {retried: int, video_ids: [...], transcribe_retried: int,
+         generate_retried: int} so the UI can show a useful
+        summary like "Retrying 4 videos (3 transcribe, 1 generate)".
     """
     section = db.get(Section, section_id)
     if not section or section.course_id != course_id:
@@ -232,27 +246,67 @@ async def retry_failed_section_videos(
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your course")
 
-    # Find all failed-generate videos in this section
-    all_failed = find_failed_generate_videos(db)
-    section_video_ids = {v.id for v in section.videos}
-    failed_in_section = [
-        row for row in all_failed if row["video_id"] in section_video_ids
-    ]
+    # Find failed videos in this section, partitioned by which step
+    # failed. A video that has BOTH transcribe and generate failed
+    # only goes into the transcribe bucket — re-running transcribe
+    # auto-pipelines to generate, so the generate job will be
+    # re-run as a side effect.
+    all_transcribe_failed = find_failed_transcribe_videos(db)
+    all_generate_failed = find_failed_generate_videos(db)
 
-    if not failed_in_section:
-        return {"retried": 0, "video_ids": []}
+    section_video_ids = {v.id for v in section.videos}
+    transcribe_failed = {
+        row["video_id"] for row in all_transcribe_failed
+        if row["video_id"] in section_video_ids
+    }
+    generate_failed = {
+        row["video_id"] for row in all_generate_failed
+        if row["video_id"] in section_video_ids
+        # Skip videos that also have a failed transcribe job — the
+        # transcribe retry will handle them.
+        and row["video_id"] not in transcribe_failed
+    }
+
+    if not transcribe_failed and not generate_failed:
+        return {
+            "retried": 0,
+            "transcribe_retried": 0,
+            "generate_retried": 0,
+            "video_ids": [],
+        }
 
     # Lazy import: the worker uses start_job + the in-memory tracker
     # to know the job is real (otherwise it bails early).
     from app.jobs import start_job, serialize_job
     from app.routers.generation import _run_generate_job
+    from app.routers.videos import _run_transcribe_job
 
     retried_ids: list[str] = []
-    for row in failed_in_section:
-        video_id = row["video_id"]
-        # Mark the job as "retrying" in the in-memory tracker AND
-        # in the DB so the UI can show progress instead of "failed".
-        job = start_job(video_id, "generate", message="Retrying via section 'Retry all failed'...")
+
+    # 1. Re-run transcribe for videos whose transcribe step failed.
+    #    `_run_transcribe_job` chains into `_run_generate_job`
+    #    automatically (it's the same code path as a fresh upload).
+    for video_id in transcribe_failed:
+        job = start_job(
+            video_id, "transcribe",
+            message="Retrying transcribe (then generate) via 'Retry all failed'...",
+        )
+        video = db.get(Video, video_id)
+        if video:
+            video.last_transcribe_job = serialize_job(job)
+            video.status = "transcribing"
+            db.commit()
+        background_tasks.add_task(_run_transcribe_job, video_id, "base")
+        retried_ids.append(video_id)
+
+    # 2. Re-run generate for videos whose generate step failed
+    #    (but transcribe already succeeded — the transcript is in
+    #    the DB and just needs the LLM step again).
+    for video_id in generate_failed:
+        job = start_job(
+            video_id, "generate",
+            message="Retrying generate via 'Retry all failed'...",
+        )
         video = db.get(Video, video_id)
         if video:
             video.last_generate_job = serialize_job(job)
@@ -263,5 +317,7 @@ async def retry_failed_section_videos(
 
     return {
         "retried": len(retried_ids),
+        "transcribe_retried": len(transcribe_failed),
+        "generate_retried": len(generate_failed),
         "video_ids": retried_ids,
     }

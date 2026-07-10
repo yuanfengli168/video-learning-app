@@ -240,13 +240,15 @@ async function uploadVideo(sectionId, input) {
 // kicks off BackgroundTasks; we just show a toast and reload.
 
 async function retryAllFailed(courseId, sectionId, btn) {
-    // Disable the button + show a "working" label so the user
-    // doesn't double-click. The server has to spawn BackgroundTasks
-    // and may take a few seconds before the UI shows progress.
+    // Disable the button + show a "working" label with a spinner
+    // so the user gets clear visual feedback. The button stays in
+    // the "Retrying..." state until the page reloads, even if the
+    // server takes a few seconds to spawn BackgroundTasks.
     const originalLabel = btn ? btn.textContent : '';
     if (btn) {
         btn.disabled = true;
-        btn.textContent = '↻ Retrying...';
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+        btn.textContent = '⏳ Retrying...';
     }
     try {
         const resp = await fetch(
@@ -259,20 +261,37 @@ async function retryAllFailed(courseId, sectionId, btn) {
         if (resp.ok) {
             const data = await resp.json();
             if (data.retried === 0) {
-                showToast('No failed videos found in this section', 'info');
-            } else {
-                showToast(`Retrying ${data.retried} video${data.retried === 1 ? '' : 's'} — refresh in a few seconds to see progress`, 'success');
+                showToast('No failed videos found in this section (all status=ready or processing)', 'info');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                    btn.textContent = originalLabel;
+                }
+                return;
             }
+            // Detailed toast so the user knows what was retried
+            // (e.g. "3 transcribe, 1 generate") — they may have
+            // assumed all retries were the LLM step.
+            const parts = [];
+            if (data.transcribe_retried > 0) {
+                parts.push(`${data.transcribe_retried} transcribe`);
+            }
+            if (data.generate_retried > 0) {
+                parts.push(`${data.generate_retried} generate`);
+            }
+            const detail = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+            showToast(`Retrying ${data.retried} video${data.retried === 1 ? '' : 's'}${detail} — refresh in a few seconds to see progress`, 'success');
             // Reload after a short delay so the user sees the toast
             // and the section's status badges flip from 'error' to
-            // 'generating'. 2 seconds is enough for the BackgroundTasks
-            // to write the 'generating' status to the DB.
-            setTimeout(() => location.reload(), 2000);
+            // 'transcribing'/'generating'. 3 seconds gives the
+            // BackgroundTasks time to update the DB.
+            setTimeout(() => location.reload(), 3000);
         } else {
             const err = await resp.json();
             showToast('Retry failed: ' + (err.detail || resp.statusText), 'error');
             if (btn) {
                 btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
                 btn.textContent = originalLabel;
             }
         }
@@ -280,6 +299,7 @@ async function retryAllFailed(courseId, sectionId, btn) {
         showToast('Network error: ' + exc, 'error');
         if (btn) {
             btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
             btn.textContent = originalLabel;
         }
     }

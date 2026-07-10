@@ -347,3 +347,114 @@ def test_retry_failed_section_403_wrong_user(client: TestClient):
             headers=_auth_headers(),
         )
     assert resp.status_code == 403
+
+
+def _make_transcribe_failed_video(
+    client: TestClient,
+    course_id: str,
+    section_id: str,
+    title: str,
+) -> str:
+    """Helper: upload a video, mark its TRANSCRIBE job as failed.
+
+    Different from _make_failed_video: the failure is in the
+    transcribe step (e.g. 0-byte file, unsupported codec), not the
+    LLM step. The retry endpoint should detect this and re-run
+    transcribe (which then auto-pipelines to generate).
+    """
+    with _mock_auth():
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": (f"{title}.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = upload_resp.json()["video_id"]
+    from app.database import SessionLocal
+    from app.models import Video
+    failed_job = _json.dumps({
+        "video_id": video_id,
+        "job_type": "transcribe",
+        "status": "failed",
+        "error": "[Errno 1094995529] Invalid data found when processing input",
+    })
+    with SessionLocal() as db:
+        v = db.get(Video, video_id)
+        if v:
+            v.last_transcribe_job = failed_job
+            v.status = "error"
+            db.commit()
+    return video_id
+
+
+def test_retry_failed_section_retries_transcribe_failure(client: TestClient):
+    """A transcribe-failed video (e.g. 0-byte file) gets retried by
+    the same endpoint. This is the regression test for the bug
+    the user reported: clicking the button when the only failed
+    video was a transcribe failure did nothing visible."""
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _make_transcribe_failed_video(
+        client, course_id, section_id, "zero-byte-broken"
+    )
+
+    def fake_transcribe(vid: str, model: str) -> None:
+        from app.jobs import get_job, finish_job
+        from app.database import SessionLocal
+        from app.models import Video
+        job = get_job(vid, "transcribe")
+        if job:
+            finish_job(job, status="completed", message="fake success")
+        with SessionLocal() as db:
+            v = db.get(Video, vid)
+            if v:
+                from app.jobs import serialize_job
+                v.last_transcribe_job = serialize_job(job)
+                v.status = "ready"
+                db.commit()
+
+    with _mock_auth(), _patch(
+        "app.routers.videos._run_transcribe_job",
+        side_effect=fake_transcribe,
+    ):
+        resp = client.post(
+            f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["retried"] == 1
+    assert data["transcribe_retried"] == 1
+    assert data["generate_retried"] == 0
+    assert video_id in data["video_ids"]
+
+
+def test_retry_failed_section_response_shape(client: TestClient):
+    """The response includes the split counts so the UI can show
+    'Retrying N (3 transcribe, 1 generate)'."""
+    course_id, section_id = _create_course_and_section(client)
+    # One transcribe failure, one generate failure
+    transcribe_id = _make_transcribe_failed_video(
+        client, course_id, section_id, "transcribe-broken"
+    )
+    generate_id = _make_failed_video(
+        client, course_id, section_id, "generate-broken"
+    )
+
+    def fake_worker(*args, **kwargs):
+        pass
+
+    with _mock_auth(), _patch(
+        "app.routers.videos._run_transcribe_job",
+        side_effect=fake_worker,
+    ), _patch(
+        "app.routers.generation._run_generate_job",
+        side_effect=fake_worker,
+    ):
+        resp = client.post(
+            f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
+            headers=_auth_headers(),
+        )
+    data = resp.json()
+    assert data["retried"] == 2
+    assert data["transcribe_retried"] == 1
+    assert data["generate_retried"] == 1
+    assert set(data["video_ids"]) == {transcribe_id, generate_id}
