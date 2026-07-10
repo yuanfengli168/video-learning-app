@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 import app.routers.videos as _videos_module
 _REAL_RUN_AUTO_PIPELINE = _videos_module._run_auto_pipeline
 
+from app.models import Asset, Video
+
 FAKE_USER = {"uid": "test-user-uid", "email": "test@example.com"}
 
 
@@ -268,6 +270,222 @@ def test_get_transcript_not_found(client: TestClient):
             f"/api/videos/{video_id}/transcript", headers=_auth_headers()
         )
     assert response.status_code == 404
+
+
+# ── MVP2.0 export endpoint ─────────────────────────────────────────────────
+
+def _create_video_with_transcript(
+    client: TestClient,
+    title: str = "My Lecture",
+    segments: list[dict] | None = None,
+) -> str:
+    """Helper: upload a video, run a fake transcribe worker, return the video_id.
+
+    The transcript is whatever `segments` is provided (default: one
+    short English segment). Saves the test from copy-pasting the
+    same fake-worker setup in every export test."""
+    course_id, section_id = _create_course_and_section(client)
+    if segments is None:
+        segments = [{"start": 0.0, "end": 3.0, "text": "Hello world"}]
+    fake_transcript = {
+        "segments": segments,
+        "language": "en",
+        "duration": segments[-1]["end"] if segments else 0.0,
+    }
+
+    with _mock_auth():
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": (f"{title}.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+
+        def fake_worker(vid: str, model: str) -> None:
+            from app.services.transcription import transcript_to_json
+            from app.database import SessionLocal
+            with SessionLocal() as db:
+                v = db.get(Video, vid)
+                if v:
+                    db.add(Asset(
+                        id=f"t-{vid}", video_id=vid, asset_type="transcript",
+                        content=transcript_to_json(fake_transcript),
+                    ))
+                    v.status = "ready"
+                    v.duration = fake_transcript["duration"]
+                    db.commit()
+
+        with patch("app.routers.videos._run_transcribe_job", side_effect=fake_worker):
+            client.post(
+                f"/api/videos/{video_id}/transcribe?model_name=base",
+                headers=_auth_headers(),
+            )
+    return video_id
+
+
+def test_export_transcript_md(client: TestClient):
+    """Default format is md; returns text/markdown + Content-Disposition."""
+    video_id = _create_video_with_transcript(client, title="Math 101")
+    with _mock_auth():
+        resp = client.get(
+            f"/api/videos/{video_id}/transcript/export",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    assert "text/markdown" in resp.headers["content-type"]
+    assert "attachment" in resp.headers["content-disposition"]
+    assert 'filename="Math 101.md"' in resp.headers["content-disposition"]
+    body = resp.text
+    assert "# Math 101" in body
+    assert "[00:00:00] Hello world" in body
+
+
+def test_export_transcript_json(client: TestClient):
+    """?format=json returns the raw transcript JSON."""
+    video_id = _create_video_with_transcript(
+        client, title="Lecture",
+        segments=[{"start": 0, "end": 1, "text": "你好"}],
+    )
+    with _mock_auth():
+        resp = client.get(
+            f"/api/videos/{video_id}/transcript/export?format=json",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    assert "application/json" in resp.headers["content-type"]
+    assert 'filename="Lecture.json"' in resp.headers["content-disposition"]
+    # Body is the raw transcript
+    import json
+    parsed = json.loads(resp.text)
+    assert parsed["language"] == "en"
+    assert parsed["segments"][0]["text"] == "你好"
+
+
+def test_export_transcript_txt(client: TestClient):
+    """?format=txt returns plain text, no markdown."""
+    video_id = _create_video_with_transcript(client, title="Plain")
+    with _mock_auth():
+        resp = client.get(
+            f"/api/videos/{video_id}/transcript/export?format=txt",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    assert "text/plain" in resp.headers["content-type"]
+    assert 'filename="Plain.txt"' in resp.headers["content-disposition"]
+    body = resp.text
+    # No markdown markers
+    assert "# " not in body
+    assert "**" not in body
+    # Just the segment line
+    assert "[00:00:00] Hello world" in body
+
+
+def test_export_transcript_invalid_format(client: TestClient):
+    """Invalid format returns 400 with a clear error message."""
+    video_id = _create_video_with_transcript(client)
+    with _mock_auth():
+        resp = client.get(
+            f"/api/videos/{video_id}/transcript/export?format=docx",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 400
+    assert "Invalid format" in resp.json()["detail"]
+
+
+def test_export_transcript_not_found(client: TestClient):
+    """Returns 404 if no transcript exists for the video yet."""
+    course_id, section_id = _create_course_and_section(client)
+    with _mock_auth():
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("x.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        resp = client.get(
+            f"/api/videos/{video_id}/transcript/export",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 404
+    assert "Transcript not found" in resp.json()["detail"]
+
+
+def test_export_transcript_video_not_found(client: TestClient):
+    """Returns 404 if the video itself doesn't exist."""
+    with _mock_auth():
+        resp = client.get(
+            "/api/videos/nonexistent-id/transcript/export",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 404
+
+
+def test_export_transcript_unicode_filename(client: TestClient):
+    """CJK characters in the video title are preserved in the filename.
+
+    Uses RFC 5987 `filename*=UTF-8''...` because HTTP headers are
+    latin-1. The endpoint sends BOTH the basic filename (ascii-
+    replaced) and the UTF-8 form; modern browsers prefer the latter.
+    """
+    video_id = _create_video_with_transcript(client, title="中文课程")
+    with _mock_auth():
+        resp = client.get(
+            f"/api/videos/{video_id}/transcript/export",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    disp = resp.headers["content-disposition"]
+    # The RFC 5987 form is present and percent-encoded
+    assert "filename*=UTF-8''" in disp
+    # The original unicode name is recoverable
+    from urllib.parse import unquote
+    quoted = disp.split("filename*=UTF-8''")[1]
+    assert unquote(quoted) == "中文课程.md"
+
+
+def test_export_transcript_sanitizes_unsafe_chars(client: TestClient):
+    """Characters that are reserved on at least one OS (/, \\, :) are
+    replaced with `-` in the filename so the download works on
+    Windows too."""
+    # Upload with a title containing forward slash
+    course_id, section_id = _create_course_and_section(client)
+    with _mock_auth():
+        # Use upload_video's title which is derived from filename
+        # (Path(file.filename).stem), so we can craft one with a slash
+        # — but file upload likely doesn't allow it. Instead, edit
+        # the DB directly to put a slash in the title (real users
+        # may have titles imported from elsewhere with / or \).
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("x.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        # Set the title to one with unsafe chars
+        from app.database import SessionLocal
+        with SessionLocal() as db:
+            v = db.get(Video, video_id)
+            v.title = "bad/name\\here:test"
+            db.add(Asset(
+                id=f"t-{video_id}", video_id=video_id, asset_type="transcript",
+                content='{"segments": [], "language": "en", "duration": 0}',
+            ))
+            db.commit()
+        resp = client.get(
+            f"/api/videos/{video_id}/transcript/export",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    # The basic filename has the unsafe chars replaced
+    disp = resp.headers["content-disposition"]
+    # Both forms are present
+    assert 'filename="bad-name-here-test.md"' in disp
+    # The RFC 5987 form has the URL-encoded sanitized form too
+    # (the endpoint sanitizes BEFORE encoding, so the original /
+    # is already gone — we expect the sanitized form here too)
+    from urllib.parse import unquote
+    quoted = disp.split("filename*=UTF-8''")[1]
+    assert unquote(quoted) == "bad-name-here-test.md"
 
 
 def test_transcribe_invalid_model(client: TestClient):

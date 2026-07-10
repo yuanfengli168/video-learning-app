@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -595,6 +595,120 @@ async def get_transcript(
     from app.services.transcription import json_to_transcript
 
     return json_to_transcript(transcript_asset.content)
+
+
+# IMPORTANT: this route must be declared BEFORE the `/{video_id}/file`
+# route below. FastAPI matches routes in declaration order, and the
+# generic `/{video_id}/...` pattern would otherwise shadow
+# `/{video_id}/transcript/export` with video_id="video_id".
+# See doc/Blockers.md "bulk-upload route shadowing" for the pattern
+# this guards against — same root cause.
+@router.get("/{video_id}/transcript/export")
+async def export_transcript(
+    video_id: str,
+    format: str = "md",
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> Response:
+    """Download the transcript as .md, .json, or .txt.
+
+    Used by the "Download transcript" button on the video page. The
+    browser saves the file with `Content-Disposition: attachment`
+    so the user gets a real file (not a JSON blob in the browser).
+
+    Args:
+        video_id: the video UUID
+        format: one of "md", "json", "txt" (default: "md")
+    """
+    from app.services.transcript_export import (
+        VALID_FORMATS,
+        export_extension,
+        format_transcript,
+    )
+
+    if format not in VALID_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid format {format!r}. Must be one of: {', '.join(VALID_FORMATS)}",
+        )
+
+    video = db.get(Video, video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Verify ownership
+    section = db.get(Section, video.section_id)
+    course = db.get(Course, section.course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your video")
+
+    transcript_asset = db.execute(
+        select(Asset).where(
+            Asset.video_id == video_id, Asset.asset_type == "transcript"
+        )
+    ).scalar_one_or_none()
+
+    if not transcript_asset:
+        raise HTTPException(
+            status_code=404,
+            detail="Transcript not found. Wait for transcription to finish, then try again.",
+        )
+
+    from app.services.transcription import json_to_transcript
+
+    transcript = json_to_transcript(transcript_asset.content)
+    body = format_transcript(
+        transcript,
+        format,
+        video_title=video.title,
+    )
+
+    # Sanitize the filename: replace characters that browsers /
+    # filesystems may not handle. Real filenames from user uploads
+    # can have spaces, CJK, dots, etc. — all fine, but `/`, `\`, `:`
+    # are reserved on at least one of Windows / macOS / Linux.
+    safe_title = (
+        video.title.replace("/", "-")
+        .replace("\\", "-")
+        .replace(":", "-")
+        .replace("\0", "")
+    )
+    ext = export_extension(format)
+    filename = f"{safe_title}.{ext}"
+
+    # Content-Type per format. The browser uses this to decide
+    # whether to download (attachment) or display inline.
+    content_types = {
+        "md": "text/markdown; charset=utf-8",
+        "json": "application/json; charset=utf-8",
+        "txt": "text/plain; charset=utf-8",
+    }
+
+    # Build Content-Disposition. The basic `filename="..."` form is
+    # restricted to latin-1 by HTTP — non-ASCII characters (CJK,
+    # emoji, accented letters) fail to encode. The RFC 5987 form
+    # `filename*=UTF-8''<percent-encoded>` is the universal fallback
+    # and is supported by every browser since ~2014. We send BOTH
+    # so old clients get something usable, modern clients get the
+    # full unicode name.
+    from urllib.parse import quote
+    ascii_fallback = (
+        filename.encode("ascii", "replace")
+        .decode("ascii")
+        .replace("?", "_")
+    )
+    disposition = (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
+
+    return Response(
+        content=body,
+        media_type=content_types[format],
+        headers={
+            "Content-Disposition": disposition,
+        },
+    )
 
 
 @router.get("/{video_id}/file")
