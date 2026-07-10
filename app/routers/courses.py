@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models import Course, Section, Video
+from app.services.retry import find_failed_generate_videos
 
 router = APIRouter(prefix="/api/courses", tags=["courses"])
 
@@ -202,3 +203,65 @@ async def list_section_videos(
         }
         for v in section.videos
     ]
+
+@router.post("/{course_id}/sections/{section_id}/retry-failed")
+async def retry_failed_section_videos(
+    course_id: str,
+    section_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Re-queue the LLM step for every video in this section whose
+    last_generate_job ended in 'failed' state.
+
+    Used by the "Retry all failed" button on the course page. Each
+    retry runs as a FastAPI BackgroundTask so the response is
+    immediate; the UI polls /status per video to show progress.
+
+    Returns:
+        {retried: int, video_ids: [...]} so the UI can show
+        "Retrying N videos" and the user can click into any one
+        to see the per-video progress.
+    """
+    section = db.get(Section, section_id)
+    if not section or section.course_id != course_id:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    course = db.get(Course, course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your course")
+
+    # Find all failed-generate videos in this section
+    all_failed = find_failed_generate_videos(db)
+    section_video_ids = {v.id for v in section.videos}
+    failed_in_section = [
+        row for row in all_failed if row["video_id"] in section_video_ids
+    ]
+
+    if not failed_in_section:
+        return {"retried": 0, "video_ids": []}
+
+    # Lazy import: the worker uses start_job + the in-memory tracker
+    # to know the job is real (otherwise it bails early).
+    from app.jobs import start_job, serialize_job
+    from app.routers.generation import _run_generate_job
+
+    retried_ids: list[str] = []
+    for row in failed_in_section:
+        video_id = row["video_id"]
+        # Mark the job as "retrying" in the in-memory tracker AND
+        # in the DB so the UI can show progress instead of "failed".
+        job = start_job(video_id, "generate", message="Retrying via section 'Retry all failed'...")
+        video = db.get(Video, video_id)
+        if video:
+            video.last_generate_job = serialize_job(job)
+            video.status = "generating"
+            db.commit()
+        background_tasks.add_task(_run_generate_job, video_id)
+        retried_ids.append(video_id)
+
+    return {
+        "retried": len(retried_ids),
+        "video_ids": retried_ids,
+    }

@@ -1,5 +1,6 @@
 """Tests for courses router."""
 
+import io
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -13,6 +14,27 @@ def _auth_headers():
 
 def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
+
+
+def _create_course_and_section(client: TestClient) -> tuple[str, str]:
+    """Helper: create a course + section, return (course_id, section_id).
+
+    Used by the retry-failed tests so they don't have to repeat the
+    boilerplate. Other tests in this file do it inline."""
+    with _mock_auth():
+        create_resp = client.post(
+            "/api/courses",
+            json={"title": "ML"},
+            headers=_auth_headers(),
+        )
+        course_id = create_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+    return course_id, section_id
 
 
 def test_list_courses_empty(client: TestClient):
@@ -178,3 +200,150 @@ def test_unauthorized_access(client: TestClient):
     """Should return 401 without auth."""
     response = client.get("/api/courses")
     assert response.status_code == 401
+
+
+# ── MVP2.0 retry-all-failed endpoint ───────────────────────────────────────
+
+import json as _json
+from unittest.mock import patch as _patch
+
+
+def _make_failed_video(
+    client: TestClient,
+    course_id: str,
+    section_id: str,
+    title: str,
+) -> str:
+    """Helper: upload a video, mark its generate job as failed in the DB.
+
+    The auto-pipeline is suppressed by the conftest's
+    no_auto_pipeline fixture, so upload just creates a video with
+    status='queued' and no last_generate_job. We then write a
+    synthetic failed generate job so the retry endpoint has
+    something to find.
+    """
+    with _mock_auth():
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": (f"{title}.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = upload_resp.json()["video_id"]
+    # Inject a failed generate job into the DB so the retry helper
+    # picks it up. We do this in the SAME session the test client
+    # uses (the conftest wires app.database.SessionLocal to the
+    # in-memory test DB).
+    from app.database import SessionLocal
+    from app.models import Video
+    failed_job = _json.dumps({
+        "video_id": video_id,
+        "job_type": "generate",
+        "status": "failed",
+        "error": "Could not extract valid JSON from LLM response (len=0)",
+    })
+    with SessionLocal() as db:
+        v = db.get(Video, video_id)
+        if v:
+            v.last_generate_job = failed_job
+            v.status = "error"
+            db.commit()
+    return video_id
+
+
+def test_retry_failed_section_no_failed_videos(client: TestClient):
+    """When no videos are failed, the endpoint returns retried=0."""
+    course_id, section_id = _create_course_and_section(client)
+    # Upload a fresh video (not failed) so the section has videos
+    with _mock_auth():
+        client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("good.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+
+    with _mock_auth():
+        resp = client.post(
+            f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["retried"] == 0
+    assert data["video_ids"] == []
+
+
+def test_retry_failed_section_retries_failed_videos(client: TestClient):
+    """When there ARE failed videos, the endpoint queues them all.
+
+    The BackgroundTasks run synchronously in TestClient, so by the
+    time the response returns, the jobs have already started. We
+    assert that the API returned the right count and that the
+    videos' status flipped from 'error' to 'generating' or
+    'ready' (depending on whether the worker completed fast
+    enough in the test).
+    """
+    course_id, section_id = _create_course_and_section(client)
+    # Add 3 videos, mark 2 of them as failed
+    _make_failed_video(client, course_id, section_id, "broken-1")
+    _make_failed_video(client, course_id, section_id, "broken-2")
+    # And one good one (no failed job)
+    with _mock_auth():
+        client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("good.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+
+    # Mock the worker so it doesn't actually call Ollama
+    def fake_worker(video_id: str) -> None:
+        from app.jobs import get_job, finish_job
+        from app.database import SessionLocal
+        from app.models import Video
+        job = get_job(video_id, "generate")
+        if job:
+            finish_job(job, status="completed", message="fake success")
+        with SessionLocal() as db:
+            v = db.get(Video, video_id)
+            if v:
+                from app.jobs import serialize_job
+                v.last_generate_job = serialize_job(job)
+                v.status = "ready"
+                db.commit()
+
+    with _mock_auth(), _patch(
+        "app.routers.generation._run_generate_job",
+        side_effect=fake_worker,
+    ):
+        resp = client.post(
+            f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["retried"] == 2
+    assert len(data["video_ids"]) == 2
+
+
+def test_retry_failed_section_404_wrong_section(client: TestClient):
+    """Returns 404 if the section doesn't belong to the course."""
+    course_id, _ = _create_course_and_section(client)
+    with _mock_auth():
+        resp = client.post(
+            f"/api/courses/{course_id}/sections/nonexistent-section/retry-failed",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 404
+
+
+def test_retry_failed_section_403_wrong_user(client: TestClient):
+    """Returns 403 if the user doesn't own the course."""
+    course_id, section_id = _create_course_and_section(client)
+    with _patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "user-B"},
+    ):
+        resp = client.post(
+            f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 403

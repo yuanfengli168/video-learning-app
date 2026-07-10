@@ -29,11 +29,17 @@
     <!-- Sections -->
     <div class="space-y-3">
         {% for section in course.sections %}
+        {% set failed_count = section.videos | selectattr('status', 'equalto', 'error') | list | length %}
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
             <button onclick="toggleSection('{{ section.id }}')" class="w-full flex items-center justify-between p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50">
                 <span class="font-medium">📂 {{ section.title }}</span>
                 <span class="flex items-center space-x-3">
                     <span class="text-sm text-gray-400">{{ section.videos | length }} video(s)</span>
+                    {% if failed_count > 0 %}
+                    <button onclick="event.stopPropagation(); retryAllFailed('{{ course.id }}', '{{ section.id }}', this)" data-retry-all-btn class="text-xs px-2 py-0.5 rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:border-red-500 hover:text-red-700" title="Re-queue the LLM step for every failed video in this section">
+                        ↻ Retry {{ failed_count }} failed
+                    </button>
+                    {% endif %}
                     <button onclick="event.stopPropagation(); sortSection('{{ section.id }}')" id="sort-btn-{{ section.id }}" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500" title="Toggle sort direction">
                         ↑ asc
                     </button>
@@ -227,6 +233,57 @@ async function uploadVideo(sectionId, input) {
             alert('Bulk upload failed: ' + (await resp.json()).detail);
         }
     }
+
+// ── Retry all failed (MVP2.0) ────────────────────────────────────────────────
+// One click re-queues the LLM step for every video in this section
+// whose last_generate_job is in the 'failed' state. The server
+// kicks off BackgroundTasks; we just show a toast and reload.
+
+async function retryAllFailed(courseId, sectionId, btn) {
+    // Disable the button + show a "working" label so the user
+    // doesn't double-click. The server has to spawn BackgroundTasks
+    // and may take a few seconds before the UI shows progress.
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '↻ Retrying...';
+    }
+    try {
+        const resp = await fetch(
+            `/api/courses/${courseId}/sections/${sectionId}/retry-failed`,
+            {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+            }
+        );
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.retried === 0) {
+                showToast('No failed videos found in this section', 'info');
+            } else {
+                showToast(`Retrying ${data.retried} video${data.retried === 1 ? '' : 's'} — refresh in a few seconds to see progress`, 'success');
+            }
+            // Reload after a short delay so the user sees the toast
+            // and the section's status badges flip from 'error' to
+            // 'generating'. 2 seconds is enough for the BackgroundTasks
+            // to write the 'generating' status to the DB.
+            setTimeout(() => location.reload(), 2000);
+        } else {
+            const err = await resp.json();
+            showToast('Retry failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = originalLabel;
+            }
+        }
+    } catch (exc) {
+        showToast('Network error: ' + exc, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+        }
+    }
+}
 }
 </script>
 {% endblock %}
