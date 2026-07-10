@@ -52,6 +52,20 @@
                         🎙️ Transcribe
                     </button>
                     <input type="text" id="transcript-search" placeholder="Search..." class="px-3 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700" onkeyup="searchTranscript()">
+                    <!-- Download transcript (MVP2.0) — hidden until the
+                         transcript actually loads. Uses a native
+                         <select onchange> so we don't need to
+                         manage dropdown open/close state in JS. -->
+                    <div id="download-transcript-wrap" class="hidden inline-flex items-center gap-1">
+                        <select id="download-transcript-fmt" class="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700" title="Download transcript as...">
+                            <option value="md">.md</option>
+                            <option value="json">.json</option>
+                            <option value="txt">.txt</option>
+                        </select>
+                        <button onclick="downloadTranscript()" id="download-transcript-btn" class="px-3 py-1 bg-gray-100 dark:bg-gray-700 text-sm rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 border border-gray-300 dark:border-gray-600" title="Download transcript">
+                            📥 Download
+                        </button>
+                    </div>
                 </div>
             </div>
             <div id="transcript-container" class="max-h-96 overflow-y-auto space-y-1 text-sm">
@@ -190,9 +204,61 @@ async function loadTranscript() {
         }
         transcriptData = await resp.json();
         renderTranscript(transcriptData.segments);
+        // Show the download button now that a transcript exists.
+        // The button stays visible for the rest of the session —
+        // there's no need to re-check; the endpoint will 404 if the
+        // transcript is somehow gone again (e.g. concurrent delete).
+        const wrap = document.getElementById('download-transcript-wrap');
+        if (wrap) wrap.classList.remove('hidden');
     } catch (e) {
         document.getElementById('transcript-container').innerHTML = '<p class="text-gray-400 py-4 text-center">Failed to load transcript.</p>';
     }
+}
+
+// Download the transcript in the chosen format. We just open a
+// new tab pointing at the export endpoint — the server sets
+// Content-Disposition: attachment so the browser saves the file
+// with the right name and format. The auth header is sent via
+// the Authorization header on the fetch, but the browser's
+// download manager doesn't send headers, so we have to use a
+// short-lived signed URL or cookie-based auth instead. Since
+// this app uses cookie-based session auth, opening the URL
+// directly (with credentials: 'include' for cookies) works.
+function downloadTranscript() {
+    const fmt = document.getElementById('download-transcript-fmt').value;
+    if (!fmt) return;
+    // Use a fetch -> blob -> object URL pattern so the auth header
+    // is sent. Direct <a download> wouldn't include the Bearer
+    // token, and cookie-based auth is fine because the page is on
+    // the same origin.
+    getAuthToken().then(token => {
+        return fetch(`/api/videos/${videoId}/transcript/export?format=${fmt}`, {
+            headers: {'Authorization': 'Bearer ' + token},
+        });
+    })
+        .then(r => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            // Extract filename from Content-Disposition
+            const cd = r.headers.get('content-disposition') || '';
+            const m = cd.match(/filename="?([^"]+)"?/);
+            const filename = m ? m[1] : `transcript.${fmt}`;
+            return r.blob().then(blob => ({blob, filename}));
+        })
+        .then(({blob, filename}) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // Revoke the object URL after a short delay so the
+            // browser has time to start the download
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        })
+        .catch(err => {
+            showToast('Download failed: ' + err.message, 'error');
+        });
 }
 
 function renderTranscript(segments) {
