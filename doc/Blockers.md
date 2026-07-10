@@ -173,3 +173,52 @@ if file_size == 0:
 **Why TestClient didn't catch it originally:** A 0-byte upload only happens via a real browser's `FileList` (cancelled/dropped file). The unit tests always sent non-empty `io.BytesIO(b"x")` data, so the file was never 0 bytes.
 
 **Lesson:** When validating file uploads, check both bounds of the size range, not just the upper one. Empty files are surprisingly common (cancelled uploads, network resets, browser quirks with `FileList` from `<input multiple>`).
+
+### ✅ RESOLVED [july 11 2026] — "Retry 1 failed" button does nothing
+
+**Symptom:** User clicked the "↻ Retry 1 failed" button on a section with 36
+videos (section 3 of the "AI 提示词" course). The page reloaded but no animation
+or notification appeared, and the one failed video stayed in `status=error`.
+
+**Diagnosis:** The endpoint `POST /api/courses/{c}/sections/{s}/retry-failed`
+was filtering by `last_generate_job.status='failed'` and returning
+`{retried: 0, video_ids: []}`. But the user's only failed video was a
+**transcribe** failure (the 0-byte file uploaded earlier that same session) — it
+had `last_transcribe_job.status='failed'` and `last_generate_job=null` because
+the pipeline never reached the LLM step. The endpoint saw zero matches and
+returned 0, but the UI just reloaded without telling the user why nothing
+happened.
+
+**Root cause:** Two coupled problems:
+1. The endpoint only knew how to retry *generate* failures, not *transcribe*
+   failures. The two-step pipeline (transcribe → generate) can fail in either
+   step, but the recovery path only covered one.
+2. The UI gave no feedback when the response was `{retried: 0}` — it just
+   reloaded silently, leaving the user wondering if the click registered.
+
+**Fix (commit `162c85d`):**
+- Endpoint now partitions failures by step:
+  - `last_transcribe_job.status='failed'` → re-queue transcribe (auto-pipelines
+    to generate via the same `_run_transcribe_job` code path as a fresh
+    upload).
+  - `last_generate_job.status='failed'` only → re-queue generate (transcript
+    is already in the DB, no need to re-transcribe).
+  - Videos with BOTH failures go into the transcribe bucket only (the
+    transcribe retry will re-do generate as a side effect).
+- Response shape extended: `{retried, transcribe_retried, generate_retried,
+  video_ids}` so the UI can show "Retrying 1 (1 transcribe, 0 generate)"
+  instead of a bare count.
+- UI button now shows a spinner + "⏳ Retrying..." label while in flight, and
+  on `{retried: 0}` shows a clear toast ("No failed videos found in this
+  section") instead of a silent reload.
+
+**Tests:** 2 new in `tests/test_courses.py`:
+- `test_retry_failed_section_retries_transcribe_failure` — regression: a
+  video with `last_transcribe_job.status='failed'` is now picked up.
+- `test_retry_failed_section_response_shape` — covers the mixed case
+  (1 transcribe + 1 generate failure in the same section).
+
+**Lesson:** When the user can't tell if a button "did anything", the
+endpoint's response is the only feedback signal — make `{retried: 0}` loud,
+not silent. And when a pipeline has multiple steps, the recovery endpoint has
+to know about *all* of them, not just the last one.
