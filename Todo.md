@@ -320,3 +320,35 @@ to share.
 
 ---
 
+
+## Tomorrow's open discussion items (2026-07-11)
+
+> 6 open design questions to talk through before/during tomorrow's
+> implementation work. Each has my default recommendation; user picks
+> the final answer. Some affect the code shape, so it's better to
+> decide before writing it.
+
+1. **Duplicate video detection** — Appendix B in `doc/MVP2.0-first-designQuestions.md` has B1–B5. Default: sha256, per-user, auto-skip on bulk / confirm on single, different section = not a dupe, `String(64)` nullable. Affects `app/models/video.py` + `app/routers/videos.py` schema migration.
+
+2. **"Retry this video" button scope** — single video button on the video page (Todo #6) — should it show only when `status='error'`, or also when `status='transcribing'/'generating'/'queued'` so the user can manually restart a stuck job? Default: only on `error` (a running job is already retrying via refresh; a stuck job is a #11 issue).
+
+3. **"Retry all failed" button behavior** — when clicked, does it (a) block until all retries finish, (b) kick off as background tasks and show a toast, or (c) pop a confirm dialog with the count? Default: (b) — feels least disruptive and matches the existing bulk-upload UX.
+
+4. **Export button placement** — on the video page, does the export button live next to the transcript heading (where "Follow:" used to be) or in a top-right actions menu? Default: next to the heading, like a download icon. Three format options in a small dropdown.
+
+5. **Export .md format details** — what does the .md file look like? My current draft:
+   ```markdown
+   # {video.title}
+
+   **Duration:** {duration}s | **Language:** {language} | **Exported:** {date}
+
+   ## Transcript
+
+   [00:00] 第一段文字
+   [00:03] 第二段文字
+   ...
+   ```
+   Is the user happy with this layout, or want a more academic/Notion-style header? Default: as above, it's simple and paste-friendly.
+
+6. **Test approach for the new endpoint/UI** — should I follow the same A/B/C commit pattern (impl / tests / fix) for tasks 3 and 4, or batch them since the patterns are now well-established? Default: A/B/C for the export endpoint (new API surface, needs the discipline); A/B for the retry button (UI-only, lighter). A = 1 commit, B = 1 commit, C = optional follow-up if something needs fixing in test 2.
+
