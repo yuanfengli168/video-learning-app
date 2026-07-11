@@ -667,12 +667,24 @@ async def export_transcript(
     # filesystems may not handle. Real filenames from user uploads
     # can have spaces, CJK, dots, etc. — all fine, but `/`, `\`, `:`
     # are reserved on at least one of Windows / macOS / Linux.
+    #
+    # We also collapse runs of 2+ underscores into a single space.
+    # Bilibili (and some other downloaders) auto-rename files with
+    # a `_______` separator (e.g. `1.-Foo_______-10-07-2026.mp4`),
+    # which looks ugly as a download filename. The DB title is
+    # preserved — this transformation only affects the export
+    # filename shown to the browser. Use a regex to catch the
+    # full run in one go (greedy `_+`).
+    import re as _re_underscore
     safe_title = (
         video.title.replace("/", "-")
         .replace("\\", "-")
         .replace(":", "-")
         .replace("\0", "")
     )
+    safe_title = _re_underscore.sub(r"_+", " ", safe_title)
+    # Trim trailing whitespace so the result doesn't end in a space
+    safe_title = safe_title.rstrip()
     ext = export_extension(format)
     filename = f"{safe_title}.{ext}"
 

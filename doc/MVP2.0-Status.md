@@ -108,3 +108,70 @@ All commits pushed to `origin/MVP2.0`. No uncommitted work in the working tree (
 - The design doc's "TL;DR for tomorrow's session (2026-07-10)" is now **stale** — that day already happened and added 6 commits. Update at the start of MVP2.0.1 wave 3.
 - `Readme.md` and `CHANGELOG.md` are still showing MVP1 stats (218 tests, 96% coverage). These need a fresh entry for MVP2 once 2.0.1 wave 2 is signed off.
 - The screenshot the user shared showing `_______` in the download filenames is **not a code bug** — the `_______` is in the user's source video titles (bilibili auto-renames files like that). The export correctly uses the video's title as the download filename, so the underscores propagate through. No fix needed unless the user wants a "clean up source filenames on upload" feature.
+
+---
+
+## 8. Test coverage investigation (2026-07-11)
+
+> The user asked "any way we can increase test coverage?" Here's the full breakdown. **No code changes** — this is the research doc.
+
+### Current state: 88% (1259 stmts, 147 missed, 397 tests passing)
+
+#### Per-module coverage
+
+| File | Stmts | Missed | Cover | Notes |
+|---|---|---|---|---|
+| `app/routers/generation.py` | 98 | 52 | **47%** | Background worker (`_run_generate_job`, ~88 lines) is the bulk of the miss. Runs real Ollama. |
+| `app/routers/videos.py` | 265 | 67 | **75%** | Background worker (`_run_transcribe_job`, ~100 lines) is the bulk. Runs real Whisper. |
+| `app/services/llm.py` | 59 | 7 | 88% | Bad-LLM-input fallback paths |
+| `app/routers/courses.py` | 117 | 8 | 93% | Mostly 403/404 branches in non-retry routes |
+| `app/jobs.py` | 76 | 5 | 93% | Serialization / progress-setter edge cases |
+| `app/database.py` | 34 | 2 | 94% | Probably the import-error fallback |
+| **Everything else** | ~610 | 6 | **~99%** | Mostly 100% |
+
+#### Why the two big ones are hard
+
+`generation.py` 47% and `videos.py` 75% are low because they contain long **background workers** (`_run_generate_job`, `_run_transcribe_job`) that call real Whisper and real Ollama. The conftest fixture `no_auto_pipeline` deliberately suppresses these from running in tests, which is the right call for unit tests — otherwise every test would take 30+ seconds and need GPU/CPU time for ML models. Trade-off: workers are 0% covered by line count.
+
+#### How to push coverage up
+
+| Approach | Effort | Coverage gain | Tradeoff |
+|---|---|---|---|
+| **A. Mock-based unit tests for the workers** | ~1 day | `generation.py` 47% → ~85%, `videos.py` 75% → ~90%. Project total: **88% → ~92%** | Realistic. Mock `WhisperModel.transcribe`, `generate_materials`, etc. Cover the success path + the "transcript disappeared" + "video disappeared" + exception-handler branches. |
+| **B. Hit the small missing error branches** | ~0.5 day | `videos.py` 75% → ~78%, `courses.py` 93% → ~97%, `llm.py` 88% → ~92%. Project total: **88% → ~89%** | Easy mechanical tests for the 404/403/400 branches. Quick win. |
+| **C. Tighten `llm.py` and `jobs.py`** | ~0.5 day | `llm.py` 88% → ~95%, `jobs.py` 93% → ~98%. Project total: **88% → ~89%** | Same scale as B, different files. |
+| **D. Integration tests** (real Whisper on a 30s audio clip) | ~1.5 days | Doesn't move the % much (background workers already at 0%), but gives real confidence | Best ROI for correctness, worst for line coverage. |
+| **E. Mark worker lines as `# pragma: no cover`** | ~5 min | **88% → ~95%** (instant) | **Bad: hides real bugs.** Don't. |
+
+**Recommendation:** do **B + A**, in that order. B is a half-day of mechanical tests, A is the substantial but worthwhile one. Skip E.
+
+#### What coverage would look like after B + A
+
+- Total: **~92%** (was 88%)
+- Both background workers: covered via mocks, but tests stay fast (no Whisper/Ollama)
+- Remaining gaps: `try: ... except: db.rollback()` paths that need full integration to trigger
+
+#### Things worth knowing
+
+- **Coverage ≠ correctness.** A worker can be 100% line-covered and still pass the wrong model to Ollama. Don't chase 100% — chase meaningful tests.
+- **The current 88% is genuinely good** for a small codebase with ML dependencies. Most "high coverage" projects sit at 85-90% for the same reason.
+- **Integration tests** (run real Whisper on a 30s audio clip, assert the transcript comes back) are worth more than the last 5% of line coverage. The `no_auto_pipeline` fixture is a deliberate trade-off — flip it to run integration tests in CI for the worker paths.
+
+#### Concrete test ideas for A (background workers)
+
+For `_run_transcribe_job` in `app/routers/videos.py`:
+- `test_transcribe_worker_success` — mock `WhisperModel.transcribe` to return a fake segments iterator, assert Asset created, video.status='ready', job='completed'
+- `test_transcribe_worker_video_disappeared` — `db.get(Video, ...)` returns None, assert job='failed' with clear error
+- `test_transcribe_worker_transcript_disappeared` — covers the `if not transcript_asset` branch
+- `test_transcribe_worker_exception_marks_video_error` — Whisper raises, assert `video.status='error'`, `job.status='failed'`
+- `test_transcribe_worker_db_rollback_on_error` — second commit fails inside the exception handler
+
+For `_run_generate_job` in `app/routers/generation.py`:
+- `test_generate_worker_success` — mock `generate_materials` to return a fixed dict, assert all 5 Asset rows created
+- `test_generate_worker_existing_assets_updated` — pre-create Assets, verify they're updated not duplicated
+- `test_generate_worker_progress_callback` — pass `on_progress` callback, assert `set_progress` is called and `video.last_generate_job` is updated
+- `test_generate_worker_video_disappeared`
+- `test_generate_worker_transcript_disappeared`
+- `test_generate_worker_exception_marks_video_error`
+
+That's ~11 tests, each ~20 lines, ~0.5 day to write. Bumps `generation.py` to ~85%, `videos.py` to ~90%, project to ~92%.

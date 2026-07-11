@@ -928,3 +928,72 @@ def test_upload_route_registered_before_transcribe_route():
         f"Route shadowing bug: /upload/{{section_id}} (index {upload_idx}) "
         f"must be declared BEFORE /{{video_id}}/transcribe (index {transcribe_idx})."
     )
+
+def test_export_transcript_collapses_underscore_runs(client: TestClient):
+    """Bilibili (and some other downloaders) auto-rename files with
+    long underscore runs like `1.-Foo_______-10-07-2026.mp4`. The
+    export filename should collapse those into single spaces so
+    the download looks like `1.-Foo -10-07-2026.md`, not
+    `1.-Foo_______-10-07-2026.md`.
+
+    Regression test for the user-reported "ugly download names"
+    complaint (MVP2.0-Status.md §7). The DB title is NOT
+    modified — only the export filename.
+    """
+    course_id, section_id = _create_course_and_section(client)
+    with _mock_auth():
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("x.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        from app.database import SessionLocal
+        ugly_title = "1.-OpenClaw-01-OpenClaw_______-10-07-2026"
+        with SessionLocal() as db:
+            v = db.get(Video, video_id)
+            v.title = ugly_title
+            db.add(Asset(
+                id=f"t-{video_id}", video_id=video_id, asset_type="transcript",
+                content='{"segments": [], "language": "en", "duration": 0}',
+            ))
+            db.commit()
+        # Try all three formats to be sure
+        for fmt, ext in [("md", "md"), ("json", "json"), ("txt", "txt")]:
+            resp = client.get(
+                f"/api/videos/{video_id}/transcript/export?format={fmt}",
+                headers=_auth_headers(),
+            )
+            assert resp.status_code == 200
+            disp = resp.headers["content-disposition"]
+            # The basic filename must NOT contain `___` (any run of
+            # 2+ underscores)
+            assert 'filename="' in disp
+            # Extract the basic filename between the first pair of
+            # double quotes after `filename=`
+            start = disp.index('filename="') + len('filename="')
+            end = disp.index('"', start)
+            basic_name = disp[start:end]
+            assert "___" not in basic_name, (
+                f"underscore run survived in {basic_name!r}"
+            )
+            # The original title had `_______` (7 underscores); the
+            # cleaned name should be a single space, so we expect
+            # "1.-OpenClaw-01-OpenClaw -10-07-2026.<ext>"
+            expected = f"1.-OpenClaw-01-OpenClaw -10-07-2026.{ext}"
+            assert basic_name == expected, (
+                f"got {basic_name!r}, expected {expected!r}"
+            )
+            # The RFC 5987 form should match too
+            from urllib.parse import unquote
+            quoted = disp.split("filename*=UTF-8''")[1]
+            assert unquote(quoted) == expected
+
+    # Sanity: the DB title is unchanged (we only sanitize the
+    # download filename, not the source data)
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        v = db.get(Video, video_id)
+        assert v.title == ugly_title, (
+            f"DB title was modified: {v.title!r} (expected unchanged)"
+        )
