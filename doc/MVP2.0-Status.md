@@ -175,3 +175,30 @@ For `_run_generate_job` in `app/routers/generation.py`:
 - `test_generate_worker_exception_marks_video_error`
 
 That's ~11 tests, each ~20 lines, ~0.5 day to write. Bumps `generation.py` to ~85%, `videos.py` to ~90%, project to ~92%.
+
+---
+
+## 9. 2026-07-11 — Discuss tab shipped (commit `b20584a`)
+
+> User's manual todo #6: "I got question on this quiz, but no way to ask why based on the transcript of video." Built a whole-video chat tab.
+
+**What shipped:**
+- 5th tab on the video page: **💬 Discuss**
+- New endpoint `POST /api/chat/video-sessions` (separate from the existing `/sessions` which is per-flashcard)
+- The AI gets the full transcript + summary + mindmap + quiz as the system prompt
+- Sessions are persisted in the same `ChatSession` table with `scope='video'` so the user can come back later via `/chat-history`
+- `app/chat_history.html` shows `VIDEO` / `FLASHCARD` badges so the user can tell the two types apart
+- The original flashcard-scope chats are unchanged
+
+**Implementation details:**
+- Added `scope` column to `chat_sessions` (additive migration, default `'flashcard'`)
+- `concept` column stays `NOT NULL` — video-scope rows use `"[whole video]"` as a placeholder (cheaper than a destructive migration)
+- Long transcripts (1000+ segments) get head + tail truncation (600 segments) in the LLM context to keep the prompt under ~10K tokens
+- Quiz is rendered as `Q: ... ✓ Correct Answer` in the LLM context (not all 4 options — saves tokens)
+- Frontend: session is created lazily when the user opens the tab, typing indicator while the AI is responding, Enter-to-send
+
+**Test results:** 412/412 passing (was 397, +15).
+
+**Files changed:** 8 (1 model, 1 service, 1 router, 1 db migration, 2 templates, 2 test files). 800 insertions.
+
+**What's deferred (from user's manual todo #6):** OCR of the video. The current implementation only uses the Whisper transcript + generated materials. If the user wants to ask about text shown in the video frames, that's a separate feature.
