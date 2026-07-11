@@ -71,7 +71,7 @@
                             {% elif video.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
                             {% elif video.status in ('transcribing', 'generating', 'queued') %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
                             {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
-                            {{ video.status }}
+                            {{ video.status }}{% if video.status == 'ready' and video.generated_at and video.created_at %} · {{ (video.generated_at - video.created_at).total_seconds() | format_duration }}{% endif %}
                         </span>
                     </a>
                     {% else %}

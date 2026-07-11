@@ -832,8 +832,8 @@ def test_upload_bulk_partial_success(client: TestClient):
 
     def size_side_effect(path: str) -> int:
         call_count[0] += 1
-        # First file: 100 bytes (valid). Second file: 3 GB (over limit).
-        return 100 if call_count[0] == 1 else 3 * 1024 * 1024 * 1024
+        # First file: 100 bytes (valid). Second file: 11 GB (over the 10 GB cap, MVP3.0 #1).
+        return 100 if call_count[0] == 1 else 11 * 1024 * 1024 * 1024
 
     files = [
         ("files", ("good.mp4", io.BytesIO(b"v"), "video/mp4")),

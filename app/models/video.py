@@ -90,6 +90,16 @@ class Video(Base):
     # the next /status poll.
     last_transcribe_job: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     last_generate_job: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # ── Pipeline completion timestamps (MVP3.0 #8) ──────────────────────────
+    # Set by the workers (videos._run_transcribe_job and
+    # generation._run_generate_job) when each step reaches status=ready.
+    # Used by the course page to render "ready · in 9:08" so the user
+    # can see how long each video took to process. Nullable for legacy
+    # rows (videos uploaded before MVP3.0) and for videos still in flight.
+    # Stored as naive UTC (consistent with created_at) so SQLAlchemy +
+    # SQLite don't choke on tzinfo serialization.
+    transcribed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

@@ -75,6 +75,22 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "scope",
         "ALTER TABLE chat_sessions ADD COLUMN scope VARCHAR(32) NOT NULL DEFAULT 'flashcard'",
     ),
+    # MVP3.0 #8 — completion timestamps for the transcribe and
+    # generate pipeline steps. Nullable so legacy rows (uploaded
+    # before MVP3.0) stay valid; new uploads get the timestamps
+    # set by the workers when each step reaches status=ready. The
+    # course page renders "ready · in 9:08" by computing
+    # generated_at - created_at when both are present.
+    (
+        "videos",
+        "transcribed_at",
+        "ALTER TABLE videos ADD COLUMN transcribed_at DATETIME",
+    ),
+    (
+        "videos",
+        "generated_at",
+        "ALTER TABLE videos ADD COLUMN generated_at DATETIME",
+    ),
 ]
 
 

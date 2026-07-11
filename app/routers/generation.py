@@ -1,6 +1,7 @@
 """Generation router — trigger LLM generation for a video."""
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -148,6 +149,12 @@ def _run_generate_job(video_id: str) -> None:
                 ))
 
         video.status = "ready"
+        # MVP3.0 #8: stamp the generate-step completion so the
+        # course page can show "ready · in 9:08" by subtracting
+        # video.created_at from this timestamp. Naive UTC to match
+        # the created_at column (consistent with how
+        # transcribed_at is set in videos._run_transcribe_job).
+        video.generated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         finish_job(
             job,
             status="completed",

@@ -3,6 +3,7 @@
 import os
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -416,6 +417,12 @@ def _run_transcribe_job(video_id: str, model_name: str) -> None:
 
         video.duration = result["duration"]
         video.status = "ready"
+        # MVP3.0 #8: stamp the transcribe-step completion so the
+        # course page can show "ready · in 9:08" by comparing
+        # generated_at - created_at once generation finishes. Naive
+        # UTC to match the existing created_at column (avoids
+        # tzinfo round-trip surprises with SQLite).
+        video.transcribed_at = datetime.now(timezone.utc).replace(tzinfo=None)
         finish_job(
             job,
             status="completed",

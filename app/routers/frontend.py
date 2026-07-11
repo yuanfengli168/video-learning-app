@@ -72,6 +72,32 @@ templates.env.filters["natural_sort_key"] = _natural_sort_key_filter
 templates.env.filters["natural_sort_key_str"] = _natural_sort_key_str_filter
 
 
+def _format_duration_filter(seconds: float | int | None) -> str:
+    """Render a duration in seconds as a human-readable string.
+
+    MVP3.0 #8: used by the course page to show "ready · 9:08" or
+    "ready · 1:23:45" beside each video's status badge.
+
+    Format:
+      - < 1 minute:  "0:SS"  (e.g. 42 sec → "0:42")
+      - < 1 hour:    "M:SS"  (e.g. 9 min 8 sec → "9:08")
+      - >= 1 hour:   "H:MM:SS" (e.g. 2 h 5 min 33 sec → "2:05:33")
+
+    Returns "" for None / negative — caller is expected to check.
+    """
+    if seconds is None or seconds < 0:
+        return ""
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+templates.env.filters["format_duration"] = _format_duration_filter
+
+
 def _ctx(
     request: Request,
     user: dict[str, Any] | None,
