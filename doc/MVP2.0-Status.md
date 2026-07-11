@@ -260,3 +260,73 @@ background worker pool.
 **Test results:** 453/453 passing (was 438, +15).
 
 **Files changed:** 7 (1 model, 1 db migration, 2 router, 1 frontend filter, 1 template, 1 new test file) + 1 updated test file.
+
+## 13. 2026-07-11 — Whisper model picker with smart picks (commits `2a96049`, `1497cd7`)
+
+> MVP3.0 #2 (plumbing only). The actual MLX backend implementation is
+> deferred — see `doc/MVP3.0-Status.md` row 2.
+
+**What shipped:**
+- 6-option model dropdown (4 manual + 2 smart picks), rendered as an
+  `<optgroup>` so the manual picks and the smart picks are visually
+  separated.
+- New `MODEL_REGISTRY` (single source of truth for choices) +
+  `resolve_model_choice()` (maps a user choice to a (backend, model_id)
+  pair, with MLX auto-fallback) + `get_default_model_choice()` (picks
+  the right default per platform).
+- New `transcribe_with_backend()` function that dispatches to
+  faster-whisper or mlx-whisper based on the resolved choice. The
+  faster-whisper path is fully wired up. The mlx-whisper path raises
+  `NotImplementedError` — the actual `mlx_whisper.transcribe()` call
+  is a follow-up commit.
+- New `/api/videos/models` endpoint returns a richer shape:
+  `{choices, default, models: legacy flat list}`.
+- 3 new DB columns on `videos`: `whisper_backend`, `whisper_resolved_model`,
+  `whisper_fallback_reason`. Migration is additive (existing rows
+  remain valid).
+- `upload_video` and `_run_auto_pipeline` now default to
+  `get_default_model_choice()` (MLX smart pick on M-series, else
+  faster-whisper smart pick, else `base`).
+- The transcribe worker (`_run_transcribe_job`) is refactored to use
+  `transcribe_with_backend()`, removing its inline faster-whisper
+  boilerplate. The resolved (backend, model_id, fallback_reason)
+  is persisted on the video row.
+- JS at the bottom of `video.html` fetches `/api/videos/models` on
+  page load and selects the recommended default option. Falls back
+  to the first `<option>` (tiny) if the fetch fails.
+
+**Decisions (from A, A, A):**
+- Default = MLX smart pick when available, else faster-whisper smart
+  pick, else `base`. (Confirmed on user's M1 Max.)
+- MLX auto-fallback on Intel Mac: silently fall back to the
+  faster-whisper smart pick. The `whisper_fallback_reason` column
+  records the reason; the UI can show "actually ran X" later.
+- UI = grouped optgroup, not a flat list. "Manual (pick a size)" and
+  "Smart picks (recommended)" group the 4 and 2 entries.
+
+**Bug fix bundled in (was broken before Part A):**
+- The `format_duration` Jinja filter (used by the course page's
+  "ready · 9:08" badge from MVP3.0 #8) was missing from
+  `app/routers/frontend.py`. Restored as part of this commit so
+  `tests/test_ready_timing.py` passes again.
+- The `transcription._model_cache` is a module-level dict that was
+  leaking between tests, causing flaky behaviour in
+  `test_ready_timing.py`. Added an autouse fixture
+  (`clear_whisper_model_cache`) in `tests/conftest.py` to clear
+  the cache before and after every test.
+
+**Test results:** 491/491 passing (was 447, +44).
+- `app/services/transcription.py`: 100% coverage.
+- `app/routers/videos.py`: 90% coverage (the new MVP3.0 #2 code is
+  fully covered; the missing lines are pre-existing).
+
+**Files changed:** 5 (1 service, 1 router, 1 model, 1 db migration,
+1 template) + 1 new test file (`tests/test_whisper_picker.py`,
+44 tests) + 1 fixture in conftest + 1 test_model_video update.
+
+**What's NOT shipped (deferred):**
+- The actual `mlx_whisper.transcribe()` call. Requires the user to
+  `pip install mlx-whisper` on the M1 Max first. The plumbing is
+  ready; the worker will start using it as soon as that pip
+  install completes.
+- "Cloud Whisper" paid tier (MVP3.0 #3) — still conceptual, no code.

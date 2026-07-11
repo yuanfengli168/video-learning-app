@@ -88,7 +88,7 @@ on branch `MVP2.0` (20 commits ahead of `main`, all pushed). The "i18n /
 Alembic / Celery" pillars are still in design or pending. See
 [`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) for the live status table.
 
-**Stats (as of 2026-07-11):** 453 tests passing · 87% backend coverage · 29 new commits · 0 regressions
+**Stats (as of 2026-07-11):** 491 tests passing · 87% backend coverage · 31 new commits · 0 regressions
 
 ### ✨ Features
 
@@ -105,6 +105,7 @@ Alembic / Celery" pillars are still in design or pending. See
 - **Video / section / course delete** (`40d8c4a`, `2213bc9`, `1acc4ea`, `6a881e9`) — hard-delete cascades with file unlink + asset + chat-session cleanup. Each endpoint returns a summary `{status, deleted: {file, files, assets, chat_sessions}}` for a meaningful toast. Frontend confirmation modal on the video page header, each section header, and each course card on the dashboard. Soft-delete / trash / restore is deferred to MVP3 (see `doc/manualTodo.txt` #8).
 - **10 GB upload cap** (`e5db159`) — raised `MAX_FILE_SIZE` from 2 GB to 10 GB (inclusive) per manual todo [jul11] #3.
 - **"ready · 9:08" timing badge** (`ae4df7d`) — every video's status badge on the course page now shows how long it took from upload to ready, e.g. `ready · 9:08` or `ready · 2:05:33` for > 1 hour. Stamped by the transcribe + generate workers, formatted via a new `format_duration` Jinja filter.
+- **Whisper model picker with smart picks (plumbing)** (`2a96049`, `1497cd7`) — adds 2 new options to the model dropdown: "Local best and fast" (Distil-large-v3 via faster-whisper) and "Local best and extremely fast" (MLX Whisper with distil-large-v3, Apple Silicon only). UI uses an `<optgroup>` dropdown; default is platform-dependent (MLX smart pick on M-series, faster-whisper smart pick elsewhere). `transcribe_with_backend()` dispatches by backend with auto-fallback. The actual MLX call is a follow-up commit (it raises `NotImplementedError` until `mlx-whisper` is wired up). New DB columns track the resolved backend + model per video so the UI can show what actually ran.
 
 ### 🐛 Bug fixes
 

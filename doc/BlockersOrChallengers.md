@@ -333,3 +333,109 @@ finishes in ~30 min serial or ~5 min with 10 parallel requests. Documented in
 Investigated, recommendation in `doc/MVP3.0-Status.md` row 1 (raise cap) and row
 2 (whisper backend). 1-minute target is a **paid tier / cloud** feature, not a
 local-only one. Awaiting user direction on whether to start Phase 1 this week.
+### 2. Whisper model compare:
+
+1. Distil-Whisper (Option C)
+What it is: A distilled version of OpenAI's whisper-large-v3. Same architecture, but a team at Hugging Face trained it using a "pseudo-labeling" technique where the original large-v3 model produced labels, then a smaller student model was trained to mimic those labels. The result is roughly half the parameters of large-v3 with ~95% of the accuracy.
+
+Two variants you'll see:
+
+distil-large-v3 (756M params, vs large-v3's 1.5B) — recommended
+distil-medium.en (394M params, English-only) — even faster, lower accuracy
+Why it's faster: The standard tiny/base/small/medium Whisper models are already "distilled" in a sense (smaller variants of large). Distil-large sits in the middle — bigger than small (244M), smaller than medium (769M), but with large-v3's training. So you get large's quality at small's speed.
+
+Runtime: Same faster-whisper (CTranslate2) engine you already use. Drop-in replacement, just change the model name. No new dependency, no Mac-specific code path.
+
+Mac chip minimum: Anything that runs faster-whisper today. M1+ recommended, Intel Macs work but are slow. The 6-hour job on M1 Pro with distil-large-v3 would take ~25-40 min.
+
+2. MLX Whisper (Option D)
+What it is: Apple's MLX framework is a NumPy-like array library designed specifically for Apple Silicon. It uses the Neural Engine (ANE) + Metal GPU for compute, not just CPU. mlx-whisper is a port of Whisper to MLX by the community.
+
+Why it's faster than faster-whisper on Mac: faster-whisper uses CTranslate2 (CPU-optimized, very efficient on x86). On Apple Silicon, CTranslate2 only uses the performance cores (P-cores) and doesn't touch the ANE — which is the dedicated ML hardware on M-series chips. MLX uses the ANE directly, so it gets 3-4x more compute throughput on the same hardware.
+
+Mac chip minimum: M1 or newer ONLY. Intel Macs cannot use MLX — no ANE, no Metal compute path. If you have an M1/M2/M3/M4 it'll work; on M1 Pro/Max/Ultra it'll be even faster because they have more ANE cores and more GPU cores.
+
+Mac chip optimal: M1 Pro / M2 Pro / M3 Pro / M4 Pro (16-core ANE, 16-19-core GPU). The M1/M2/M3/M4 Max chips are even better (32-core ANE).
+
+Compatibility check:
+
+3. whisper.cpp + CoreML (Option E)
+What it is: Two pieces glued together:
+
+whisper.cpp: Georgi Gerganov's C++ port of Whisper. Runs on basically anything (CPU, GPU via Metal/CUDA/OpenCL/ANE).
+CoreML: Apple's framework for running ML models on ANE/GPU. You convert the Whisper model to CoreML format (a one-time step per model size).
+Why faster than faster-whisper on Mac: Like MLX, it uses the ANE. But unlike MLX, whisper.cpp has been around longer (since 2022), is much more mature, and supports more platforms (Mac, Linux, Windows, even Raspberry Pi).
+
+Mac chip minimum: M1+ (because CoreML is Apple-only). But the conversion step is finicky — you need coremltools and the conversion can fail on edge cases.
+
+Why we ranked it below MLX: More setup, more moving parts, less Pythonic. MLX is a "pip install and go" experience for Whisper; whisper.cpp+CoreML requires you to convert each model variant you want to use.
+
+4. Insanely Fast Whisper (Option G)
+What it is: A Python wrapper around faster-whisper that adds batched inference + flash attention via PyTorch. Designed to max out a beefy NVIDIA GPU.
+
+Why it doesn't help you on Mac:
+
+Flash attention is a CUDA-specific optimization (uses Tensor Cores)
+ANE can't run flash attention
+The batching technique works on any GPU but needs > 8 GB VRAM
+Apple's Metal GPU doesn't have an equivalent of Tensor Cores
+Mac chip minimum: None — it simply won't work on Mac. You'd need a Linux box with an A100/H100. The "minimum" to even get a 2x speedup is an RTX 3090 (24 GB VRAM); the "you'll actually see 10x" is an A100 (80 GB).
+
+Speed comparison for your scenario: 6 hours of audio, 10 GB video
+Assuming you're on a 2021 MacBook Pro M1 Pro / 16 GB (a realistic baseline for the user):
+
+Backend	Model	Est. time for 6h audio	Realtime factor	Notes
+faster-whisper (current)	base	~72 min	5x	What you have today
+faster-whisper (current)	small	~180 min	2x	Worse — not recommended
+faster-whisper + distil	distil-large-v3	~25-30 min	12-15x	Drop-in change, 1 line of config
+MLX Whisper	large-v3	~15-20 min	20-25x	Mac M-series only, new dep
+MLX + distil	distil-large-v3	~8-12 min	30-45x	Best of both worlds
+whisper.cpp + CoreML	large-v3	~18-25 min	15-20x	More setup, finicky
+Insanely Fast Whisper	large-v3	N/A on Mac	—	Linux + NVIDIA only
+Cloud Whisper API	large-v3	~1-2 min	200-400x	$0.36-0.72 per 6h file
+Sanity check on the math: 6 hours of audio at 5x realtime = 6 × 60 / 5 = 72 min ✅. At 30x = 12 min ✅.
+
+Which one should you actually pick?
+If you want easiest, biggest win this week (1 day of work):
+
+Distil-large-v3 via faster-whisper. Zero new dependencies, just change model_size from "base" to "distil-large-v3". 6h audio: ~25-30 min (down from 72 min, ~3x faster with large-v3 accuracy). Whichever Mac you have works.
+If you want best local performance, period (1-2 days of work):
+
+MLX Whisper with distil-large-v3. New dep, requires Apple Silicon, but 6h audio: ~8-12 min (~7x faster than current, near real-time). Your transcribe step basically disappears as a wait.
+If you want truly fast, don't care about cost (paid tier, MVP3.0):
+
+Cloud Whisper API. 6h audio: ~1-2 min. The only path to your "1 minute" goal. ~$2-4 per 10 GB video.
+
+
+### 2.2 Trial on Faster Whisper models (local best and fast, loacl best and extremely fast)
+- so we add these 2 picks in selection on top of tiny, base, small, medium: local best and fast, loacl best and extremely fast
+  - local best and fast: Distil-large-v3 via faster-whisper
+  - loacl best and extremely fast MLX Whisper with distil-large-v3
+Can we have 5 thing together? (you mentioned MLX Whisper with distil-large-v3 need new dep? can it used with all other 4? what do you mean by dep?)
+#### Resolution [2026-07-11]
+
+User picked options A, A, A:
+1. **Default = "Local best and extremely fast"** (MLX + distil-large-v3)
+   when MLX is available, else fall back to "Local best and fast"
+   (Distil via faster-whisper), else the legacy `base`.
+2. **MLX auto-fallback on non-Apple-Silicon**: silently fall back to
+   the faster-whisper smart pick and surface a warning via
+   `whisper_fallback_reason` on the video row. The UI can show the
+   "actually ran X" message in a follow-up.
+3. **UI = grouped optgroup** — 4 originals under "Manual (pick a size)",
+   2 new under "Smart picks (recommended)".
+
+User's question "what do you mean by dep?" — short answer: a `pip install`
+Python package. `mlx-whisper` is the new dep. The 5 things (4 manual + 1 fast
+smart pick that ALSO uses faster-whisper) work together fine without any
+new dep. Only the 6th option ("extremely fast" via MLX) needs the
+`mlx-whisper` install. The dropdown shows all 6; if the user picks
+"extremely fast" on an Intel Mac, we auto-fall back to "fast".
+
+User's M1 Max confirmed: `sw_vers` → `arm64 Apple M1 Max`. MLX will
+work natively (16-core ANE, 32-core GPU, 400 GB/s memory bandwidth).
+
+**Status:** Plumbing shipped in `2a96049` + `1497cd7`. Actual MLX
+implementation deferred until user runs `pip install mlx-whisper`
+on the M1 Max. See `doc/MVP3.0-Status.md` row 2 (status:
+"Plumbing done; MLX backend itself still raises `NotImplementedError`").

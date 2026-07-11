@@ -29,7 +29,7 @@
 | # | Item | Pillar | Priority | Status | Notes / Source |
 |---|------|--------|----------|--------|----------------|
 | 1 | Raise `MAX_FILE_SIZE` from 2 GB → **10 GB** | Reliability | **P0** | **Done** (`e5db159`) | `doc/manualTodo.txt` [jul11] #3. `app/routers/videos.py:36`. Investigated in `doc/BlockersOrChallengers.md` §1. |
-| 2 | Whisper backend swap: `faster-whisper` → **`mlx-whisper`** (M-series native) | Performance | **P0** | Not started | 3-4x speedup on Apple Silicon. Investigated in `doc/BlockersOrChallengers.md` §1. Phase 1: also try `distil-large-v3` for 6-7x. |
+| 2 | Whisper model picker + smart picks (plumbing only) | Performance | **P0** | **Plumbing done** (`2a96049`, `1497cd7`); MLX backend itself still raises `NotImplementedError` | 6-option optgroup dropdown (4 manual + 2 smart picks). Default = MLX on M-series, faster-whisper fallback elsewhere. `transcribe_with_backend()` dispatches by backend, with auto-fallback to `local-best-and-fast` when MLX isn't available. Actual `mlx-whisper.transcribe()` call is a follow-up (requires `pip install mlx-whisper` on user's M1 Max first). Investigated in `doc/BlockersOrChallengers.md` §1. |
 | 3 | Cloud Whisper API (paid tier) — opt-in per-video | Scale | **P2** | Not started | $0.006-0.012/min. 1-hour audio in ~1-2 min. **Only way to hit 1-min/16-hr target** (see `BlockersOrChallengers.md` §1). |
 | 4 | Background worker pool + status polling for batch uploads | Performance | **P1** | Not started | Lets user queue 100 videos and walk away. `BackgroundTasks` is single-process today. |
 | 5 | Soft-delete / trash / restore (30-day TTL) | Reliability | **P1** | Not started | `doc/manualTodo.txt` [jul10] #8. Currently we hard-delete on click. |
