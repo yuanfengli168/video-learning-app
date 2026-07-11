@@ -88,7 +88,7 @@ on branch `MVP2.0` (20 commits ahead of `main`, all pushed). The "i18n /
 Alembic / Celery" pillars are still in design or pending. See
 [`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) for the live status table.
 
-**Stats (as of 2026-07-11):** 396 tests passing · 87% backend coverage · 20 new commits · 0 regressions
+**Stats (as of 2026-07-11):** 438 tests passing · 87% backend coverage · 27 new commits · 0 regressions
 
 ### ✨ Features
 
@@ -100,6 +100,9 @@ Alembic / Celery" pillars are still in design or pending. See
 - **Retry-all-failed button on the section header** (`3bb256b`, `162c85d`) — one click re-queues every failed video in the section. Spinner + "Retrying N (X transcribe, Y generate)" toast.
 - **Transcript export endpoint** (`a1235b2`) — `GET /api/videos/{id}/transcript/export?format=md|json|txt`. Returns the transcript as Markdown / JSON / plain text with proper RFC 5987 unicode filenames.
 - **Download transcript button on the video page** (`72ae0bc`) — format selector + download button next to the transcript header. Filename = the video's title (matches the original upload filename minus extension).
+- **Export filename cleaned** (`b026d81`) — strip ugly runs of underscores (e.g. `____` from Bilibili auto-renames) from the exported transcript filename, but leave the original DB title alone.
+- **Whole-video chat (Discuss tab)** (`b20584a`) — 5th tab on the video page. AI gets the full transcript + summary + mindmap + quiz as the system prompt. Sessions persisted in the same `ChatSession` table with `scope='video'`. `/chat-history` shows VIDEO/FLASHCARD badges to tell the two types apart.
+- **Video / section / course delete** (`40d8c4a`, `2213bc9`, `1acc4ea`, `6a881e9`) — hard-delete cascades with file unlink + asset + chat-session cleanup. Each endpoint returns a summary `{status, deleted: {file, files, assets, chat_sessions}}` for a meaningful toast. Frontend confirmation modal on the video page header, each section header, and each course card on the dashboard. Soft-delete / trash / restore is deferred to MVP3 (see `doc/manualTodo.txt` #8).
 
 ### 🐛 Bug fixes
 
@@ -108,6 +111,8 @@ Alembic / Celery" pillars are still in design or pending. See
 - **0-byte upload crashes auto-pipeline** (`eeab211`) — upload only checked the upper size bound. Empty files from cancelled uploads would crash Whisper with `[Errno 1094995529] Invalid data found when processing input`. Now returns 400 with a clear message.
 - **"Retry N failed" button does nothing** (`162c85d`) — endpoint only looked at `last_generate_job.status='failed'`, not `last_transcribe_job.status='failed'`. Fixed by partitioning failures by step (transcribe / generate). 5th postmortem in `doc/Blockers.md`.
 - **Transcript panel showing 00:10 instead of 00:00 on page load** — fixed in MVP2.0.0a. `offsetTop` is relative to body, not container. Fixed with `getBoundingClientRect`.
+- **Video delete redirected to the wrong course** (`1951a20`, `00c8c84`) — frontend used `document.querySelector('a[href^="/course/"]')` to find the redirect target, but that grabbed the first course link on the page (sidebar/course list), not the video's actual course. Fixed by rendering `courseId` as a JS constant and using it directly.
+- **Section delete click did nothing** (`5f38435`) — root cause was a missing `}` for the `uploadVideo` function (introduced in `7e70fe3`), which made the entire course page `<script>` block a syntax error. Browsers don't run a script with a syntax error at all, so *every* page JS (toggleSection, retryAllFailed, showDeleteSectionModal, …) was dead code. Fixed by adding the missing brace. Also added a regression test (`test_course_page_inline_script_parses_cleanly`) that reads the template source and asserts brace+paren balance, so any future script-syntax regression fails the test suite.
 
 ### 📚 Docs
 

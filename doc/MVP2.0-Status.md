@@ -202,3 +202,28 @@ That's ~11 tests, each ~20 lines, ~0.5 day to write. Bumps `generation.py` to ~8
 **Files changed:** 8 (1 model, 1 service, 1 router, 1 db migration, 2 templates, 2 test files). 800 insertions.
 
 **What's deferred (from user's manual todo #6):** OCR of the video. The current implementation only uses the Whisper transcript + generated materials. If the user wants to ask about text shown in the video frames, that's a separate feature.
+
+## 10. 2026-07-11 — Video / course / section delete shipped (commits `40d8c4a` → `1acc4ea`)
+
+> User's manual todo #5: "can we delete the video quickly on section page and on video page and when delete the thing moved to trash folder, and will be permanently deleted after 30 days, or manually deleted in the trash folder empty all button etc, and can have restore button in trash bin"
+>
+> For MVP2.0 we shipped the hard-delete path first; soft-delete/trash is deferred to MVP3 (item #8 in manualTodo).
+
+**What shipped (3 cascades, 3 buttons):**
+- `DELETE /api/videos/{id}` — deletes the video, its asset files, and any chat sessions. Frontend button on the video page header.
+- `DELETE /api/courses/{id}/sections/{section_id}` — deletes the section, all videos in it, their assets, files, and chat sessions. Frontend button on each section header in the course page.
+- `DELETE /api/courses/{id}` — deletes the course, all sections, videos, assets, files, chat sessions. Frontend button on each course card on the dashboard.
+
+**Why a delete cascade summary:** the user wants to know what was deleted (e.g. "3 files, 1 chat"). Each endpoint returns `{status, deleted: {file, files, assets, chat_sessions}}` so the UI can show a meaningful toast.
+
+**File unlink semantics:** `Path.unlink()` swallows `OSError` — if the file is already gone (manually deleted, on a different volume, etc) the DB delete still succeeds, we just count the file as `files_missing` instead of `files_deleted`. This is the principle of least surprise for the user.
+
+**Bugs caught and fixed during the roll-out:**
+1. **Video delete redirect bug** (commits `1951a20` / `00c8c84`): deleting a video redirected to the wrong course because the frontend grabbed the first `a[href^="/course/"]` on the page (sidebar/course list) instead of the video's actual course. Fixed by rendering `courseId = '{{ course.id if course else "" }}'` as a JS constant and using it directly.
+2. **Section delete click did nothing** (commit `5f38435`, today): user reported the section delete button click had no visible effect. The button was rendered correctly with the right `onclick`, the endpoint existed, the server was up — but the browser silently refused to run **any** JavaScript on the course page. Root cause: a missing closing `}` for the `uploadVideo` function (introduced in `7e70fe3`, the auto-pipeline + bulk upload feature) left the whole `<script>` block with a JS syntax error. Browsers don't run a script with a syntax error at all, so `toggleSection`, `retryAllFailed`, `showDeleteSectionModal`, and the rest were dead code. Fixed by adding the missing `}`. Also added a regression test (`test_course_page_inline_script_parses_cleanly`) that reads the template source and asserts brace+paren balance, so any future script-syntax regression fails the test suite.
+
+**Test results:** 438/438 passing (was 412, +26). Coverage stays at 96%+ project-wide.
+
+**Files changed:** 6 (2 routers, 1 model, 2 templates, 1 test). ~350 insertions across the feature.
+
+**What's deferred to MVP3:** soft-delete / trash / restore (manualTodo #8).
