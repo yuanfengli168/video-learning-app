@@ -6,7 +6,7 @@
 <div class="space-y-4">
     <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold">💬 Chat History</h1>
-        <p class="text-sm text-gray-400">Continue any past conversation about a flashcard concept.</p>
+        <p class="text-sm text-gray-400">Continue past flashcard chats or whole-video discussions.</p>
     </div>
 
     {% if not user %}
@@ -90,20 +90,31 @@ async function loadSessions() {
 function renderSessionList(sessions) {
     const container = document.getElementById('session-list');
     if (sessions.length === 0) {
-        container.innerHTML = '<div class="p-6 text-center text-sm text-gray-400">No chat sessions yet. Click "Teach me real-world usage" on a flashcard to start one.</div>';
+        container.innerHTML = '<div class="p-6 text-center text-sm text-gray-400">No chat sessions yet. Open the 💬 Discuss tab on a video, or click "Teach me real-world usage" on a flashcard to start one.</div>';
         return;
     }
-    container.innerHTML = sessions.map(s => `
+    container.innerHTML = sessions.map(s => {
+        // MVP2.0 — distinguish the two chat scopes with a small badge.
+        // Video-scope sessions use a "[whole video]" placeholder concept;
+        // show that as a friendly label with a different icon + colour
+        // so the user can tell them apart from flashcard chats.
+        const isVideo = s.scope === 'video';
+        const label = isVideo ? '💬 Whole video' : '💡 ' + escapeHtml(s.concept);
+        const badge = isVideo
+            ? '<span class="inline-block ml-1 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">VIDEO</span>'
+            : '<span class="inline-block ml-1 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">FLASHCARD</span>';
+        return `
         <div class="session-item p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer ${s.id === currentSessionId ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''}" data-id="${s.id}" data-concept="${escapeHtml(s.concept).toLowerCase()}" onclick="selectSession('${s.id}')">
             <div class="flex items-start justify-between gap-2">
                 <div class="flex-1 min-w-0">
-                    <p class="font-medium text-sm truncate">${escapeHtml(s.concept)}</p>
+                    <p class="font-medium text-sm truncate">${label}${badge}</p>
                     <p class="text-xs text-gray-400 mt-0.5">${s.message_count} message${s.message_count === 1 ? '' : 's'} • ${formatDate(s.created_at)}</p>
                 </div>
                 <button onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete" class="text-gray-400 hover:text-red-500 text-xs flex-shrink-0">✕</button>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function filterSessions() {
@@ -159,7 +170,11 @@ function renderSessionDetail(session) {
     container.innerHTML = `
         <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
             <div class="min-w-0">
-                <h2 class="font-semibold truncate">💡 ${escapeHtml(session.concept)}</h2>
+                <h2 class="font-semibold truncate">${
+                    session.scope === 'video'
+                        ? '💬 Whole video'
+                        : '💡 ' + escapeHtml(session.concept)
+                }</h2>
                 <p class="text-xs text-gray-400 mt-0.5">
                     <a href="/video/${session.video_id}" class="text-indigo-500 hover:underline">View video</a>
                     • ${(session.messages || []).length} message${(session.messages || []).length === 1 ? '' : 's'}

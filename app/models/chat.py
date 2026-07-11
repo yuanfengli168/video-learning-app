@@ -8,9 +8,34 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
+# Allowed values for ChatSession.scope.
+# - "flashcard" (default): triggered by a flashcard's "Teach me real-world
+#   usage" button. The `concept` column holds the flashcard text.
+# - "video": triggered by the "💬 Discuss" tab on the video page. The
+#   chat has access to the full transcript + summary + mindmap + quiz
+#   via the system prompt. `concept` is set to a placeholder string
+#   (the column is NOT NULL).
+SCOPE_FLASHCARD = "flashcard"
+SCOPE_VIDEO = "video"
+VALID_SCOPES = {SCOPE_FLASHCARD, SCOPE_VIDEO}
+
+# Placeholder stored in the (NOT NULL) `concept` column for
+# video-scope sessions. The chat history UI hides it when
+# `scope == SCOPE_VIDEO`. Importing it from here keeps the
+# router and tests in sync.
+VIDEO_SCOPE_CONCEPT_PLACEHOLDER = "[whole video]"
+
 
 class ChatSession(Base):
-    """A chat session triggered by a flashcard's 'Teach me real-world usage' button."""
+    """A chat session.
+
+    Two scopes:
+    - scope='flashcard' (default): one chat per flashcard concept. The
+      `concept` column holds the trigger text.
+    - scope='video': one (or more) chats per video. The `concept`
+      column is NULL; context is built from the video's transcript
+      and generated materials.
+    """
 
     __tablename__ = "chat_sessions"
 
@@ -21,8 +46,16 @@ class ChatSession(Base):
     video_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("videos.id", ondelete="CASCADE"), nullable=False
     )
-    # The flashcard concept that triggered this chat
+    # The flashcard concept that triggered this chat. For video-scope
+    # sessions, this is set to a placeholder ("[whole video]") so the
+    # column can stay NOT NULL — the placeholder is filtered out in
+    # the UI when scope='video'. Cheaper than a schema migration.
     concept: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Which kind of chat this is — see SCOPE_* constants above. Defaults
+    # to "flashcard" so existing rows (pre-scope) still work.
+    scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=SCOPE_FLASHCARD, server_default=SCOPE_FLASHCARD
+    )
     # System prompt used to initialise the chat
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(

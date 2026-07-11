@@ -65,6 +65,16 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "last_generate_job",
         "ALTER TABLE videos ADD COLUMN last_generate_job VARCHAR(2048)",
     ),
+    # MVP2.0 — add scope column to chat_sessions so we can have
+    # both flashcard-scope (one chat per concept) and video-scope
+    # (one chat per video, discusses whole transcript) sessions in
+    # the same table. Default 'flashcard' so all existing rows
+    # remain valid.
+    (
+        "chat_sessions",
+        "scope",
+        "ALTER TABLE chat_sessions ADD COLUMN scope VARCHAR(32) NOT NULL DEFAULT 'flashcard'",
+    ),
 ]
 
 

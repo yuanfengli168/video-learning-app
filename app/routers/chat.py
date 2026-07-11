@@ -11,7 +11,15 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models import Asset, ChatMessage, ChatSession, Course, Section, Video
-from app.services.chat import build_system_prompt, chat_with_ollama
+from app.models.chat import SCOPE_VIDEO, VALID_SCOPES, VIDEO_SCOPE_CONCEPT_PLACEHOLDER
+from app.services.chat import (
+    build_system_prompt,
+    build_video_system_prompt,
+    chat_with_ollama,
+    render_quiz_for_chat,
+    transcript_to_chat_text,
+)
+from app.services.transcription import json_to_transcript
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -20,6 +28,16 @@ class ChatCreate(BaseModel):
     """Request body for creating a chat session."""
     video_id: str
     concept: str
+
+
+class VideoChatCreate(BaseModel):
+    """Request body for creating a video-scope (whole-video) chat session.
+
+    No `concept` field — the chat covers the whole video, not a single
+    flashcard. The server pulls transcript + summary + mindmap + quiz
+    from the video's existing Assets and assembles the LLM context.
+    """
+    video_id: str
 
 
 class MessageSend(BaseModel):
@@ -155,6 +173,7 @@ async def get_chat_session(
         "id": session.id,
         "concept": session.concept,
         "video_id": session.video_id,
+        "scope": session.scope,
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "messages": [
             {
@@ -184,11 +203,105 @@ async def list_chat_sessions(
             "id": s.id,
             "concept": s.concept,
             "video_id": s.video_id,
+            "scope": s.scope,
             "created_at": s.created_at.isoformat() if s.created_at else None,
             "message_count": len(s.messages),
         }
         for s in sessions
     ]
+
+
+def _build_video_chat_context(db: Session, video: Video) -> str:
+    """Pull the video's transcript + summary + mindmap + quiz and
+    format them into the LLM system prompt for a video-scope chat.
+
+    Returns the formatted system prompt string. Falls back to a
+    placeholder when an asset is missing so the chat is still
+    usable on a half-processed video.
+    """
+    # Pull all four assets in one round-trip
+    assets = db.execute(
+        select(Asset).where(Asset.video_id == video.id)
+    ).scalars().all()
+    by_type: dict[str, Asset] = {a.asset_type: a for a in assets}
+
+    # Transcript: parse stored JSON, format as `[mm:ss] text` lines
+    transcript_text = ""
+    transcript_asset = by_type.get("transcript")
+    if transcript_asset and transcript_asset.content:
+        try:
+            segments = json_to_transcript(transcript_asset.content)
+            transcript_text = transcript_to_chat_text(segments)
+        except Exception:
+            # Bad JSON in the DB — skip the transcript but don't crash
+            transcript_text = "(Transcript present but could not be parsed.)"
+
+    # Summary / mindmap: stored as raw markdown text
+    summary = (by_type.get("summary").content if by_type.get("summary") else "") or ""
+    mindmap = (by_type.get("mindmap").content if by_type.get("mindmap") else "") or ""
+
+    # Quiz: stored as JSON string — format as Q/A list
+    quiz_asset = by_type.get("quiz")
+    quiz = render_quiz_for_chat(quiz_asset.content) if quiz_asset else ""
+
+    return build_video_system_prompt(
+        video_title=video.title,
+        summary=summary,
+        mindmap=mindmap,
+        quiz=quiz,
+        transcript=transcript_text,
+    )
+
+
+@router.post("/video-sessions")
+async def create_video_chat_session(
+    body: VideoChatCreate,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Create a chat session for the whole video (the "💬 Discuss" tab).
+
+    Unlike flashcard-scope chats, this one is given:
+    - The full transcript (with timestamps)
+    - The generated summary
+    - The mindmap
+    - The quiz questions + correct answers
+
+    so the user can ask questions about any part of the video.
+
+    Multiple sessions per video are allowed (one per discussion topic).
+    Sessions are listed in the regular chat history page with a
+    "Video" scope badge.
+    """
+    video = db.get(Video, body.video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Verify ownership
+    section = db.get(Section, video.section_id)
+    course = db.get(Course, section.course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your video")
+
+    # Build the LLM context from the video's existing materials
+    system_prompt = _build_video_chat_context(db, video)
+
+    session = ChatSession(
+        user_id=user.get("uid", ""),
+        video_id=body.video_id,
+        concept=VIDEO_SCOPE_CONCEPT_PLACEHOLDER,  # NOT NULL workaround
+        scope=SCOPE_VIDEO,
+        system_prompt=system_prompt,
+    )
+    db.add(session)
+    db.commit()
+
+    return {
+        "session_id": session.id,
+        "video_id": session.video_id,
+        "scope": session.scope,
+        "system_prompt": session.system_prompt,
+    }
 
 
 @router.delete("/sessions/{session_id}")
