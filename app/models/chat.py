@@ -62,6 +62,12 @@ class ChatSession(Base):
         DateTime, server_default=func.now()
     )
 
+    # back_populates mirrors Video.chat_sessions — needed so that
+    # `db.delete(video)` cascades to the sessions automatically.
+    video: Mapped["Video"] = relationship(
+        "Video", back_populates="chat_sessions"
+    )
+
     messages: Mapped[list["ChatMessage"]] = relationship(
         "ChatMessage",
         back_populates="session",

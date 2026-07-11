@@ -98,8 +98,21 @@ class Video(Base):
     )
 
     section: Mapped["Section"] = relationship("Section", back_populates="videos")
+    # Cascade is needed so that deleting a Video row also deletes its
+    # associated Asset rows (transcript, summary, mindmap, etc.). The
+    # `ondelete="CASCADE"` on the Asset FK is a DB-level backup if
+    # SQLAlchemy is bypassed (e.g. raw SQL). Used by:
+    #   - app/routers/videos.py:delete_video
+    #   - app/routers/courses.py:delete course + sections (indirectly)
     assets: Mapped[list["Asset"]] = relationship(
         "Asset",
+        back_populates="video",
+        cascade="all, delete-orphan",
+    )
+    # Chat sessions for this video (both flashcard-scope and
+    # video-scope). Same cascade reasoning as assets above.
+    chat_sessions: Mapped[list["ChatSession"]] = relationship(
+        "ChatSession",
         back_populates="video",
         cascade="all, delete-orphan",
     )

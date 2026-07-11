@@ -997,3 +997,232 @@ def test_export_transcript_collapses_underscore_runs(client: TestClient):
         assert v.title == ugly_title, (
             f"DB title was modified: {v.title!r} (expected unchanged)"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE /api/videos/{id} — manual todo #5
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _create_video_with_assets(
+    client: TestClient,
+    section_id: str,
+    title: str = "test.mp4",
+    with_assets: bool = True,
+    with_chat: bool = False,
+) -> str:
+    """Helper: create a video, optionally with assets and chat sessions,
+    for the delete tests. Returns the video_id."""
+    with _mock_auth():
+        fake_content = b"x" * 1024  # 1 KB so the file is not 0-byte
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": (title, io.BytesIO(fake_content), "video/mp4")},
+            headers=_auth_headers(),
+        )
+    assert upload_resp.status_code == 202, f"upload failed: {upload_resp.text}"
+    video_id = upload_resp.json()["video_id"]
+
+    if with_assets or with_chat:
+        from app.database import SessionLocal
+        with SessionLocal() as db:
+            if with_assets:
+                for asset_type in ["transcript", "summary", "mindmap"]:
+                    db.add(Asset(
+                        id=f"{asset_type}-{video_id}",
+                        video_id=video_id,
+                        asset_type=asset_type,
+                        content="dummy content",
+                    ))
+            if with_chat:
+                # Create a chat session directly in the DB so we can
+                # verify it's cascaded on delete.
+                from app.models import ChatSession, ChatMessage
+                session_id = f"chat-{video_id}"
+                db.add(ChatSession(
+                    id=session_id,
+                    user_id="test-user-uid",
+                    video_id=video_id,
+                    concept="test concept",
+                    scope="flashcard",
+                ))
+                db.add(ChatMessage(
+                    id=f"msg-{video_id}",
+                    session_id=session_id,
+                    role="user",
+                    content="hello",
+                ))
+            db.commit()
+    return video_id
+
+
+def test_delete_video_success(client: TestClient):
+    """Should delete the video, return 200 with cascade summary."""
+    from pathlib import Path
+    from app.database import SessionLocal
+    from app.config import settings
+
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(
+        client, section_id, title="to-delete.mp4",
+        with_assets=True, with_chat=True,
+    )
+
+    # Confirm the file exists on disk before delete
+    with SessionLocal() as db:
+        v = db.get(Video, video_id)
+        assert v is not None
+        assert Path(v.file_path).exists(), "file should exist before delete"
+
+    with _mock_auth():
+        resp = client.delete(
+            f"/api/videos/{video_id}", headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "deleted"
+    assert data["video_id"] == video_id
+    assert data["deleted"]["file"] is True
+    assert data["deleted"]["assets"] == 3
+    assert data["deleted"]["chat_sessions"] == 1
+
+    # Video row is gone
+    with SessionLocal() as db:
+        assert db.get(Video, video_id) is None
+        # Assets are gone (cascade)
+        for asset_type in ["transcript", "summary", "mindmap"]:
+            asset = db.get(Asset, f"{asset_type}-{video_id}")
+            assert asset is None, f"{asset_type} should be cascaded"
+        # ChatSession is gone (cascade)
+        from app.models import ChatSession
+        assert db.get(ChatSession, f"chat-{video_id}") is None
+        # ChatMessage is also gone (cascade via session)
+        from app.models import ChatMessage
+        assert db.get(ChatMessage, f"msg-{video_id}") is None
+
+    # File is gone from disk
+    files_remaining = list(settings.upload_path.glob("to-delete*"))
+    # (filename is video_id + ext, not the original title; check by id)
+    files_remaining = [f for f in files_remaining if video_id in f.name]
+    assert len(files_remaining) == 0, "file should be removed from disk"
+
+
+def test_delete_video_no_assets_no_chat(client: TestClient):
+    """A freshly-uploaded video with no assets still deletes cleanly."""
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(
+        client, section_id, with_assets=False, with_chat=False,
+    )
+    with _mock_auth():
+        resp = client.delete(
+            f"/api/videos/{video_id}", headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"]["file"] is True
+    assert data["deleted"]["assets"] == 0
+    assert data["deleted"]["chat_sessions"] == 0
+
+
+def test_delete_video_not_found(client: TestClient):
+    """Returns 404 for a non-existent video."""
+    with _mock_auth():
+        resp = client.delete(
+            "/api/videos/nonexistent-id", headers=_auth_headers(),
+        )
+    assert resp.status_code == 404
+
+
+def test_delete_video_wrong_user(client: TestClient):
+    """Returns 403 if the user doesn't own the course."""
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(client, section_id)
+
+    # Switch to a different user
+    with patch("app.auth.dependencies.verify_token", return_value={"uid": "user-B"}):
+        resp = client.delete(
+            f"/api/videos/{video_id}", headers=_auth_headers(),
+        )
+    assert resp.status_code == 403
+
+    # And the video should still be there (not deleted by user-B)
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        assert db.get(Video, video_id) is not None
+
+
+def test_delete_video_unauthenticated(client: TestClient):
+    """Returns 401 without auth."""
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(client, section_id)
+    # No _mock_auth() here
+    resp = client.delete(f"/api/videos/{video_id}")
+    assert resp.status_code == 401
+
+
+def test_delete_video_missing_file_on_disk(client: TestClient):
+    """If the on-disk file is already gone (e.g. cleaned up manually),
+    the delete should still succeed — the DB cascade is the important
+    part, and we don't want a missing file to crash the operation."""
+    from pathlib import Path
+    from app.database import SessionLocal
+
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(client, section_id)
+
+    # Manually remove the file before the delete
+    with SessionLocal() as db:
+        v = db.get(Video, video_id)
+        Path(v.file_path).unlink()
+        assert not Path(v.file_path).exists()
+
+    with _mock_auth():
+        resp = client.delete(
+            f"/api/videos/{video_id}", headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    # file=False means the file was already gone — we report that
+    # honestly in the response so the user knows.
+    data = resp.json()
+    assert data["deleted"]["file"] is False
+
+    # But the video row is still gone (cascade did its job)
+    with SessionLocal() as db:
+        assert db.get(Video, video_id) is None
+
+
+def test_delete_video_zero_byte_file(client: TestClient):
+    """Regression: the 0-byte video from the 2026-07-09 incident
+    can be deleted cleanly via this endpoint. The 0-byte rejection
+    is on upload, not on delete — even if a 0-byte file slipped
+    through, delete should still work."""
+    from pathlib import Path
+    from app.config import settings
+
+    course_id, section_id = _create_course_and_section(client)
+    # Manually create a 0-byte file in the DB (bypassing the upload
+    # endpoint which now rejects 0-byte files)
+    from app.database import SessionLocal
+    video_id = "zero-byte-test-id"
+    file_path = settings.upload_path / f"{video_id}.mp4"
+    file_path.touch()  # creates an empty file
+    with SessionLocal() as db:
+        db.add(Video(
+            id=video_id,
+            title="0-byte-broken",
+            filename="0-byte-broken.mp4",
+            file_path=str(file_path),
+            file_size=0,
+            section_id=section_id,
+            status="error",
+        ))
+        db.commit()
+
+    with _mock_auth():
+        resp = client.delete(
+            f"/api/videos/{video_id}", headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    assert resp.json()["deleted"]["file"] is True
+    assert not file_path.exists()
+    file_path.unlink(missing_ok=True)  # cleanup
