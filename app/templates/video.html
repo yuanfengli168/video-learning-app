@@ -232,6 +232,12 @@
 <script src="/static/js/transcript-follow.js" defer></script>
 <script>
 const videoId = '{{ video.id }}';
+// courseId is exposed as a JS constant so confirmDelete() can redirect
+// to the right course page after deletion. See the comment on the
+// redirect inside confirmDelete() for the full rationale. course
+// may be None in rare cases (broken FK, shared deep link) so we
+// fall back to /dashboard in that case.
+const courseId = '{{ course.id if course else "" }}';
 let transcriptData = null;
 // discussSessionId is set lazily by startDiscussSession() the first
 // time the user opens the Discuss tab. Hoisted to the top so the
@@ -1786,11 +1792,20 @@ async function confirmDelete() {
         if (data.deleted.chat_sessions > 0) parts.push(`${data.deleted.chat_sessions} chat session${data.deleted.chat_sessions === 1 ? '' : 's'}`);
         const summary = parts.length > 0 ? ` (deleted ${parts.join(', ')})` : '';
         showToast(`Video deleted${summary}`, 'success');
-        // Redirect to the course page after a short delay so the user
-        // sees the toast. course is exposed by the Jinja template as
-        // a window variable via the video.html render context.
-        const courseHref = document.querySelector('a[href^="/course/"]');
-        const target = courseHref ? courseHref.getAttribute('href') : '/dashboard';
+        // Redirect to the course page so the user sees the section list
+        // without the deleted video. We use `course.id` from the Jinja
+        // template (rendered server-side) instead of scraping
+        // `document.querySelector('a[href^="/course/"]')` — the previous
+        // DOM-scrape approach grabbed the FIRST course link on the page,
+        // which was often a sidebar/course-list link, NOT the course
+        // this video belongs to. User caught this in production
+        // (2026-07-11): deleting a video in the "Tests" course
+        // redirected to "DIY OpenClaw - Chinese" because that link
+        // came earlier in the DOM. Hard-coding the course id from the
+        // template is 100% reliable. If the video somehow doesn't have
+        // a course (e.g. shared deep link, broken FK), fall back to
+        // /dashboard.
+        const target = courseId ? `/course/${courseId}` : '/dashboard';
         setTimeout(() => { window.location.href = target; }, 1200);
     } catch (e) {
         // Reset the button so the user can try again
