@@ -288,6 +288,7 @@ async function uploadVideo(sectionId, input) {
             alert('Bulk upload failed: ' + (await resp.json()).detail);
         }
     }
+}
 
 // ── Retry all failed (MVP2.0) ────────────────────────────────────────────────
 // One click re-queues the LLM step for every video in this section

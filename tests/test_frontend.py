@@ -1048,3 +1048,81 @@ def test_course_view_has_delete_section_button(client: TestClient):
     assert "delete-section-modal" in response.text, (
         "delete section modal HTML missing from course page"
     )
+
+
+def test_course_page_inline_script_parses_cleanly(client: TestClient):
+    """The course page's inline <script> block must parse as valid JS.
+
+    Regression test for the section-delete-click-does-nothing bug: a
+    missing `}` in ``uploadVideo`` left the whole script with a syntax
+    error, so the browser silently refused to run *any* of the page's
+    JS (toggleSection, retryAllFailed, showDeleteSectionModal, etc).
+    The previous string-only check ("showDeleteSectionModal" in
+    response.text) was satisfied by the broken HTML, so it never
+    caught this.
+
+    We can't rely on Jinja2-rendered output for the assertion: when
+    the script has unbalanced braces, Jinja2 itself fails to parse
+    ``{{ ... }}`` expressions inside the script (it uses ``}}`` to
+    close tags) and returns a partial/garbled script body, which
+    can *happen* to have balanced braces by coincidence. So we
+    read the template source and validate it as a *string* before
+    Jinja rendering — that's where the original bug lived.
+    """
+    import re
+    from pathlib import Path
+    template_path = Path(__file__).parent.parent / "app" / "templates" / "course.html"
+    source = template_path.read_text()
+    # Extract the inline <script>...</script> from the source (raw,
+    # pre-Jinja). Strip Jinja comments {# ... #} first so they don't
+    # confuse the brace counter (they contain { and } too).
+    source_no_comments = re.sub(r"\{#.*?#\}", "", source, flags=re.DOTALL)
+    match = re.search(r"<script>(.*?)</script>", source_no_comments, re.DOTALL)
+    assert match, "course.html must contain a <script> block"
+    script = match.group(1)
+    # Replace Jinja expressions with a benign JS identifier so the
+    # Python brace-counting check below is reliable. We have to be
+    # careful with nested-brace expressions — use a state machine.
+    def strip_jinja(s):
+        out = []
+        i = 0
+        while i < len(s):
+            if s[i:i+2] == "{{":
+                out.append("J")
+                # find matching }} handling nested {{ }}
+                depth = 1
+                i += 2
+                while i < len(s) and depth > 0:
+                    if s[i:i+2] == "{{":
+                        depth += 1
+                        i += 2
+                    elif s[i:i+2] == "}}":
+                        depth -= 1
+                        i += 2
+                    else:
+                        i += 1
+            elif s[i:i+2] == "{#":
+                # comment - skip to #}
+                i += 2
+                while i < len(s) and s[i:i+2] != "#}":
+                    i += 1
+                i += 2
+            else:
+                out.append(s[i])
+                i += 1
+        return "".join(out)
+    cleaned = strip_jinja(script)
+    opens = cleaned.count("{")
+    closes = cleaned.count("}")
+    parens_o = cleaned.count("(")
+    parens_c = cleaned.count(")")
+    assert opens == closes, (
+        f"course.html <script> has unbalanced braces "
+        f"({{={opens}, }}={closes}). This silently breaks ALL page "
+        f"JS in the browser — the section delete button click bug "
+        f"was caused by exactly this."
+    )
+    assert parens_o == parens_c, (
+        f"course.html <script> has unbalanced parens "
+        f"((={parens_o}, )={parens_c})"
+    )
