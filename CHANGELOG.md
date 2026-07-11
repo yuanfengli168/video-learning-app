@@ -79,4 +79,43 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 Tags are signed (`git tag -a v1.0.0 -m "..."`) and pushed with `git push origin v1.0.0`.
 
+---
+
+## [2.0.0] - 2026-07-11 — MVP2.0 (in progress, partial)
+
+🚧 **Pre-release.** MVP2.0 is feature-complete for the "auto-pipeline" pillar
+on branch `MVP2.0` (20 commits ahead of `main`, all pushed). The "i18n /
+Alembic / Celery" pillars are still in design or pending. See
+[`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) for the live status table.
+
+**Stats (as of 2026-07-11):** 396 tests passing · 87% backend coverage · 20 new commits · 0 regressions
+
+### ✨ Features
+
+- **Auto-transcribe + auto-generate on upload** (`7e70fe3`, `b4d612f`) — no more "click transcribe, wait, click generate, wait again". Upload → fully ready. 4-video bulk test: 4 files → 4 ready without any user click.
+- **Multi-file / non-blocking bulk upload** — drag in 20 files, walk away. 2 GB per-file cap, real-time progress per file.
+- **Natural sort by leading number** (`dd35bc1`) — "1.-foo" sorts before "10.-bar". Default ascending, with a sort button on each section header.
+- **Session-expiry redirect on protected SSR routes** (`814a98a`, `2b40fc9`, `67d980b`) — visiting `/dashboard` after the Firebase session cookie expires redirects to `/login?next=...`.
+- **Retry script for failed generate jobs** (`f37f7a0`) — `python scripts/retry_failed_generate.py --dry-run` to preview, no flag to actually run. Used to recover 13/13 broken videos from the 0-byte upload incident.
+- **Retry-all-failed button on the section header** (`3bb256b`, `162c85d`) — one click re-queues every failed video in the section. Spinner + "Retrying N (X transcribe, Y generate)" toast.
+- **Transcript export endpoint** (`a1235b2`) — `GET /api/videos/{id}/transcript/export?format=md|json|txt`. Returns the transcript as Markdown / JSON / plain text with proper RFC 5987 unicode filenames.
+- **Download transcript button on the video page** (`72ae0bc`) — format selector + download button next to the transcript header. Filename = the video's title (matches the original upload filename minus extension).
+
+### 🐛 Bug fixes
+
+- **Bulk-upload route shadowing** (`dbeed50`) — `POST /{video_id}/transcribe` was declared before `POST /upload-bulk/{section_id}`, shadowing it. Bulk upload returned 404 "Not Found". Fixed by route reordering + a structural regression test.
+- **LLM JSON parser hardening** (`e8de51b`) — `glm-5.2:cloud` returns non-deterministic responses (sometimes `len=0`, sometimes prose-wrapped). Added strategy 3 (strip preambles) + better error message with raw response preview.
+- **0-byte upload crashes auto-pipeline** (`eeab211`) — upload only checked the upper size bound. Empty files from cancelled uploads would crash Whisper with `[Errno 1094995529] Invalid data found when processing input`. Now returns 400 with a clear message.
+- **"Retry N failed" button does nothing** (`162c85d`) — endpoint only looked at `last_generate_job.status='failed'`, not `last_transcribe_job.status='failed'`. Fixed by partitioning failures by step (transcribe / generate). 5th postmortem in `doc/Blockers.md`.
+- **Transcript panel showing 00:10 instead of 00:00 on page load** — fixed in MVP2.0.0a. `offsetTop` is relative to body, not container. Fixed with `getBoundingClientRect`.
+
+### 📚 Docs
+
+- [`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) — **NEW** — single-page status snapshot for MVP2.0
+- [`doc/MVP2.0-first-designQuestions.md`](doc/MVP2.0-first-designQuestions.md) — design doc with Milestones table, Appendix A (deferred MVP3 modes), Appendix B (duplicate detection B1–B5)
+- [`doc/Blockers.md`](doc/Blockers.md) — 5 postmortems, all RESOLVED
+- [`doc/HowToStart.md`](doc/HowToStart.md) — **NEW** — full backend startup guide
+- [`scripts/stop.sh`](scripts/stop.sh), [`scripts/status.sh`](scripts/status.sh) — **NEW** helpers
+
+[2.0.0]: https://github.com/yuanfengli168/video-learning-app/compare/v1.0.0...MVP2.0
 [1.0.0]: https://github.com/yuanfengli168/video-learning-app/releases/tag/v1.0.0

@@ -99,6 +99,8 @@
 
 ## Milestones:
 
+> **Status snapshot (updated 2026-07-11).** The TL;DR / "open items for tomorrow" sections below were written on 2026-07-09 and are now **stale** — that day already happened and we shipped MVP2.0.0a + MVP2.0.1 wave 1 + wave 2. For the live picture, see [`doc/MVP2.0-Status.md`](MVP2.0-Status.md).
+
 ### TL;DR for tomorrow's session (2026-07-10)
 
 **#19 — Duplicate video detection.** Discuss B1–B5 in [Appendix B](#appendix-b--duplicate-detection-design-questions) before coding. My default answers are there; user picks. Then implement: hash-on-upload + 409 + (auto-skip on bulk / confirm on single).
@@ -144,6 +146,52 @@ End-of-day status, all work on branch `MVP2.0` (10 commits ahead of `main`, all 
 - #10 — Alembic migrations (schema-versioning safety net)
 - #11 — Celery + Redis task queue (parallelism + restart-safety for transcribe jobs)
 - #6 — Default output language for Chinese (tied to #9)
+
+### 2026-07-10 — MVP2.0.1 wave 2: retry + export
+
+End-of-day status on branch `MVP2.0` (16 commits ahead of `main`, all pushed).
+
+| Item | Status | Commit(s) | Verified? |
+|---|---|---|---|
+| **Retry script for failed generate jobs** | ✅ Done + pushed | `f37f7a0` | ✅ 13/13 videos recovered in dry run |
+| **Transcript export endpoint** (`.md` / `.json` / `.txt`) | ✅ Done + pushed | `a1235b2` | ✅ Endpoint tested via curl |
+| **Retry-all-failed button on section header** | ✅ Done + pushed | `3bb256b` | ✅ Roundtripped via the JSON API |
+| **Download transcript button on video page** | ✅ Done + pushed | `72ae0bc` | ✅ User verified live |
+| **#19 — Duplicate video detection (B1–B5)** | ⏳ Pending user decisions | — | Discussion Qs still in Appendix B |
+| **#10 — Alembic migrations** | ⏳ Not started | — | — |
+
+**Test results:** 394/394 passing (+47 from prior day, was 347).
+- New: 13 retry-helper tests, 19 transcript-export tests, 3 route-shadowing regression guards, plus the 12 v2 endpoint tests.
+
+**Postmortems added to `doc/Blockers.md`:** none new (the 3 from 2026-07-09 still cover everything encountered).
+
+### 2026-07-11 — MVP2.0.1 wave 2 fix + doc pass
+
+Morning of 2026-07-11, on branch `MVP2.0` (20 commits ahead of `main`, all pushed).
+
+| Item | Status | Commit(s) | Verified? |
+|---|---|---|---|
+| **"Retry 1 failed" button does nothing** *(user-reported live today)* | ✅ Fixed + pushed | `162c85d` | ✅ Endpoint partition logic tested; user verified live (toast appears) |
+| **Blockers postmortem for retry button** | ✅ Done + pushed | `ee466ab` | — |
+| **HowToStart doc + stop.sh / status.sh helpers** | ✅ Done + pushed | `6ce7571` | ✅ status.sh tested on the live server |
+| **MVP2.0-Status.md** *(NEW single-page status)* | ✅ Done + pushed | this commit | — |
+| **CHANGELOG.md MVP2.0 entry** | ✅ Done + pushed | this commit | — |
+| **Readme.md updated to MVP2.0 stats** | ✅ Done + pushed | this commit | — |
+| **MVP1.0-PostRelease.md row #6** | ⏳ Still says `status='pending'`, now `'queued'` | — | — |
+| **doc/design.md §4 AI Pipeline** | ⏳ Still describes manual click-to-transcribe | — | — |
+
+**Test results:** 396/396 passing (+2 for the new transcribe-failure retry coverage).
+
+### Open items (current, 2026-07-11)
+
+- **#5 — Delete video button** *(user-asked in `manualTodo.txt`)* — design exists in `Todo.md` #10. Need it to clean up the 0-byte video that's still sitting in section 3.
+- **#19 — Duplicate video detection** (B1–B5 in Appendix B) — user needs to sign off on the 5 design questions, then we can build.
+- **#9 — Mindmap node count for long videos** — repro / data-gathering first.
+- **#10 — Alembic migrations** — schema-versioning safety net.
+- **#11 — Celery + Redis** — restart-safety + parallelism for transcribe jobs.
+- **#6 — Default output language for Chinese** — tied to #9.
+- **§4 AI Pipeline in `doc/design.md`** — still describes manual click-to-transcribe, needs to be updated to reflect the auto-pipeline.
+- **`doc/MVP1.0-PostRelease.md` row #6** — still says `status='pending'`, now `'queued'`.
 
 ## Appendix A — Smart/Always modes: deferred design questions
 
