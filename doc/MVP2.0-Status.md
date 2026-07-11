@@ -227,3 +227,15 @@ That's ~11 tests, each ~20 lines, ~0.5 day to write. Bumps `generation.py` to ~8
 **Files changed:** 6 (2 routers, 1 model, 2 templates, 1 test). ~350 insertions across the feature.
 
 **What's deferred to MVP3:** soft-delete / trash / restore (manualTodo #8).
+
+---
+
+## 11. What's next → see `doc/MVP3.0-Status.md`
+
+After the section-delete bug fix, the active MVP2.0 branch is essentially
+feature-complete for the **bulkUploads + LLMonTranscriptsMaterials** scope.
+The next batch of work (10 GB cap, mlx-whisper speedup, soft-delete, note
+section, paid tier) is now tracked as MVP3.0 in
+[`doc/MVP3.0-Status.md`](MVP3.0-Status.md). The short version: 14 items,
+3 P0s, 5 P1s, 4 P2s, 2 P3s. Top three picks: 10 GB cap, mlx-whisper,
+background worker pool.

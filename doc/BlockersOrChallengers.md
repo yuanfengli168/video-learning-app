@@ -1,4 +1,6 @@
-# Blocker
+# Blocker and Challengers
+
+- you will learn a lot from these.
 
 ## blockers
 - [july 9 2026] transcript panel showing wrong scroll position on page load (MVP2.0 #2)
@@ -222,3 +224,112 @@ happened.
 endpoint's response is the only feedback signal — make `{retried: 0}` loud,
 not silent. And when a pipeline has multiple steps, the recovery endpoint has
 to know about *all* of them, not just the last one.
+
+
+## Challengers:
+
+### 1. ✅ INVESTIGATED [july 11 2026] — 4 GB upload "doesn't proceed" + Whisper local speed ceiling
+
+User reported:
+1. `4 GB upload doesn't proceed` (manual todo [jul11] #3)
+2. Wants the cap **raised to 10 GB (inclusive)**
+3. Asked for a plan to make 100 videos (10 GB total) transcribe in **~1 minute**
+4. Confirmed whisper is running **locally on Mac RAM** (`faster-whisper` + CTranslate2)
+
+#### Current state
+
+- `MAX_FILE_SIZE = 2 * 1024 ** 3` in `app/routers/videos.py:36` — 2 GB hard cap
+- Default whisper model is `base` (~1.5 GB RAM, ~5x realtime on M-series)
+- No server-level request size cap in uvicorn / Starlette, so the only blocker is the application code
+- The "4 GB doesn't proceed" is most likely **the 2 GB cap silently rejecting** + (possibly) the browser's "uploading..." spinner stalling on big files because the request takes minutes
+
+#### Speed math (10 GB single video)
+
+A 10 GB `.mp4` at typical 2 Mbps video bitrate is **~80-110 minutes of audio**. The
+`base` model does ~5x realtime on an M-series Mac, so a 100-min file = **20 min
+of pure transcription** for the transcript step alone — and that's *after* ffmpeg
+has decoded the audio, which is another 30-60s for a 10 GB file.
+
+#### Speed math (100 videos, 10 GB total ≈ 100 MB each ≈ 10 min each)
+
+100 × 10-min videos = **~16 hours of audio total**. With current `base` model,
+~5x realtime, **serial** = **~3.2 hours of pure transcription** (plus
+LLM-material generation, which is its own multiplier).
+
+#### Why 1 minute is mathematically impossible on CPU with the current architecture
+
+For 16 hours of audio to finish in 1 minute we need **~960x realtime**.
+- `tiny` model (CTranslate2) on M-series Mac: ~10x realtime → 96 minutes (and ~30% lower WER)
+- `base` (current): ~5x realtime → 160 minutes
+- `small` (5 GB RAM): ~2x realtime → 480 minutes
+- `medium` (10 GB RAM): ~0.5x realtime → 32 hours
+- Whisper API on a TPU (Google Cloud): ~10-30x realtime → 30-60 minutes for 16 hours
+- 1-hour audio in 1 second on a single A100: physically possible, cost prohibitive
+
+**A single A100 GPU is roughly the floor for 1-minute-for-16-hours-of-audio.** No
+amount of code cleverness gets you there on a Mac.
+
+#### Realistic optimization paths (ranked by impact, all local)
+
+| Approach | Speedup | Cost | Risk | Notes |
+|---|---|---|---|---|
+| A. **Distil-Whisper** (`distil-large-v3`) | **6-7x** vs `large-v3`, same accuracy (~95%) | Switch dep, pull new model | Low | Drop-in `faster-whisper` replacement. Same API. ~750M params vs 1.5B. Best ROI for local. |
+| B. **MLX Whisper** (Apple Silicon native) | **3-4x** vs `faster-whisper` CTranslate2 | Rewrite backend (~1 day) | Medium | Uses Apple Neural Engine + Metal. No CUDA dependency. `mlx-whisper` library. **Best for M-series Mac.** |
+| C. **whisper.cpp + CoreML** | **2-3x** vs `faster-whisper` | Switch dep, convert models to CoreML | Medium | Lower level than MLX. ANE acceleration. More model format fiddling. |
+| D. **Chunk + parallelize** (per video) | **2-4x** if N workers | Need a worker pool (Celery or just `concurrent.futures`) | Medium | Split long audio into 5-10 min chunks, transcribe in parallel, stitch. Per-video only. |
+| E. **Switch default to `tiny`** | **2x** vs `base` | -30% WER (accuracy) | Low | Quick win. 1-line config. But "tinny" transcript for a learning app is probably not what you want. |
+| F. **Background workers + status polling** | Doesn't speed up 1 video, but lets user **start the next 99** while #1 runs | Needs a queue (Celery / RQ / DB-polling) | Medium | Not a single-video speedup, but a *batch* speedup. Already partially in place via `BackgroundTasks`. |
+| G. **Insanely-fast-whisper** (flash-attn + batching) | 5-10x | Needs CUDA GPU | Won't help on Mac | Linux + NVIDIA only. |
+| H. **Cloud Whisper API** (OpenAI, AssemblyAI, Deepgram) | ~30x, no local cost | $0.006-0.012/min audio. For 16 hours ≈ **$5.80-$11.50** | Privacy, no offline | Fastest, cheapest at scale. Trade-off: data leaves the box. **MVP3.0 paid tier** (see `doc/MVP3.0-Status.md`). |
+
+#### My recommended path (4 phases)
+
+1. **Phase 1 (this week):** raise `MAX_FILE_SIZE` to `10 * 1024 ** 3`, switch default
+   to `distil-whisper` `distil-large-v3` (or `distil-medium.en`). Expected: 100
+   videos × 10 min = ~30-40 min total on a current M-series Mac. *Goal: 1 hour of
+   audio in ~2 min, 16 hours in ~30 min.*
+2. **Phase 2 (next week):** rewrite `app/services/transcription.py` to use
+   `mlx-whisper` instead of `faster-whisper` on M-series. Same Whisper weights,
+   different runtime. Keep `faster-whisper` as fallback for non-Apple-Silicon.
+   Expected: 3-4x further speedup.
+3. **Phase 3 (MVP3.0):** background worker pool that processes N videos in
+   parallel, with a status poller on the UI. Single 10 GB video still takes
+   20-30 min, but the user can queue 100 and walk away.
+4. **Phase 4 (MVP3.0 paid tier):** opt-in "Cloud Whisper" button per video, billed
+   per minute. **1 hour of audio in ~1-2 min** for $0.36-0.72. Tracked in
+   `doc/MVP3.0-Status.md`.
+
+#### On the 1-minute target
+
+To make 16 hours of audio finish in 1 minute, you need a single A100 (or equivalent)
+GPU running Whisper-large-v3 with batching and flash-attention. That's a **~10-20
+year payback** at AWS rates for a personal-use app.
+
+**Realistic floor for local-only, no GPU:** ~30-40 min for 16 hours of audio, with
+distil-whisper + mlx + chunked parallel processing. That's the best you'll get
+without renting a GPU.
+
+**If 1 min is a hard requirement:** cloud Whisper API. ~$12 for 16 hours of audio,
+finishes in ~30 min serial or ~5 min with 10 parallel requests. Documented in
+`doc/MVP3.0-Status.md` as the MVP3.0 paid tier.
+
+#### What's NOT going to be done
+
+- Custom Whisper model fine-tune (cost: 100+ GPU-hours, no clear win)
+- ONNX runtime experiment (similar to mlx-whisper, less M1-friendly)
+- Speculative decoding (faster-whisper doesn't support it; whisper.cpp partial)
+
+#### Files affected (when implemented)
+
+- `app/routers/videos.py` — change `MAX_FILE_SIZE`
+- `app/services/transcription.py` — backend swap
+- `app/config.py` — add `WHISPER_BACKEND` (faster-whisper | mlx-whisper | cloud)
+- `app/models/video.py` — add `whisper_backend` column
+- `app/templates/video.html` — show "transcribing..." with progress + backend label
+- `scripts/setup.sh` — pip-install `mlx-whisper` on M-series only
+
+#### Status
+
+Investigated, recommendation in `doc/MVP3.0-Status.md` row 1 (raise cap) and row
+2 (whisper backend). 1-minute target is a **paid tier / cloud** feature, not a
+local-only one. Awaiting user direction on whether to start Phase 1 this week.
