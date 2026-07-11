@@ -88,7 +88,7 @@ on branch `MVP2.0` (20 commits ahead of `main`, all pushed). The "i18n /
 Alembic / Celery" pillars are still in design or pending. See
 [`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) for the live status table.
 
-**Stats (as of 2026-07-11):** 438 tests passing · 87% backend coverage · 27 new commits · 0 regressions
+**Stats (as of 2026-07-11):** 453 tests passing · 87% backend coverage · 29 new commits · 0 regressions
 
 ### ✨ Features
 
@@ -103,6 +103,8 @@ Alembic / Celery" pillars are still in design or pending. See
 - **Export filename cleaned** (`b026d81`) — strip ugly runs of underscores (e.g. `____` from Bilibili auto-renames) from the exported transcript filename, but leave the original DB title alone.
 - **Whole-video chat (Discuss tab)** (`b20584a`) — 5th tab on the video page. AI gets the full transcript + summary + mindmap + quiz as the system prompt. Sessions persisted in the same `ChatSession` table with `scope='video'`. `/chat-history` shows VIDEO/FLASHCARD badges to tell the two types apart.
 - **Video / section / course delete** (`40d8c4a`, `2213bc9`, `1acc4ea`, `6a881e9`) — hard-delete cascades with file unlink + asset + chat-session cleanup. Each endpoint returns a summary `{status, deleted: {file, files, assets, chat_sessions}}` for a meaningful toast. Frontend confirmation modal on the video page header, each section header, and each course card on the dashboard. Soft-delete / trash / restore is deferred to MVP3 (see `doc/manualTodo.txt` #8).
+- **10 GB upload cap** (`e5db159`) — raised `MAX_FILE_SIZE` from 2 GB to 10 GB (inclusive) per manual todo [jul11] #3.
+- **"ready · 9:08" timing badge** (`ae4df7d`) — every video's status badge on the course page now shows how long it took from upload to ready, e.g. `ready · 9:08` or `ready · 2:05:33` for > 1 hour. Stamped by the transcribe + generate workers, formatted via a new `format_duration` Jinja filter.
 
 ### 🐛 Bug fixes
 

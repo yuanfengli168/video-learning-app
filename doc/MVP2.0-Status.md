@@ -239,3 +239,24 @@ section, paid tier) is now tracked as MVP3.0 in
 [`doc/MVP3.0-Status.md`](MVP3.0-Status.md). The short version: 14 items,
 3 P0s, 5 P1s, 4 P2s, 2 P3s. Top three picks: 10 GB cap, mlx-whisper,
 background worker pool.
+
+## 12. 2026-07-11 — MVP3.0 first two items shipped (commits `e5db159`, `ae4df7d`)
+
+> MVP2.0 is done. The first two items from `doc/MVP3.0-Status.md` shipped today.
+
+**Item #1: 10 GB upload cap (P0)**
+- One-line constant change in `app/routers/videos.py:36` — `MAX_FILE_SIZE` raised from 2 GB → 10 GB (inclusive)
+- 3 tests in `tests/test_videos.py`: boundary OK (10 GB == cap accepted), boundary FAIL (10 GB + 1 byte → 413), error message mentions 10 GB not 2 GB
+- Also updated `test_upload_bulk_partial_success` to use 11 GB instead of 3 GB (the old "3 GB > cap" trick no longer works under the new 10 GB cap)
+- No server-level change needed (Starlette reads the full body; uvicorn has no client_max_body_size in this setup). Trade-off: a 10 GB upload peaks at ~10 GB RAM during the upload, noted in the comment.
+
+**Item #8: "ready · 9:08" timing on the section page (P2)**
+- Two new nullable columns on `videos`: `transcribed_at` and `generated_at`, set by the workers when each step reaches `status=ready`. Naive UTC, consistent with `created_at`.
+- New Jinja filter `format_duration` in `app/routers/frontend.py`: renders seconds as `M:SS` (< 1h) or `H:MM:SS` (>= 1h). Empty string for `None`/negative.
+- Course page status badge now reads `ready · 9:08` (or `ready · 2:05:33` for > 1h) when both timestamps are present. Legacy videos (no `generated_at` populated) just show `ready` — no misleading `0:00`.
+- Failure semantics: timestamps are NOT stamped on worker failure, so an errored video never gets a fake "ready in N" label.
+- 13 new tests in `tests/test_ready_timing.py` covering model, migration, both workers (success + failure), template (4 cases), filter unit, filter registration.
+
+**Test results:** 453/453 passing (was 438, +15).
+
+**Files changed:** 7 (1 model, 1 db migration, 2 router, 1 frontend filter, 1 template, 1 new test file) + 1 updated test file.

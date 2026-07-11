@@ -28,14 +28,14 @@
 
 | # | Item | Pillar | Priority | Status | Notes / Source |
 |---|------|--------|----------|--------|----------------|
-| 1 | Raise `MAX_FILE_SIZE` from 2 GB → **10 GB** | Reliability | **P0** | Not started | `doc/manualTodo.txt` [jul11] #3. `app/routers/videos.py:36`. Investigated in `doc/BlockersOrChallengers.md` §1. |
+| 1 | Raise `MAX_FILE_SIZE` from 2 GB → **10 GB** | Reliability | **P0** | **Done** (`e5db159`) | `doc/manualTodo.txt` [jul11] #3. `app/routers/videos.py:36`. Investigated in `doc/BlockersOrChallengers.md` §1. |
 | 2 | Whisper backend swap: `faster-whisper` → **`mlx-whisper`** (M-series native) | Performance | **P0** | Not started | 3-4x speedup on Apple Silicon. Investigated in `doc/BlockersOrChallengers.md` §1. Phase 1: also try `distil-large-v3` for 6-7x. |
 | 3 | Cloud Whisper API (paid tier) — opt-in per-video | Scale | **P2** | Not started | $0.006-0.012/min. 1-hour audio in ~1-2 min. **Only way to hit 1-min/16-hr target** (see `BlockersOrChallengers.md` §1). |
 | 4 | Background worker pool + status polling for batch uploads | Performance | **P1** | Not started | Lets user queue 100 videos and walk away. `BackgroundTasks` is single-process today. |
 | 5 | Soft-delete / trash / restore (30-day TTL) | Reliability | **P1** | Not started | `doc/manualTodo.txt` [jul10] #8. Currently we hard-delete on click. |
 | 6 | Note section (markdown, preview, save to DB) | UX | **P1** | Not started | `doc/manualTodo.txt` [jul11] #6. Could be Notion embed + DB-backed, or full markdown editor. |
 | 7 | Video player: manual scroll-to-end on 2-hour videos | UX | **P1** | Not started | `doc/manualTodo.txt` [jul11] #4. Current player struggles with long files. Plyr / video.js swap candidate. |
-| 8 | Show "ready in 9:08" timing next to each video's status badge | UX | **P2** | Not started | `doc/manualTodo.txt` [jul11] #8. Store `transcribed_at` + `generated_at`, render `ready in N:SS` on section page. |
+| 8 | Show "ready in 9:08" timing next to each video's status badge | UX | **P2** | **Done** (`ae4df7d`) | `doc/manualTodo.txt` [jul11] #8. Store `transcribed_at` + `generated_at`, render `ready in N:SS` on section page. |
 | 9 | Language consistency in generated materials | Content | **P2** | Not started | `doc/manualTodo.txt` [jul10] #7. Today: sometimes Chinese, sometimes English. Make it deterministic (always match video language). |
 | 10 | OCR of video frames for the Discuss tab | Content | **P3** | Not started | `doc/manualTodo.txt` [jul10] #6. Currently only Whisper transcript + materials. |
 | 11 | Data flow chart of all functions in the app | Docs | **P2** | Not started | `doc/manualTodo.txt` [jul11] #7. Generate a `doc/architecture.md` with Mermaid. |
