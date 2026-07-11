@@ -734,14 +734,19 @@ def test_upload_bulk_skips_invalid_extension(client: TestClient):
     assert "not allowed" in skipped[0]["error"]
 
 
-def test_upload_bulk_skips_file_exceeding_2gb(client: TestClient):
-    """Bulk endpoint skips a file that exceeds the 2 GB cap."""
+def test_upload_bulk_skips_file_exceeding_10gb(client: TestClient):
+    """Bulk endpoint skips a file that exceeds the 10 GB cap.
+
+    MVP3.0 item #1: cap was 2 GB, raised to 10 GB ([jul11] #3).
+    The test mocks os.path.getsize so we never actually allocate the
+    10 GB+1 in memory.
+    """
     import os
     _, section_id = _create_course_and_section(client)
 
     def fake_getsize(path: str) -> int:
-        # Make every file appear larger than 2 GB
-        return 3 * 1024 * 1024 * 1024
+        # Make every file appear larger than 10 GB
+        return 11 * 1024 * 1024 * 1024
 
     files = [
         ("files", ("big.mp4", io.BytesIO(b"x"), "video/mp4")),
@@ -763,6 +768,60 @@ def test_upload_bulk_skips_file_exceeding_2gb(client: TestClient):
     for r in data["results"]:
         assert r["status"] == "skipped"
         assert "too large" in r["error"]
+
+
+def test_upload_accepts_exactly_10gb_file(client: TestClient):
+    """A file of exactly 10 GB must be accepted (the cap is inclusive).
+
+    MVP3.0 item #1: user said '10 GB inclusive'. The check is
+    `file_size > MAX_FILE_SIZE`, so 10 GB == cap is OK and 10 GB + 1
+    byte is rejected. We mock getsize for both single + bulk paths.
+    """
+    import os
+    course_id, section_id = _create_course_and_section(client)
+
+    # ── Single upload at exactly 10 GB — should succeed ──
+    with _mock_auth():
+        # First check current cap value
+        from app.routers.videos import MAX_FILE_SIZE
+        assert MAX_FILE_SIZE == 10 * 1024 ** 3, (
+            f"cap should be 10 GB, got {MAX_FILE_SIZE / (1024**3)} GB"
+        )
+
+        with patch(
+            "app.routers.videos.os.path.getsize",
+            return_value=10 * 1024 ** 3,
+        ):
+            resp = client.post(
+                f"/api/videos/upload/{section_id}",
+                files={"file": ("exact10gb.mp4", io.BytesIO(b"x"), "video/mp4")},
+                headers=_auth_headers(),
+            )
+        assert resp.status_code == 202, f"10 GB should be accepted, got {resp.status_code}: {resp.text}"
+
+
+def test_upload_rejects_just_over_10gb_file(client: TestClient):
+    """A file of 10 GB + 1 byte must be rejected.
+
+    MVP3.0 item #1: cap is strictly inclusive at 10 GB. Any file
+    bigger must return 413 (Payload Too Large). We also assert the
+    error message reflects the new 10 GB cap, not the old 2 GB.
+    """
+    course_id, section_id = _create_course_and_section(client)
+
+    with _mock_auth():
+        with patch(
+            "app.routers.videos.os.path.getsize",
+            return_value=10 * 1024 ** 3 + 1,
+        ):
+            resp = client.post(
+                f"/api/videos/upload/{section_id}",
+                files={"file": ("over10gb.mp4", io.BytesIO(b"x"), "video/mp4")},
+                headers=_auth_headers(),
+            )
+    assert resp.status_code == 413, f"10 GB + 1 byte should be rejected, got {resp.status_code}: {resp.text}"
+    detail = resp.json()["detail"]
+    assert "10 GB" in detail, f"error message should mention 10 GB, got: {detail}"
 
 
 def test_upload_bulk_partial_success(client: TestClient):

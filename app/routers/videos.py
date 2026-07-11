@@ -33,7 +33,14 @@ router = APIRouter(prefix="/api/videos", tags=["videos"])
 
 # Allowed video extensions
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+# MVP3.0 item #1: raised from 2 GB → 10 GB. Single 10 GB video at typical
+# 2 Mbps video bitrate is ~80-110 min of audio; the user's manual todo
+# [jul11] #3 calls this out explicitly ("4 GB doesn't proceed" was the
+# 2 GB cap silently rejecting). No uvicorn/Starlette request-body cap
+# to bump — Starlette reads the full body into memory by default, so
+# 10 GB peaks at ~10 GB RAM during the upload. Tested with a synthetic
+# 10 GB upload in test_videos.py::test_upload_accepts_10_gb_file.
+MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB
 
 
 @router.get("/models")
