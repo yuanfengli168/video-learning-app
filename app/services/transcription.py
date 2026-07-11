@@ -206,17 +206,20 @@ def get_default_model_choice() -> str:
 
     Computed at call time (not import time) so that the answer
     adapts if the user `pip install mlx-whisper` later.
+
+    Both smart-pick keys are hard-coded literals (always present
+    in MODEL_REGISTRY), so we don't need a defensive try/except
+    — the fallback chain is just a list of known-good options.
     """
     if is_mlx_available():
         return "local-best-and-extremely-fast"
-    # Even if MLX isn't installed, the "fast" smart pick should
-    # work on any Mac (it uses faster-whisper + distil-large-v3).
-    # Check that the model can actually be resolved; if not, fall
-    # through to base.
-    try:
+    if "local-best-and-fast" in MODEL_REGISTRY:
         return "local-best-and-fast"
-    except (KeyError, ValueError):
-        return "base"
+    # Defensive: if the registry is somehow missing both smart
+    # picks, fall through to the legacy "base" choice. (In
+    # practice, the registry is module-level and immutable at
+    # runtime, so this is purely a safety net.)
+    return "base"
 
 
 
