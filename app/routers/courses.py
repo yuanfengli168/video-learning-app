@@ -1,6 +1,8 @@
 """Course router — CRUD for courses and sections."""
 
+import os
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -9,8 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
+from app.config import settings
 from app.database import get_db
-from app.models import Course, Section, Video
+from app.models import Asset, Course, Section, Video
 from app.services.retry import (
     find_failed_generate_videos,
     find_failed_transcribe_videos,
@@ -137,18 +140,150 @@ async def delete_course(
     course_id: str,
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user),
-) -> dict[str, str]:
-    """Delete a course (cascades to sections and videos)."""
+) -> dict[str, Any]:
+    """Delete a course and everything in it (cascades to sections,
+    videos, assets, chat sessions).
+
+    MVP2.0 — mirrors the video delete pattern. The DB-level cascade
+    is already wired up via `ondelete="CASCADE"` on the FKs and
+    `cascade="all, delete-orphan"` on the relationships, so deleting
+    a course row at the DB level cleans up everything below it.
+    The on-disk files are NOT cleaned up by the DB cascade — we
+    walk the tree manually first and unlink each one (idempotent:
+    missing files are fine).
+
+    Returns 200 with a cascade summary so the UI can confirm
+    what was deleted.
+
+    Soft-delete with a trash folder / 30-day restore is a separate
+    feature (manualTodo #8) — deferred to MVP3.
+    """
     course = db.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your course")
 
+    # Walk the tree, unlink on-disk files, and count cascade targets.
+    # We do the file cleanup BEFORE the DB delete so we can still
+    # see the file_path strings on each Video row.
+    files_deleted = 0
+    files_missing = 0
+    total_videos = 0
+    total_assets = 0
+
+    for section in course.sections:
+        for video in section.videos:
+            total_videos += 1
+            total_assets += len(db.execute(
+                select(Asset).where(Asset.video_id == video.id)
+            ).scalars().all())
+            # Unlink the on-disk file. Idempotent — a missing file
+            # is not an error (e.g. admin cleanup, 0-byte rejection).
+            file_path = Path(video.file_path)
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                    files_deleted += 1
+                else:
+                    files_missing += 1
+            except OSError:
+                files_missing += 1
+
+    # Count chat sessions across all videos in the course
+    video_ids = [v.id for s in course.sections for v in s.videos]
+    total_sessions = 0
+    if video_ids:
+        from app.models import ChatSession
+        total_sessions = len(db.execute(
+            select(ChatSession).where(ChatSession.video_id.in_(video_ids))
+        ).scalars().all())
+
+    # Now actually delete — SQLAlchemy cascade handles the DB side
     db.delete(course)
     db.commit()
 
-    return {"status": "deleted"}
+    return {
+        "status": "deleted",
+        "course_id": course_id,
+        "deleted": {
+            "files": files_deleted,
+            "files_missing": files_missing,
+            "videos": total_videos,
+            "assets": total_assets,
+            "chat_sessions": total_sessions,
+        },
+    }
+
+
+@router.delete("/{course_id}/sections/{section_id}")
+async def delete_section(
+    course_id: str,
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a section and all its videos (cascades to assets + chat).
+
+    MVP2.0 — same pattern as delete_course and delete_video.
+    Returns 200 with a cascade summary. 404 if the section doesn't
+    exist or doesn't belong to the course; 403 if the user doesn't
+    own the course.
+
+    Soft-delete deferred to MVP3 (manualTodo #8).
+    """
+    section = db.get(Section, section_id)
+    if not section or section.course_id != course_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Section not found",
+        )
+    course = db.get(Course, course_id)
+    if not course or course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your course")
+
+    # Walk the section's videos, unlink files, count cascade targets
+    files_deleted = 0
+    files_missing = 0
+    total_videos = len(section.videos)
+    total_assets = 0
+    for video in section.videos:
+        total_assets += len(db.execute(
+            select(Asset).where(Asset.video_id == video.id)
+        ).scalars().all())
+        file_path = Path(video.file_path)
+        try:
+            if file_path.exists():
+                file_path.unlink()
+                files_deleted += 1
+            else:
+                files_missing += 1
+        except OSError:
+            files_missing += 1
+
+    # Count chat sessions for these videos
+    video_ids = [v.id for v in section.videos]
+    total_sessions = 0
+    if video_ids:
+        from app.models import ChatSession
+        total_sessions = len(db.execute(
+            select(ChatSession).where(ChatSession.video_id.in_(video_ids))
+        ).scalars().all())
+
+    db.delete(section)
+    db.commit()
+
+    return {
+        "status": "deleted",
+        "section_id": section_id,
+        "deleted": {
+            "files": files_deleted,
+            "files_missing": files_missing,
+            "videos": total_videos,
+            "assets": total_assets,
+            "chat_sessions": total_sessions,
+        },
+    }
 
 
 # ── Section endpoints ──
