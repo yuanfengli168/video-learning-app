@@ -27,7 +27,16 @@ def test_create_video(db_session):
     assert video.id is not None
     assert video.title == "Intro to NN"
     assert video.status == "pending"
-    assert video.whisper_model == "base"
+    # MVP3.0 #2: whisper_model is no longer a hard default of "base"
+    # on the column — it's set explicitly when the user picks a
+    # model choice. A freshly-created Video row has whisper_model
+    # = None until the transcribe endpoint stores the chosen key.
+    assert video.whisper_model is None
+    # The new MVP3.0 #2 columns (whisper_backend, resolved_model,
+    # fallback_reason) are also None at creation time.
+    assert video.whisper_backend is None
+    assert video.whisper_resolved_model is None
+    assert video.whisper_fallback_reason is None
     assert video.file_size == 1024
     assert video.duration == 0
 

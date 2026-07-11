@@ -109,3 +109,24 @@ def no_auto_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
         "app.routers.videos._run_auto_pipeline",
         lambda video_id, model_name="base": None,
     )
+
+@pytest.fixture(autouse=True)
+def clear_whisper_model_cache() -> None:
+    """Clear app.services.transcription._model_cache between tests.
+
+    MVP3.0 #2: the cache is a module-level dict that persists across
+    tests in the same process. If test A loads a fake model into
+    the cache (e.g. by patching faster_whisper.WhisperModel), test
+    B would get the cached fake — silently passing the wrong
+    behaviour. This fixture forces every test to start with an
+    empty cache, matching the real-world behaviour where each
+    fresh upload loads its model.
+
+    Yields, then clears on teardown. Runs after the db_session
+    fixture (so the DB is clean first), and is independent of
+    client/db_session.
+    """
+    from app.services import transcription
+    transcription._model_cache.clear()
+    yield
+    transcription._model_cache.clear()

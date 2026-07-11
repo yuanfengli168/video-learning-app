@@ -26,8 +26,14 @@ from app.jobs import (
 from app.models import Asset, Course, Section, Video
 from app.services.transcription import (
     AVAILABLE_MODELS,
+    SMART_PICKS,
+    ALL_MODEL_CHOICES,
+    MODEL_REGISTRY,
+    get_default_model_choice,
+    resolve_model_choice,
     transcript_to_json,
     transcribe_video,
+    transcribe_with_backend,
 )
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
@@ -45,9 +51,43 @@ MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB
 
 
 @router.get("/models")
-async def list_whisper_models() -> dict[str, list[str]]:
-    """List available Whisper models for the web UI dropdown."""
-    return {"models": AVAILABLE_MODELS}
+async def list_whisper_models() -> dict[str, Any]:
+    """List available Whisper model choices for the web UI dropdown.
+
+    MVP3.0 #2: returns a richer shape than before — the UI now
+    groups choices into a manual group (the 4 originals) and a
+    smart-picks group (the 2 new recommended defaults), so it
+    can render an optgroup dropdown with labels. The legacy
+    `models` field is preserved for any caller that still wants
+    a flat list.
+
+    Response shape:
+      {
+        "choices": [
+          {"key": "tiny", "label": "tiny (fastest)", "group": "manual"},
+          {"key": "base", "label": "base (default)", "group": "manual"},
+          ...
+          {"key": "local-best-and-fast", "label": "✨ ...", "group": "smart"},
+          ...
+        ],
+        "default": "local-best-and-extremely-fast"  (or "local-best-and-fast"
+                                                     on Intel / no MLX),
+        "models": ["tiny", "base", "small", "medium"],  # legacy flat list
+      }
+    """
+    choices = [
+        {
+            "key": key,
+            "label": entry["label"],
+            "group": entry["group"],
+        }
+        for key, entry in MODEL_REGISTRY.items()
+    ]
+    return {
+        "choices": choices,
+        "default": get_default_model_choice(),
+        "models": AVAILABLE_MODELS,  # backwards-compat
+    }
 
 
 @router.post("/upload/{section_id}", status_code=202)
@@ -137,7 +177,7 @@ async def upload_video(
     db.add(video)
     db.commit()
 
-    background_tasks.add_task(_run_auto_pipeline, video_id, "base")
+    background_tasks.add_task(_run_auto_pipeline, video_id, get_default_model_choice())
 
     return {"video_id": video_id, "status": "queued", "auto_process": True}
 
@@ -252,7 +292,7 @@ async def upload_bulk_videos(
         db.add(video)
         db.commit()
 
-        background_tasks.add_task(_run_auto_pipeline, video_id, "base")
+        background_tasks.add_task(_run_auto_pipeline, video_id, get_default_model_choice())
 
         results.append({
             "filename": filename,
@@ -298,15 +338,40 @@ async def transcribe(
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your video")
 
-    if model_name not in AVAILABLE_MODELS:
+    # MVP3.0 #2: accept any of the new model-choice keys (manual
+    # picks like "base" + smart picks like "local-best-and-fast").
+    # The full registry is the single source of truth — see
+    # app/services/transcription.py::MODEL_REGISTRY.
+    if model_name not in ALL_MODEL_CHOICES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown model. Available: {AVAILABLE_MODELS}",
+            detail=(
+                f"Unknown model choice '{model_name}'. "
+                f"Available: {ALL_MODEL_CHOICES}"
+            ),
         )
 
+    # Resolve the choice to (backend, model_id) NOW so the worker
+    # doesn't have to. If the user picked an MLX choice on a Mac
+    # that can't run MLX, resolve_model_choice() will fall back to
+    # the "local-best-and-fast" entry — and we record that on the
+    # video row so the UI can show a "using fallback" warning.
+    resolved = resolve_model_choice(model_name)
+    actual_model_id = resolved["model_id"]
+    fallback_occurred = resolved["fallback_occurred"]
+    fallback_reason = resolved["fallback_reason"]
+
     # Mark the video as "transcribing" and start tracking the job.
+    # We store the *user's* choice in `whisper_model` (so the UI
+    # can show "you picked X, actually ran Y" if fallback fired)
+    # and the resolved model_id in a new field below.
     video.status = "transcribing"
     video.whisper_model = model_name
+    video.whisper_backend = resolved["backend"]
+    video.whisper_resolved_model = actual_model_id
+    video.whisper_fallback_reason = (
+        fallback_reason if fallback_occurred else None
+    )
     job = start_job(
         video_id,
         "transcribe",
@@ -328,8 +393,15 @@ async def transcribe(
     }
 
 
-def _run_transcribe_job(video_id: str, model_name: str) -> None:
+def _run_transcribe_job(video_id: str, model_choice: str) -> None:
     """Background worker: transcribe a video and write the result to DB.
+
+    MVP3.0 #2: this worker now accepts a *user choice key* (e.g.
+    "base", "local-best-and-fast") instead of a raw model_id. The
+    actual dispatch to faster-whisper vs mlx-whisper happens inside
+    transcribe_with_backend() based on the resolved entry from
+    MODEL_REGISTRY. The previous behaviour (always faster-whisper)
+    is preserved for the manual picks (tiny/base/small/medium).
 
     This function runs in the SAME process as the API (no worker
     queue yet — MVP1 single-user). It opens its OWN DB session because
@@ -354,52 +426,37 @@ def _run_transcribe_job(video_id: str, model_name: str) -> None:
                 db.commit()
             return
 
-        set_progress(job, done=5, total=100, message=f"Transcribing with '{model_name}'...")
-        # Throttle DB writes a bit — every segment for a 1-hour video
-        # would be thousands of writes. We update every ~50 segments.
-        SEGMENT_REPORT_INTERVAL = 50
-        segments_buffered = []
-
-        # We don't have a clean way to get the total segment count up
-        # front, so we use a different approach: estimate progress by
-        # audio duration. Faster-Whisper exposes `info.duration`
-        # (total seconds) and the segment `.end` (seconds processed).
-        # Update progress as we go.
-        from faster_whisper import WhisperModel
-        model = WhisperModel(model_name, device="cpu", compute_type="int8")
-        set_progress(job, done=10, message="Model loaded, decoding audio...")
-
-        segments_iter, info = model.transcribe(
-            str(video.file_path), beam_size=5
+        set_progress(
+            job, done=5, total=100,
+            message=f"Transcribing with '{model_choice}'...",
         )
+        db.commit()
 
-        # We don't know total segments in advance, so we estimate from
-        # info.duration. Use 100% as total and compute "done" as
-        # `current_segment.end / info.duration * 100`.
-        total_duration = max(info.duration, 1.0)
-        for seg in segments_iter:
-            segments_buffered.append({
-                "start": round(seg.start, 2),
-                "end": round(seg.end, 2),
-                "text": seg.text.strip(),
-            })
-            if len(segments_buffered) % SEGMENT_REPORT_INTERVAL == 0:
-                pct = min(95, (seg.end / total_duration) * 100)
-                set_progress(
-                    job,
-                    done=int(pct),
-                    total=100,
-                    message=f"Transcribed {len(segments_buffered)} segments ({pct:.0f}%)...",
-                )
-                # Persist progress so a page refresh shows it.
-                video.last_transcribe_job = serialize_job(job)
-                db.commit()
+        # MVP3.0 #2: dispatch through the new backend-aware entry
+        # point. It handles MLX detection, fallback, and
+        # backend-specific progress reporting (when the mlx-whisper
+        # path is wired up in a follow-up commit). The returned
+        # dict has the same shape as before, plus a `_meta` key
+        # for diagnostic logging.
+        result = transcribe_with_backend(
+            str(video.file_path),
+            model_choice,
+            on_progress=lambda done, total, msg: set_progress(
+                job, done=done, total=total, message=msg
+            ),
+        )
+        meta = result.pop("_meta", {})
+        segments_buffered = result["segments"]
+        language = result["language"]
+        duration = result["duration"]
+
+        set_progress(job, done=90, message="Saving transcript to database...")
 
         # Save transcript as an Asset
-        result = {
+        result_dict = {
             "segments": segments_buffered,
-            "language": info.language,
-            "duration": round(info.duration, 2),
+            "language": language,
+            "duration": duration,
         }
         existing = db.execute(
             select(Asset).where(
@@ -407,15 +464,23 @@ def _run_transcribe_job(video_id: str, model_name: str) -> None:
             )
         ).scalar_one_or_none()
         if existing:
-            existing.content = transcript_to_json(result)
+            existing.content = transcript_to_json(result_dict)
         else:
             db.add(Asset(
                 video_id=video_id,
                 asset_type="transcript",
-                content=transcript_to_json(result),
+                content=transcript_to_json(result_dict),
             ))
 
-        video.duration = result["duration"]
+        video.duration = result_dict["duration"]
+        # Persist the resolved (backend, model) so the UI can show
+        # what actually ran (especially important when fallback
+        # happened, e.g. user picked MLX on Intel Mac).
+        video.whisper_backend = meta.get("backend")
+        video.whisper_resolved_model = meta.get("model_id")
+        if not meta.get("fallback_occurred"):
+            # Clear any stale fallback reason on success.
+            video.whisper_fallback_reason = None
         video.status = "ready"
         # MVP3.0 #8: stamp the transcribe-step completion so the
         # course page can show "ready · in 9:08" by comparing
@@ -426,7 +491,10 @@ def _run_transcribe_job(video_id: str, model_name: str) -> None:
         finish_job(
             job,
             status="completed",
-            message=f"✓ Transcribed {len(segments_buffered)} segments (detected: {result['language']})",
+            message=(
+                f"✓ Transcribed {len(segments_buffered)} segments "
+                f"(detected: {language}, model: {meta.get('model_id', model_choice)})"
+            ),
         )
         video.last_transcribe_job = serialize_job(job)
         db.commit()
@@ -447,7 +515,7 @@ def _run_transcribe_job(video_id: str, model_name: str) -> None:
         db.close()
 
 
-def _run_auto_pipeline(video_id: str, model_name: str = "base") -> None:
+def _run_auto_pipeline(video_id: str, model_name: str | None = None) -> None:
     """Background chain: transcribe → generate for a newly uploaded video.
 
     MVP2.0 #1: called as a BackgroundTask from upload_video. The
@@ -461,7 +529,15 @@ def _run_auto_pipeline(video_id: str, model_name: str = "base") -> None:
 
     Runs in the same process (BackgroundTasks, no worker queue yet —
     that's #11 / MVP2.0.3).
+
+    MVP3.0 #2: `model_name` is now a user *choice* key from
+    MODEL_REGISTRY (e.g. "base", "local-best-and-fast"), not a raw
+    model_id. When None, falls back to get_default_model_choice()
+    (MLX smart pick if available, else the faster-whisper smart
+    pick, else "base").
     """
+    if model_name is None:
+        model_name = get_default_model_choice()
     # Step 1: Run transcription. The job was already started in
     # upload_video, so _run_transcribe_job can find it via get_job().
     _run_transcribe_job(video_id, model_name)

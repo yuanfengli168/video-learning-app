@@ -91,6 +91,28 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "generated_at",
         "ALTER TABLE videos ADD COLUMN generated_at DATETIME",
     ),
+    # MVP3.0 #2 — whisper backend + resolved-model columns. The
+    # original `whisper_model` column is repurposed (now stores the
+    # user-facing *choice* key like "base" or "local-best-and-fast"
+    # instead of just a model_id), and we add 3 new columns to
+    # track the actual backend that ran, the resolved HF model
+    # name, and any fallback reason. All 3 are nullable + String,
+    # so legacy rows (whisper_model = "base") remain valid.
+    (
+        "videos",
+        "whisper_backend",
+        "ALTER TABLE videos ADD COLUMN whisper_backend VARCHAR(32)",
+    ),
+    (
+        "videos",
+        "whisper_resolved_model",
+        "ALTER TABLE videos ADD COLUMN whisper_resolved_model VARCHAR(64)",
+    ),
+    (
+        "videos",
+        "whisper_fallback_reason",
+        "ALTER TABLE videos ADD COLUMN whisper_fallback_reason VARCHAR(512)",
+    ),
 ]
 
 

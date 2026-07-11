@@ -81,8 +81,25 @@ class Video(Base):
     )
     # Processing status: pending, transcribing, generating, ready, error
     status: Mapped[str] = mapped_column(String(32), default="pending")
-    # Whisper model used for transcription
-    whisper_model: Mapped[str] = mapped_column(String(32), default="base")
+    # ── Whisper model + backend (MVP3.0 #2) ─────────────────────────────────
+    # whisper_model: the user-facing *choice* key from MODEL_REGISTRY
+    # (e.g. "base", "local-best-and-fast"). This is what the UI shows
+    # "I picked" — it's stable across backend swaps.
+    # whisper_backend: the actual backend that ran ("faster-whisper" or
+    # "mlx-whisper"). May differ from whisper_model if the user picked
+    # an MLX choice on a non-Apple-Silicon Mac (auto-fallback).
+    # whisper_resolved_model: the model_id passed to the backend
+    # (e.g. "base", "distil-large-v3"). Often the same as the choice
+    # key, but the smart picks map to a specific HF model name.
+    # whisper_fallback_reason: human-readable explanation when the
+    # user picked a smart pick that needed a fallback. NULL when no
+    # fallback happened.
+    # All four are nullable (String default to None on legacy rows)
+    # so existing videos uploaded before MVP3.0 #2 stay valid.
+    whisper_model: Mapped[str | None] = mapped_column(String(32), default=None)
+    whisper_backend: Mapped[str | None] = mapped_column(String(32), default=None)
+    whisper_resolved_model: Mapped[str | None] = mapped_column(String(64), default=None)
+    whisper_fallback_reason: Mapped[str | None] = mapped_column(String(512), default=None)
     # ── Background job state (MVP1 progress bar + ETA) ──────────────────────
     # 'transcribe' or 'generate' — the latest job of that type for this video.
     # Stored as a JSON string of the Job dict from app/jobs.py. Nullable
