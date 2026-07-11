@@ -11,6 +11,60 @@
 {% endblock %}
 
 {% block content %}
+<!-- Video page header — title + delete button
+     (MVP2.0, manualTodo #5). The delete button opens a
+     confirmation modal; on confirm it calls
+     DELETE /api/videos/{id} and redirects to the course page. -->
+<div class="flex items-start justify-between gap-3 mb-4">
+    <h1 class="text-2xl font-bold break-words min-w-0">{{ video.title }}</h1>
+    <button
+        onclick="showDeleteModal()"
+        id="delete-video-btn"
+        class="flex-shrink-0 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg"
+        title="Delete this video"
+    >
+        🗑️ Delete
+    </button>
+</div>
+
+<!-- Delete confirmation modal — hidden by default, shown by
+     showDeleteModal() when the user clicks the delete button.
+     Uses the same fixed-overlay pattern as the mindmap fullscreen
+     modal in the JS section below. -->
+<div id="delete-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h2 class="text-lg font-semibold mb-2">🗑️ Delete this video?</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            This will permanently delete:
+        </p>
+        <ul class="text-sm text-gray-700 dark:text-gray-300 list-disc ml-5 mb-4 space-y-1">
+            <li>The video file on disk</li>
+            <li>The transcript (if generated)</li>
+            <li>All learning materials (summary, mindmap, flashcards, quiz)</li>
+            <li>Any chat history for this video</li>
+        </ul>
+        <p class="text-sm font-medium text-red-600 dark:text-red-400 mb-4">
+            This cannot be undone.
+        </p>
+        <div class="flex justify-end gap-2">
+            <button
+                onclick="hideDeleteModal()"
+                id="delete-cancel-btn"
+                class="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="confirmDelete()"
+                id="delete-confirm-btn"
+                class="px-4 py-2 text-sm bg-red-600 text-white hover:bg-red-700 rounded-lg"
+            >
+                Delete permanently
+            </button>
+        </div>
+    </div>
+</div>
+
 <div class="flex flex-col lg:flex-row gap-4 lg:gap-6 min-w-0">
     <!-- Left: Video Player + Transcript -->
     <div class="lg:w-3/5 space-y-4 min-w-0">
@@ -1680,6 +1734,81 @@ async function sendDiscussMessage() {
         if (input) input.focus();
     }
 }
+
+// ── Delete video (MVP2.0, manualTodo #5) ─────────────────────────────────────
+//
+// Three functions: showDeleteModal / hideDeleteModal / confirmDelete.
+// The modal is a fixed overlay with Cancel + Delete buttons. On confirm:
+//   1. Call DELETE /api/videos/{id}
+//   2. Show a toast with the cascade summary (e.g. "Deleted 4 assets,
+//      2 chat sessions")
+//   3. Redirect to the course page so the user sees the section list
+//      without the deleted video
+//
+// Why a modal, not a native confirm()? Better UX — lets us list exactly
+// what will be deleted, gives a clear "this cannot be undone" warning,
+// and matches the design language of the rest of the app.
+
+function showDeleteModal() {
+    const modal = document.getElementById('delete-modal');
+    if (modal) modal.classList.remove('hidden');
+    // Focus the cancel button by default — safer default action.
+    const cancelBtn = document.getElementById('delete-cancel-btn');
+    if (cancelBtn) cancelBtn.focus();
+}
+
+function hideDeleteModal() {
+    const modal = document.getElementById('delete-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function confirmDelete() {
+    const confirmBtn = document.getElementById('delete-confirm-btn');
+    const cancelBtn = document.getElementById('delete-cancel-btn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = '⏳ Deleting...';
+    }
+    if (cancelBtn) cancelBtn.disabled = true;
+    try {
+        const resp = await fetch(`/api/videos/${videoId}`, {
+            method: 'DELETE',
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        // Build a short summary for the toast.
+        const parts = [];
+        if (data.deleted.file) parts.push('video file');
+        if (data.deleted.assets > 0) parts.push(`${data.deleted.assets} asset${data.deleted.assets === 1 ? '' : 's'}`);
+        if (data.deleted.chat_sessions > 0) parts.push(`${data.deleted.chat_sessions} chat session${data.deleted.chat_sessions === 1 ? '' : 's'}`);
+        const summary = parts.length > 0 ? ` (deleted ${parts.join(', ')})` : '';
+        showToast(`Video deleted${summary}`, 'success');
+        // Redirect to the course page after a short delay so the user
+        // sees the toast. course is exposed by the Jinja template as
+        // a window variable via the video.html render context.
+        const courseHref = document.querySelector('a[href^="/course/"]');
+        const target = courseHref ? courseHref.getAttribute('href') : '/dashboard';
+        setTimeout(() => { window.location.href = target; }, 1200);
+    } catch (e) {
+        // Reset the button so the user can try again
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Delete permanently';
+        }
+        if (cancelBtn) cancelBtn.disabled = false;
+        showToast('Delete failed: ' + e.message, 'error');
+    }
+}
+
+// Allow Escape key to close the modal (standard UX)
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('delete-modal').classList.contains('hidden')) {
+        hideDeleteModal();
+    }
+});
 
 // ── Init ──
 loadTranscript();

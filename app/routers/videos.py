@@ -532,6 +532,97 @@ async def get_video_status(
     }
 
 
+@router.delete("/{video_id}")
+async def delete_video(
+    video_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a video and all of its associated data.
+
+    User asked for this in `doc/manualTodo.txt` item #5 (2026-07-10).
+    Useful for cleaning up:
+    - 0-byte uploads (the 0-byte video in section 3 of the AI 提示词
+      course has been sitting there since 2026-07-09)
+    - Failed transcriptions / generations
+    - Test videos
+
+    Cascade:
+    - Deletes the on-disk file (idempotent — missing file is fine)
+    - Deletes all Asset rows for this video (transcript, summary,
+      mindmap, flashcards, quiz, topic_timestamps) — handled by
+      SQLAlchemy's `cascade="all, delete-orphan"` on the relationship
+    - Deletes all ChatSession rows (and their ChatMessages via the
+      chat_sessions cascade) — same mechanism
+    - The DB-level `ondelete="CASCADE"` on the FKs is a backup if
+      SQLAlchemy is bypassed (e.g. raw SQL)
+
+    Returns 200 with a small summary so the UI can confirm what was
+    cleaned up. 404 if the video doesn't exist, 403 if the user
+    doesn't own the course.
+
+    The video's `status` may be "transcribing" or "generating" when
+    delete is called. We allow this — the BackgroundTask worker
+    will fail on its next `db.get(Video, ...)` call (the video is
+    gone), and the in-memory job stays in the _jobs dict until
+    the worker process restarts. Not a problem for MVP1 single-user.
+    """
+    video = db.get(Video, video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Verify ownership (same pattern as GET /api/videos/{id})
+    section = db.get(Section, video.section_id)
+    course = db.get(Course, section.course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your video")
+
+    # ── 1. Delete the on-disk file ──────────────────────────────────
+    # Use missing_ok=True so a file that's already gone (e.g. admin
+    # cleanup, or never written for a 0-byte rejection) doesn't crash
+    # the delete. Path is stored as a string in the DB; wrap in Path()
+    # so it works whether the original upload was relative or absolute.
+    file_path = Path(video.file_path)
+    file_deleted = False
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            file_deleted = True
+    except OSError:
+        # Permission denied, file in use, etc. Don't crash the delete —
+        # the DB row removal is the critical part.
+        file_deleted = False
+
+    # ── 2. Count cascade targets (for the response) ─────────────────
+    # We do this BEFORE the delete so we can report the counts.
+    # The actual delete is handled by SQLAlchemy's cascade on
+    # the relationships.
+    assets_count = db.execute(
+        select(Asset).where(Asset.video_id == video_id)
+    ).scalars().all()
+    assets_count_n = len(assets_count)
+
+    from app.models import ChatSession
+    sessions_count = db.execute(
+        select(ChatSession).where(ChatSession.video_id == video_id)
+    ).scalars().all()
+    sessions_count_n = len(sessions_count)
+
+    # ── 3. Delete the video (cascades to assets + chat_sessions) ────
+    db.delete(video)
+    db.commit()
+
+    return {
+        "status": "deleted",
+        "video_id": video_id,
+        "deleted": {
+            "file": file_deleted,
+            "assets": assets_count_n,
+            "chat_sessions": sessions_count_n,
+        },
+    }
+
+
 @router.get("/{video_id}")
 async def get_video(
     video_id: str,
