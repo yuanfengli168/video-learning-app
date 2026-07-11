@@ -1001,3 +1001,50 @@ def test_video_view_delete_button_present(client: TestClient):
     assert "delete-modal" in response.text, "delete modal HTML missing"
     # And the redirect target must use courseId, not DOM scrape
     assert "courseId" in response.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Course and section delete UI (MVP2.0, manualTodo #5 extension)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_dashboard_has_delete_course_button(client: TestClient):
+    """The dashboard course cards must have a delete button. Regression
+    test for manualTodo #5 extension — covers the user adding a course
+    then having no way to delete it (the existing course delete endpoint
+    was unused because there was no button in the UI)."""
+    with _mock_auth():
+        client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        response = client.get("/", headers=_auth_headers())
+    assert response.status_code == 200
+    assert "showDeleteCourseModal" in response.text, (
+        "delete course button JS missing from dashboard"
+    )
+    assert "delete-course-modal" in response.text, (
+        "delete course modal HTML missing from dashboard"
+    )
+
+
+def test_course_view_has_delete_section_button(client: TestClient):
+    """The course view section header must have a delete button."""
+    import io
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        response = client.get(f"/course/{course_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    assert "showDeleteSectionModal" in response.text, (
+        "delete section button JS missing from course page"
+    )
+    assert "delete-section-modal" in response.text, (
+        "delete section modal HTML missing from course page"
+    )
