@@ -9,3 +9,34 @@ stop at the first line selected
 4. for the auto download, it v8 will record from the first until the last and called the last still usefull.
 4.1, but need a separate to just auto re restart when 2nd or new loaded. you understand?
 4.2: can we add number in front of the video with 2. ..... for filename?
+
+
+【jul10】
+5. we also don't have delete button on the video page to delete it, is this hard to add it?
+6. I got question on this quiz, but no way to ask why based on the transcript of video and ocr information on video.
+```
+5. 安装新 Skill 后，AI 模型有时不会自动调用，应该怎么做？
+
+A. 重新安装系统
+B. 明确引导 AI 使用特定技能
+C. 删除其他技能
+D. 更换 AI 模型
+
+
+I wanted to ask: 
+什么叫做正确引导？
+```
+7. 为什么有的时候generated materials 是中文，有的时候是英文？ 我觉得应该consistancy, or can generate 2 versions etc, or just translate etc
+    - should based on language of video
+
+8. can we delete the video quickly on section page and on video page and when delete the thing moved to trash folder, and will be permanently
+deleted after 30 days, or manually deleted in the trash folder empty all button etc, and can have restore button in trash bin
+
+
+[jul11]
+1. mvp2 main name: ---> MVP2.0: bulkUploads and LLMonTransciptsMaterials
+2. mvp3 main name: ---> MVP3.0: optimize performance and prompt engineering etc, with Jira creation (MCP)
+3. bug: 4 gb not able to proceed
+4. video bar can't manually see the end of 2 hours, webmw style not liked
+5. 
+

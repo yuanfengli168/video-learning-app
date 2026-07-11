@@ -1,0 +1,8 @@
+# skill-commit
+
+## rules you should consider or follow: 
+- 1. After each implemenation for each topic or function, please do following, a) discuss and articulate your approach; b) typically use at least 2 commits for each, first is to implement the changes, second is to add tests and maintain 96% overall code base test coverage, but as high as possible coverage for this topic. c)if any tests failed, fix it; so a and b have to have, c depends on whether any tests need to be fixed, and if other thing also needed, can add d) e) etc.
+- 2. [optional]when you have a, b, c ... commits for same topic follow the pattern like: a) "Implementation of Transcript scrolling and highlighting functions with video - part A, implementation"; b) "Implementation of Transcript scrolling and highlighting functions with video - part B, tests"; c)"Implementation of Transcript scrolling and highlighting functions with video - part C, fix tests";
+- 3. for commit message, always start with branch name like: "MVP2.0" then some succinct summary sentence to show what we do, like "multiple video uploads" then following 1, and 2 for implementation and tests. So final commit message should similar to: "MVP2.0: multiple video uploads - part A, implementation" (please have no typo and grammarly make sense)
+- 4. Try to maintain test coverage for whole codebase project over 96%, and for each topic or function, please aim 100%, but do as best as you can.
+- 5. after you have no questions after all 4 steps above done, can check if any stale docs need to update, give recommendation in short sentences, and ask users on their opinion. can create one more commit following this: "MVP2.0: multiple video uploads - stale doc upgade" if user let's you upgrade the docs.
