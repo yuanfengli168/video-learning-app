@@ -92,6 +92,20 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "requires_mlx": True,
         "group": "smart",
     },
+    # The default since 2026-07-14. Replaces the distil-large-v3 entries
+    # as the recommended pick because distil-large-v3 is English-biased
+    # and ignores the `language="zh"` lock — it was producing all-English
+    # hallucination loops on Chinese videos even with the anti-drift
+    # kwargs (Part A). mlx-community/whisper-large-v3-turbo is a strict
+    # superset for Chinese / multilingual and only ~1.5-2x slower than
+    # distil-large-v3 on M-series. Apple Silicon only.
+    "local-large-turbo": {
+        "label": "🚀 Local Large-v3 Turbo (MLX, M-series, multilingual)",
+        "model_id": "mlx-community/whisper-large-v3-turbo",
+        "backend": "mlx-whisper",
+        "requires_mlx": True,
+        "group": "smart",
+    },
 }
 
 # Backwards-compat: the old AVAILABLE_MODELS list (5 strings). Many
@@ -524,18 +538,32 @@ def resolve_model_choice(
 def get_default_model_choice() -> str:
     """Return the recommended default choice for this Mac.
 
-    "local-best-and-extremely-fast" if MLX is available, else
-    "local-best-and-fast", else the legacy "base".
+    As of 2026-07-14, the default is "local-large-turbo" (mlx-
+    community/whisper-large-v3-turbo via mlx-whisper) on Apple
+    Silicon, and "local-best-and-fast" on x86 / arm64 without
+    MLX. The "local-best-and-*" entries still exist in the
+    registry for users who want to pick them manually, but the
+    default no longer routes to distil-large-v3 because that
+    model is English-biased and ignores `language="zh"` (it
+    produced all-English hallucination loops on Chinese videos
+    even with the Part A anti-drift kwargs).
+
+    The legacy fallback chain is:
+      1. MLX on Apple Silicon → "local-large-turbo"
+      2. Otherwise → "local-best-and-fast" (faster-whisper
+         distil-large-v3 — still the fastest non-MLX option,
+         just not the default)
+      3. Defensive last resort → "base"
 
     Computed at call time (not import time) so that the answer
     adapts if the user `pip install mlx-whisper` later.
 
-    Both smart-pick keys are hard-coded literals (always present
+    All smart-pick keys are hard-coded literals (always present
     in MODEL_REGISTRY), so we don't need a defensive try/except
     — the fallback chain is just a list of known-good options.
     """
-    if is_mlx_available():
-        return "local-best-and-extremely-fast"
+    if is_mlx_available() and "local-large-turbo" in MODEL_REGISTRY:
+        return "local-large-turbo"
     if "local-best-and-fast" in MODEL_REGISTRY:
         return "local-best-and-fast"
     # Defensive: if the registry is somehow missing both smart

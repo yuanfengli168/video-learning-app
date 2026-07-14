@@ -87,21 +87,30 @@ def _get_session():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_registry_has_six_choices():
-    """The registry must have exactly 6 entries: 4 manual + 2 smart."""
+def test_registry_has_seven_choices():
+    """The registry must have exactly 7 entries: 4 manual + 3 smart.
+
+    Updated 2026-07-14 when we added 'local-large-turbo' as the
+    third smart pick (replaces the distil-large-v3 default).
+    """
     from app.services.transcription import MODEL_REGISTRY
-    assert len(MODEL_REGISTRY) == 6, (
-        f"Expected 6 registry entries, got {len(MODEL_REGISTRY)}: "
+    assert len(MODEL_REGISTRY) == 7, (
+        f"Expected 7 registry entries, got {len(MODEL_REGISTRY)}: "
         f"{sorted(MODEL_REGISTRY.keys())}"
     )
 
 
 def test_registry_has_expected_keys():
-    """Specific keys must exist (4 manual + 2 smart)."""
+    """Specific keys must exist (4 manual + 3 smart).
+
+    Updated 2026-07-14: added 'local-large-turbo' to the
+    expected set. See doc/CHANGELOG.md [2.0.1] for rationale.
+    """
     from app.services.transcription import MODEL_REGISTRY
     expected = {
         "tiny", "base", "small", "medium",
         "local-best-and-fast", "local-best-and-extremely-fast",
+        "local-large-turbo",
     }
     assert set(MODEL_REGISTRY.keys()) == expected
 
@@ -133,11 +142,19 @@ def test_manual_group_has_four_choices():
     assert manual == {"tiny", "base", "small", "medium"}
 
 
-def test_smart_group_has_two_choices():
-    """The 'smart' group is the 2 new picks."""
+def test_smart_group_has_three_choices():
+    """The 'smart' group is the 3 picks (2 distil-large-v3 + 1 large-v3-turbo).
+
+    Updated 2026-07-14: added 'local-large-turbo' (the new
+    recommended default) to the smart group.
+    """
     from app.services.transcription import MODEL_REGISTRY
     smart = {k for k, v in MODEL_REGISTRY.items() if v["group"] == "smart"}
-    assert smart == {"local-best-and-fast", "local-best-and-extremely-fast"}
+    assert smart == {
+        "local-best-and-fast",
+        "local-best-and-extremely-fast",
+        "local-large-turbo",
+    }
 
 
 def test_smart_extremely_fast_requires_mlx():
@@ -163,10 +180,16 @@ def test_available_models_legacy_list_unchanged():
 
 
 def test_smart_picks_exported_separately():
-    """SMART_PICKS contains exactly the 2 smart pick keys."""
+    """SMART_PICKS contains exactly the 3 smart pick keys.
+
+    Updated 2026-07-14: 3 picks now (was 2). The new one is
+    'local-large-turbo' (the recommended default).
+    """
     from app.services.transcription import SMART_PICKS
     assert set(SMART_PICKS) == {
-        "local-best-and-fast", "local-best-and-extremely-fast"
+        "local-best-and-fast",
+        "local-best-and-extremely-fast",
+        "local-large-turbo",
     }
 
 
@@ -324,18 +347,24 @@ def test_resolve_unknown_choice_raises():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_default_is_mlx_smart_pick_when_available(monkeypatch):
-    """When MLX is available, default = 'local-best-and-extremely-fast'."""
+def test_default_is_local_large_turbo_when_mlx_available(monkeypatch):
+    """When MLX is available, default = 'local-large-turbo' (mlx-community/whisper-large-v3-turbo).
+
+    As of 2026-07-14, we switched the default away from the
+    distil-large-v3 entries because that model is English-biased
+    and ignores the language=zh lock. See app/services/transcription.py
+    ::get_default_model_choice for the full rationale.
+    """
     import sys
     import types
     monkeypatch.setitem(sys.modules, "mlx_whisper", types.ModuleType("mlx_whisper"))
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
     from app.services.transcription import get_default_model_choice
-    assert get_default_model_choice() == "local-best-and-extremely-fast"
+    assert get_default_model_choice() == "local-large-turbo"
 
 
 def test_default_is_fast_smart_pick_on_intel(monkeypatch):
-    """On Intel/x86, default = 'local-best-and-fast' (the faster-whisper one)."""
+    """On Intel/x86 (no MLX), default = 'local-best-and-fast' (the faster-whisper one)."""
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "x86_64")
     from app.services.transcription import get_default_model_choice
     assert get_default_model_choice() == "local-best-and-fast"
@@ -626,8 +655,8 @@ def test_models_endpoint_returns_new_shape(client: TestClient):
     # Legacy 'models' field is the 4 manual ones
     assert set(data["models"]) == {"tiny", "base", "small", "medium"}
 
-    # 'choices' has all 6 entries with the right shape
-    assert len(data["choices"]) == 6
+    # 'choices' has all 7 entries (4 manual + 3 smart) with the right shape
+    assert len(data["choices"]) == 7
     for choice in data["choices"]:
         assert "key" in choice
         assert "label" in choice
@@ -638,6 +667,7 @@ def test_models_endpoint_returns_new_shape(client: TestClient):
     assert data["default"] in {
         "tiny", "base", "small", "medium",
         "local-best-and-fast", "local-best-and-extremely-fast",
+        "local-large-turbo",
     }
 
 
