@@ -280,3 +280,32 @@ lines for context.
 - `app/routers/chat.py`: 97% coverage
 
 [2.0.2]: https://github.com/yuanfengli168/video-learning-app/compare/cc42b15...HEAD
+
+## [2.0.3] - 2026-07-14 — Tab switching single-select fix
+
+🐛 **One-line bug fix.** Clicking Summary / Flashcards / Quiz /
+Mindmap while the Discuss tab was open left the Discuss panel
+visible underneath — two panels showed at once. The fix adds
+`'discuss'` to the `switchTab()` forEach loop so all five
+panels are mutually exclusive (commits `dc11d5f`, `d7c4ef6`).
+
+### 🐛 Bug fixes
+
+- **Tab switching single-select violation** — `switchTab()` in
+  `app/templates/video.html` iterated over the original 4
+  tabs but not `'discuss'`. The Discuss tab was added in
+  MVP2.0 (commit `b20584a`) but the iteration list was never
+  updated, so clicking any other tab while Discuss was open
+  left the Discuss panel visible.
+
+### 🧪 Tests
+
+- 526 passing, 12 pre-existing failures (no new regressions)
+- +1 new test in `tests/test_ui_features.py`:
+  - `test_video_page_switchTab_hides_all_five_panels` —
+    reads the `switchTab` function body from the rendered
+    page and asserts the forEach iterates over all 5 tabs.
+    Verified to fail when the bug is present and pass with
+    the fix.
+
+[2.0.3]: https://github.com/yuanfengli168/video-learning-app/compare/369b111...HEAD

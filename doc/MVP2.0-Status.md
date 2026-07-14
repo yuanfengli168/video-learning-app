@@ -645,3 +645,50 @@ The previous chat session still has the old (broken) system
 prompt in its DB row, so the user will need to start a new
 session to see the fix. This is by design — we don't want to
 silently rewrite session history.
+
+## 17. 2026-07-14 — Tab switching single-select (MVP2.0.2 hotfix)
+
+> User feedback: "the discuss tab can be selected while other
+> tabs are also selected, I want it to be single-option style".
+> Commits `dc11d5f`, `d7c4ef6`.
+
+### Root cause
+
+`switchTab()` in `app/templates/video.html` iterated over
+`['summary', 'flashcards', 'quiz', 'mindmap']` to hide the
+non-active panels. When the Discuss tab was added in commit
+`b20584a` (MVP2.0 ship), the forEach list was never updated.
+Result: clicking Summary, Flashcards, Quiz, or Mindmap while
+Discuss was open left the Discuss panel visible underneath the
+new tab's content — classic single-select tab violation.
+
+This was a latent bug since 2026-07-11. The Discuss tab was
+shipped, but the tab-switching logic was never updated to know
+about it.
+
+### Fix
+
+Add `'discuss'` to the iteration list. One-line fix:
+
+```js
+['summary', 'flashcards', 'quiz', 'mindmap', 'discuss'].forEach(t => {
+    document.getElementById('content-' + t).classList.add('hidden');
+    // ... and reset the tab button styling
+});
+```
+
+### Regression test
+
+`test_video_page_switchTab_hides_all_five_panels` in
+`tests/test_ui_features.py` reads the `switchTab` function body
+from the rendered video.html and asserts the forEach loop
+iterates over all five tabs. Verified to fail when the bug is
+present and pass when the fix is in place (so it's a real
+regression test, not a tautology).
+
+### UX impact
+
+After the fix, clicking any tab hides all the others. This
+matches the standard tab-bar behavior the user expected. The
+Discuss tab session is preserved (we don't re-create the
+session) — only its **panel visibility** changes.
