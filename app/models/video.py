@@ -100,6 +100,17 @@ class Video(Base):
     whisper_backend: Mapped[str | None] = mapped_column(String(32), default=None)
     whisper_resolved_model: Mapped[str | None] = mapped_column(String(64), default=None)
     whisper_fallback_reason: Mapped[str | None] = mapped_column(String(512), default=None)
+    # ── Primary language (MVP3.0 #2b, anti-drift) ──────────────────────────
+    # The detected (or user-locked) primary language for this video.
+    # Stored as a whisper language code (e.g. "zh", "en", "ja"). NULL
+    # means "not yet detected". When non-NULL, this language code is
+    # passed to whisper via `language=` so the model is LOCKED for the
+    # whole file (prevents the per-window drift that caused the
+    # 2026-07-13 "Thank you" hallucination on the 2.5h Mandarin file).
+    # Set automatically by the transcribe worker (auto-detect from the
+    # first 10 min) or manually by the user via the language dropdown
+    # on the video page (the Retry-transcribe flow).
+    language: Mapped[str | None] = mapped_column(String(8), default=None)
     # ── Background job state (MVP1 progress bar + ETA) ──────────────────────
     # 'transcribe' or 'generate' — the latest job of that type for this video.
     # Stored as a JSON string of the Job dict from app/jobs.py. Nullable

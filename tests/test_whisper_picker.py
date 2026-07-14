@@ -441,23 +441,132 @@ def test_transcribe_with_backend_smart_fast_pick_uses_distil(monkeypatch, tmp_pa
     assert result["_meta"]["backend"] == "faster-whisper"
 
 
-def test_transcribe_with_backend_mlx_path_raises_not_implemented(monkeypatch, tmp_path):
-    """The mlx-whisper path raises NotImplementedError with a clear message.
+def test_transcribe_with_backend_mlx_path_calls_mlx_whisper(monkeypatch, tmp_path):
+    """The mlx-whisper path actually calls mlx_whisper.transcribe with
+    the anti-drift kwargs (condition_on_previous_text=False,
+    compression_ratio_threshold=1.8).
 
-    We mock MLX as available (arm64 + mlx_whisper importable) so the
-    choice doesn't auto-fall back, then assert the dispatcher
-    raises the expected error.
+    Pre-Part-A.2 this test asserted that the mlx-whisper path raised
+    NotImplementedError (a placeholder for the follow-up commit).
+    Part A.2 actually wires up the mlx call, so this test now
+    verifies the new "mlx path dispatches correctly" behaviour.
+
+    We mock mlx_whisper.transcribe to return a fake result, then
+    assert:
+      1. transcribe_with_backend() does NOT raise
+      2. It calls mlx_whisper.transcribe with the model_id
+      3. The kwargs include the anti-drift params
     """
     import sys
     import types
-    monkeypatch.setitem(sys.modules, "mlx_whisper", types.ModuleType("mlx_whisper"))
+
+    # Mock mlx_whisper module + transcribe function
+    fake_mlx = types.ModuleType("mlx_whisper")
+
+    def fake_transcribe(path, **kwargs):
+        return {
+            "text": "fake transcription",
+            "language": "zh",
+            "segments": [
+                {"start": 0.0, "end": 1.0, "text": "fake"},
+            ],
+        }
+
+    fake_mlx.transcribe = fake_transcribe
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake_mlx)
+    monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
+
+    # Spy on fake_transcribe to capture the kwargs it was called with
+    called_kwargs = {}
+    def spy_transcribe(path, **kwargs):
+        called_kwargs.update(kwargs)
+        return fake_transcribe(path, **kwargs)
+    fake_mlx.transcribe = spy_transcribe
+
+    from app.services.transcription import transcribe_with_backend
+    tmp_file = tmp_path / "fake.mp4"
+    tmp_file.write_text("x")
+    result = transcribe_with_backend(str(tmp_file), "local-best-and-extremely-fast")
+
+    # 1. Should NOT raise — and should return a result
+    assert "segments" in result
+    assert "language" in result
+    # 2. Should have called mlx_whisper.transcribe with model_id
+    assert called_kwargs.get("path_or_hf_repo") == "distil-large-v3"  # the pre-Part-A default for this choice
+    # 3. Should include the anti-drift params
+    assert called_kwargs.get("condition_on_previous_text") is False
+    assert called_kwargs.get("compression_ratio_threshold") == 1.8
+
+
+def test_transcribe_with_backend_mlx_path_passes_language(monkeypatch, tmp_path):
+    """The mlx-whisper path passes the locked language to mlx_whisper.
+
+    Part A #2b: when the user (or auto-detection) locks a language,
+    transcribe_with_backend should pass `language=` and the matching
+    `initial_prompt` to mlx_whisper.transcribe so the model is
+    locked for the whole file.
+    """
+    import sys
+    import types
+
+    fake_mlx = types.ModuleType("mlx_whisper")
+    called_kwargs = {}
+    def spy(path, **kwargs):
+        called_kwargs.update(kwargs)
+        return {
+            "text": "",
+            "language": "zh",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "x"}],
+        }
+    fake_mlx.transcribe = spy
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake_mlx)
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
 
     from app.services.transcription import transcribe_with_backend
-    with pytest.raises(NotImplementedError, match="mlx-whisper"):
-        tmp_file = tmp_path / "fake.mp4"
-        tmp_file.write_text("x")
-        transcribe_with_backend(str(tmp_file), "local-best-and-extremely-fast")
+    tmp_file = tmp_path / "fake.mp4"
+    tmp_file.write_text("x")
+    transcribe_with_backend(
+        str(tmp_file),
+        "local-best-and-extremely-fast",
+        language="zh",
+    )
+
+    # Should have passed the locked language + initial_prompt
+    assert called_kwargs.get("language") == "zh"
+    assert called_kwargs.get("initial_prompt") == "以下是普通话的对话。"
+
+
+def test_transcribe_with_backend_mlx_path_no_language_when_auto(monkeypatch, tmp_path):
+    """The mlx-whisper path does NOT pass language/initial_prompt
+    when the caller passes language=None (auto-detect / let whisper decide)."""
+    import sys
+    import types
+
+    fake_mlx = types.ModuleType("mlx_whisper")
+    called_kwargs = {}
+    def spy(path, **kwargs):
+        called_kwargs.update(kwargs)
+        return {
+            "text": "",
+            "language": "zh",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "x"}],
+        }
+    fake_mlx.transcribe = spy
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake_mlx)
+    monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
+
+    from app.services.transcription import transcribe_with_backend
+    tmp_file = tmp_path / "fake.mp4"
+    tmp_file.write_text("x")
+    transcribe_with_backend(
+        str(tmp_file),
+        "local-best-and-extremely-fast",
+        language=None,  # explicit auto
+    )
+
+    # Should NOT have language or initial_prompt in kwargs
+    assert "language" not in called_kwargs
+    assert "initial_prompt" not in called_kwargs
 
 
 def test_transcribe_with_backend_mlx_path_falls_back_to_faster(monkeypatch, tmp_path):
@@ -718,11 +827,19 @@ def test_video_page_optgroup_smart_contains_two_picks(client: TestClient):
 
 
 def test_video_page_no_option_is_pre_selected(client: TestClient):
-    """No <option> has the 'selected' attribute.
+    """The model dropdown has no hard-coded 'selected' attribute.
 
-    The default selection is set by JS on page load (which fetches
-    /api/videos/models). The HTML should have no hard-coded
-    'selected' on any <option> so the JS is the single source of truth.
+    The default selection for the MODEL dropdown is set by JS on
+    page load (which fetches /api/videos/models). The HTML should
+    have no hard-coded 'selected' on any model <option> so the JS
+    is the single source of truth.
+
+    The LANGUAGE dropdown (added in MVP3.0 #2b) is allowed to
+    have a server-side default based on `video.language` (so a
+    new upload shows "Auto-detect" by default, and a re-loaded
+    page shows the previously-detected language). We narrow the
+    regex to only the #whisper-model <select> to avoid catching
+    the legitimate language preselection.
 
     We grep for `<option ... selected` specifically to avoid false
     positives (Tailwind classes like `selected:bg-...` and Starlette
@@ -735,12 +852,22 @@ def test_video_page_no_option_is_pre_selected(client: TestClient):
     with _mock_auth():
         resp = client.get(f"/video/{video_id}", headers=_auth_headers())
     text = resp.text
-    # Look for the specific pattern: <option ... selected ...>
+    # Extract just the model dropdown's <option> tags. The
+    # #whisper-model select is followed by a #whisper-language
+    # select, so we slice from the start of #whisper-model through
+    # its closing </select>.
     import re
-    matches = re.findall(r"<option[^>]*\bselected\b", text)
+    m = re.search(
+        r'<select[^>]*id="whisper-model".*?</select>',
+        text,
+        re.DOTALL,
+    )
+    assert m, "could not find #whisper-model <select> in the page"
+    model_select = m.group(0)
+    matches = re.findall(r"<option[^>]*\bselected\b", model_select)
     assert not matches, (
-        f"No <option> should be hard-coded 'selected' — JS sets the "
-        f"default. Found: {matches}"
+        f"No model <option> should be hard-coded 'selected' — "
+        f"JS sets the default. Found: {matches}"
     )
 
 

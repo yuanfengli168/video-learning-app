@@ -28,7 +28,10 @@ from app.services.transcription import (
     AVAILABLE_MODELS,
     SMART_PICKS,
     ALL_MODEL_CHOICES,
+    LANGUAGE_CHOICES,
+    LANGUAGE_LOCKED_CODES,
     MODEL_REGISTRY,
+    detect_audio_language,
     get_default_model_choice,
     resolve_model_choice,
     transcript_to_json,
@@ -87,6 +90,10 @@ async def list_whisper_models() -> dict[str, Any]:
         "choices": choices,
         "default": get_default_model_choice(),
         "models": AVAILABLE_MODELS,  # backwards-compat
+        # MVP3.0 #2b — language dropdown options (3 for now per
+        # user's Q4 answer: auto, en, zh).
+        "languages": LANGUAGE_CHOICES,
+        "default_language": "auto",
     }
 
 
@@ -163,6 +170,13 @@ async def upload_video(
         file_size=file_size,
         section_id=section_id,
         status="queued",
+        # MVP3.0 #2: stamp the user's choice (or the default) at
+        # upload time so the column is never NULL. The schema
+        # declares whisper_model as NOT NULL for legacy reasons
+        # (old code path had `default="base"` on the column).
+        # Once the legacy rows are migrated to NULL, this can
+        # be dropped — but setting it here is safe in both cases.
+        whisper_model=get_default_model_choice(),
     )
     # Start the transcribe job tracker so the UI can poll /status
     # immediately after the upload completes, before the background
@@ -281,6 +295,9 @@ async def upload_bulk_videos(
             file_size=file_size,
             section_id=section_id,
             status="queued",
+            # See the single-upload endpoint above for why we
+            # always set this (legacy NOT NULL column).
+            whisper_model=get_default_model_choice(),
         )
         transcribe_job = start_job(
             video_id,
@@ -314,6 +331,7 @@ async def transcribe(
     video_id: str,
     background_tasks: BackgroundTasks,
     model_name: str = "base",
+    language: str = "auto",
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -351,6 +369,19 @@ async def transcribe(
             ),
         )
 
+    # MVP3.0 #2b: validate the language arg. "auto" means
+    # "let the worker auto-detect from the first 10 min".
+    # Anything in LANGUAGE_LOCKED_CODES is a user override.
+    # Anything else is a 400 (typo guard).
+    if language != "auto" and language not in LANGUAGE_LOCKED_CODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown language '{language}'. "
+                f"Available: ['auto', {sorted(LANGUAGE_LOCKED_CODES)}]"
+            ),
+        )
+
     # Resolve the choice to (backend, model_id) NOW so the worker
     # doesn't have to. If the user picked an MLX choice on a Mac
     # that can't run MLX, resolve_model_choice() will fall back to
@@ -372,6 +403,11 @@ async def transcribe(
     video.whisper_fallback_reason = (
         fallback_reason if fallback_occurred else None
     )
+    # MVP3.0 #2b: stamp the language override (or leave NULL for
+    # "auto" so the worker runs detect_audio_language). The
+    # worker reads this column at the start of the job.
+    if language != "auto":
+        video.language = language
     job = start_job(
         video_id,
         "transcribe",
@@ -432,6 +468,50 @@ def _run_transcribe_job(video_id: str, model_choice: str) -> None:
         )
         db.commit()
 
+        # MVP3.0 #2b (jul 13 2026): anti-drift language lock.
+        # If the user didn't pick a language in the UI, the
+        # request handler left video.language as NULL — so we
+        # auto-detect from the first 10 min here (cheap, ~6-12s
+        # on M1 Max mlx-whisper), stamp the result on the video
+        # row, and pass it to transcribe_with_backend(). If
+        # detection fails (no speechy windows, ffmpeg error, …)
+        # we fall back to "unknown" which means "let whisper do
+        # its own per-window detection" (the legacy behaviour,
+        # with all its drift risks — but at least the job still
+        # completes).
+        if video.language:
+            locked_language = video.language
+            detection_info = None
+        else:
+            set_progress(
+                job, done=8, total=100,
+                message="Detecting primary language (first 10 min)...",
+            )
+            db.commit()
+            detection_info = detect_audio_language(str(video.file_path))
+            # Stamp on the video row so the UI can show
+            # "Detected: 中文 (auto, 92% confidence)" on the
+            # video page. If detection returned "unknown", we
+            # leave the column NULL so the UI knows it was a
+            # fallback.
+            if detection_info.get("language") and detection_info["language"] != "unknown":
+                video.language = detection_info["language"]
+                db.commit()
+            locked_language = (
+                detection_info.get("language")
+                if detection_info.get("language") != "unknown"
+                else None
+            )
+        set_progress(
+            job, done=10, total=100,
+            message=(
+                f"Transcribing with '{model_choice}'"
+                + (f" (language: {locked_language})" if locked_language else "")
+                + "..."
+            ),
+        )
+        db.commit()
+
         # MVP3.0 #2: dispatch through the new backend-aware entry
         # point. It handles MLX detection, fallback, and
         # backend-specific progress reporting (when the mlx-whisper
@@ -444,6 +524,7 @@ def _run_transcribe_job(video_id: str, model_choice: str) -> None:
             on_progress=lambda done, total, msg: set_progress(
                 job, done=done, total=total, message=msg
             ),
+            language=locked_language,
         )
         meta = result.pop("_meta", {})
         segments_buffered = result["segments"]
@@ -743,6 +824,7 @@ async def get_video(
         "status": video.status,
         "duration": video.duration,
         "whisper_model": video.whisper_model,
+        "language": video.language,
         "has_transcript": transcript_asset is not None,
     }
 

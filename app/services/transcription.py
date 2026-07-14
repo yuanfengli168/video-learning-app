@@ -110,6 +110,73 @@ SMART_PICKS: list[str] = [
 ]
 ALL_MODEL_CHOICES: list[str] = list(MODEL_REGISTRY.keys())
 
+# ── Language policy (MVP3.0 #2b, anti-drift) ───────────────────────────────
+# On 2026-07-13 the user uploaded a 1.7 GB / 2.5h Mandarin lecture and
+# the MLX whisper-large-v3-turbo produced 296 identical "Thank you."
+# segments. Root cause: whisper's per-window language auto-detection
+# drifted to English (the first 30s contained the title/intro), and
+# `condition_on_previous_text=True` (the default) chained the drift
+# across all subsequent windows. Two fixes:
+#   1. LOCK the language for the whole file via `language=`. Detect
+#      ONCE on the first 10 min of audio, then pass the result to
+#      whisper. Allows the user to override via the language dropdown.
+#   2. Set `condition_on_previous_text=False` + a lower
+#      `compression_ratio_threshold=1.8` (from default 2.4) to catch
+#      repetitive-text hallucination early. These two apply to every
+#      MLX transcribe regardless of language.
+#
+# INITIAL_PROMPTS gives whisper a short example sentence in the
+# target language so the decoder doesn't drift back to English when
+# the audio is mostly music/silence. Only used for MLX (faster-
+# whisper keeps the original behaviour for now).
+INITIAL_PROMPTS: dict[str, str] = {
+    "en": "The following is a conversation in English.",
+    "zh": "以下是普通话的对话。",
+    "ja": "以下は日本語の会話です。",
+    "ko": "다음은 한국어 대화입니다.",
+    "fr": "La conversation suivante est en français.",
+    "de": "Das folgende Gespräch ist auf Deutsch.",
+    "es": "La siguiente conversación es en español.",
+    # Fallback when language is unknown — bias toward English since
+    # that's the most common target. Whisper's own language detection
+    # will still produce the right script for the actual audio.
+    "unknown": "The following is a conversation.",
+}
+
+
+def get_initial_prompt(language: str | None) -> str | None:
+    """Return the initial_prompt to bias the decoder for `language`.
+
+    Returns None if the language is None/empty/unsupported AND we
+    have no fallback (which lets whisper use its own default).
+    Returns the matched prompt from INITIAL_PROMPTS, or the
+    "unknown" fallback if the language isn't in the table.
+    """
+    if not language:
+        return None
+    if language in INITIAL_PROMPTS:
+        return INITIAL_PROMPTS[language]
+    # Unknown language code — use the generic English fallback
+    # so the decoder has SOME bias. Better than no prompt at all.
+    return INITIAL_PROMPTS["unknown"]
+
+
+# Languages exposed in the UI dropdown. The first entry is "auto" —
+# sentinel that means "let the backend detect from the first 10 min".
+# The next 3 are the user's locked choices (Q4 in the design doc).
+LANGUAGE_CHOICES: list[dict[str, str]] = [
+    {"key": "auto", "label": "Auto-detect (default)"},
+    {"key": "en", "label": "English"},
+    {"key": "zh", "label": "中文 (简体)"},
+]
+
+# Quick lookup. Whitelist of "user-locked" language codes (everything
+# except "auto" which is the sentinel for backend auto-detection).
+LANGUAGE_LOCKED_CODES: frozenset[str] = frozenset(
+    c["key"] for c in LANGUAGE_CHOICES if c["key"] != "auto"
+)
+
+
 # Default model recommendation. The actual value is computed at call
 # time via get_default_model_choice() so the answer adapts if the
 # user `pip install mlx-whisper` later. We don't compute a module-
@@ -137,6 +204,262 @@ def is_mlx_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _extract_audio_clip(
+    video_path: Path,
+    start_seconds: float,
+    duration_seconds: float,
+) -> Path:
+    """Extract a short audio clip from a video file to a temp WAV.
+
+    Used by detect_audio_language() to grab the first N 30s windows
+    of a video for language detection without paying the cost of
+    decoding the whole thing.
+
+    Writes to a NamedTemporaryFile so multiple concurrent calls
+    (e.g. parallel uploads) don't collide. The file is closed
+    after writing (Windows needs this); the caller is responsible
+    for unlinking.
+
+    Args:
+        video_path: Source video (or audio) file.
+        start_seconds: Where to start in the source.
+        duration_seconds: Length to extract.
+
+    Returns:
+        Path to the temporary WAV file.
+    """
+    import subprocess
+    import tempfile
+
+    # delete=False so we can close the handle and still have a
+    # path to pass to mlx_whisper (which opens by path on some
+    # platforms). Caller cleans up.
+    fd, name = tempfile.mkstemp(suffix=".wav", prefix="lang-detect-")
+    import os as _os
+    _os.close(fd)
+    tmp = Path(name)
+    try:
+        # -ss BEFORE -i for fast keyframe seek (no decode of the
+        # leading audio). -t limits duration. -ar 16000 + -ac 1
+        # matches what mlx-whisper expects internally, so the
+        # detection results match what a real transcribe would
+        # hear. -loglevel error to keep stdout clean.
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-ss", f"{start_seconds:.2f}",
+                "-i", str(video_path),
+                "-t", f"{duration_seconds:.2f}",
+                "-ar", "16000", "-ac", "1",
+                "-f", "wav",
+                "-loglevel", "error",
+                str(tmp),
+            ],
+            check=True,
+            timeout=30,
+        )
+    except Exception:
+        # If ffmpeg fails (corrupted file, no audio stream, etc.),
+        # unlink the empty file and re-raise so the caller can
+        # decide what to do (probably: fall back to "no detection").
+        if tmp.exists():
+            tmp.unlink()
+        raise
+    return tmp
+
+
+def detect_audio_language(
+    video_path: str | Path,
+    *,
+    sample_windows: int | None = None,
+    speech_threshold: float | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Auto-detect the primary language of a video.
+
+    Samples the first N windows of 30s (default 20 = 10 min) and
+    picks the language with the highest total probability across
+    windows that have actual speech (no_speech_prob < threshold).
+    Designed to handle the common case of an English song intro
+    followed by Chinese lecture — the song window is filtered as
+    "no speech" and the Chinese window wins the tally.
+
+    MVP3.0 #2b (jul 13 2026). Replaces the "first 30s only" detection
+    that caused the 2.5h Mandarin file to be wrongly tagged as
+    English (the first 30s contained the title/intro, drift
+    chain then took over for the remaining 2.5h).
+
+    Args:
+        video_path: Path to the source video (or audio) file.
+        sample_windows: How many 30s windows to sample (default:
+            from `settings.language_detect_sample_windows`).
+        speech_threshold: no_speech_prob above this counts as
+            "not speech" and is skipped (default: from
+            `settings.language_detect_speech_threshold`).
+        model_id: Which whisper model to use for detection (default:
+            `mlx-community/whisper-large-v3-turbo` if MLX is
+            available, else `base` via faster-whisper).
+
+    Returns:
+        Dict with:
+          - "language": ISO 639-1 code (e.g. "zh", "en", "ja"),
+            or "unknown" if no speechy windows were found.
+          - "confidence": 0.0-1.0, the total probability sum of
+            the winning language / total probability sum of all
+            speechy windows. Lower = less certain.
+          - "windows_sampled": total windows tried.
+          - "windows_speechy": windows that passed the
+            no_speech_prob filter.
+          - "model_id": which model was actually used.
+          - "error": set to a string if detection failed (e.g. ffmpeg
+            not available). `language` will be "unknown" in that case.
+
+    Cost: ~6-12s for 20 windows of 30s each on M1 Max mlx-whisper
+    (very cheap relative to a full 2.5h transcribe). Failure to
+    detect does NOT raise — returns "unknown" so the caller can
+    fall back to whisper's own per-window detection (the old
+    behaviour, with all its drift risks).
+    """
+    import os
+
+    # Lazy defaults from config (avoids import cycle)
+    from app.config import settings
+
+    if sample_windows is None:
+        sample_windows = settings.language_detect_sample_windows
+    if speech_threshold is None:
+        speech_threshold = settings.language_detect_speech_threshold
+
+    video_path = Path(video_path)
+    if not video_path.exists():
+        return {
+            "language": "unknown",
+            "confidence": 0.0,
+            "windows_sampled": 0,
+            "windows_speechy": 0,
+            "model_id": model_id or "(unavailable)",
+            "error": f"file not found: {video_path}",
+        }
+
+    # Pick the detection model. Use the same one the user would
+    # transcribe with, so the detection and the real run are
+    # consistent. MLX turbo is the default smart pick.
+    if model_id is None:
+        if is_mlx_available():
+            model_id = "mlx-community/whisper-large-v3-turbo"
+            backend = "mlx-whisper"
+        else:
+            model_id = "base"
+            backend = "faster-whisper"
+    else:
+        backend = "mlx-whisper" if model_id.startswith("mlx-") else "faster-whisper"
+
+    # Tally: language -> total probability
+    tallies: dict[str, float] = {}
+    windows_sampled = 0
+    windows_speechy = 0
+    last_error: str | None = None
+    tmp_files: list[Path] = []
+
+    try:
+        for i in range(sample_windows):
+            start = i * 30.0
+            try:
+                clip = _extract_audio_clip(video_path, start, 30.0)
+            except Exception as e:
+                # ffmpeg failed (e.g. past the end of the file).
+                # Stop trying — the file is shorter than we thought.
+                last_error = f"ffmpeg: {e}"
+                break
+            tmp_files.append(clip)
+            windows_sampled += 1
+
+            try:
+                if backend == "mlx-whisper":
+                    import mlx_whisper
+                    r = mlx_whisper.transcribe(
+                        str(clip),
+                        path_or_hf_repo=model_id,
+                        # Use temperature=0 + a single greedy decode so
+                        # each window is fast (~50-100ms). We only
+                        # care about the language token, not the
+                        # transcript.
+                        temperature=0.0,
+                    )
+                    lang = r.get("language", "unknown")
+                    # mlx-whisper doesn't return per-segment probs,
+                    # so we use 1.0 / total_speechy_windows as the
+                    # tally weight (each speechy window votes 1.0
+                    # for its detected language). The user can still
+                    # override manually if detection is wrong.
+                    prob = 1.0
+                    no_speech_prob = 0.0  # mlx doesn't return this
+                else:
+                    m = get_model(model_id)
+                    segs_iter, info = m.transcribe(
+                        str(clip),
+                        beam_size=1,  # fastest path
+                        temperature=0.0,
+                        # Don't condition on previous text during
+                        # detection — each window is independent.
+                        condition_on_previous_text=False,
+                    )
+                    # faster-whisper is a generator — drain it to
+                    # trigger the per-segment no_speech_prob decode.
+                    segs = list(segs_iter)
+                    lang = info.language
+                    prob = float(info.language_probability)
+                    # Average the per-segment no_speech_prob across
+                    # the window. If the window is mostly silence,
+                    # the average is high and we skip it.
+                    if segs:
+                        no_speech_prob = sum(
+                            getattr(s, "no_speech_prob", 0.0)
+                            for s in segs
+                        ) / len(segs)
+                    else:
+                        no_speech_prob = 1.0
+            except Exception as e:
+                last_error = f"whisper on window {i}: {e}"
+                continue
+
+            if no_speech_prob >= speech_threshold:
+                # Mostly silence/music/noise — skip, don't vote.
+                continue
+
+            windows_speechy += 1
+            tallies[lang] = tallies.get(lang, 0.0) + prob
+
+        if not tallies:
+            return {
+                "language": "unknown",
+                "confidence": 0.0,
+                "windows_sampled": windows_sampled,
+                "windows_speechy": 0,
+                "model_id": model_id,
+                "error": last_error or "no speechy windows found",
+            }
+
+        winner = max(tallies.items(), key=lambda kv: kv[1])
+        total = sum(tallies.values())
+        confidence = winner[1] / total if total > 0 else 0.0
+        return {
+            "language": winner[0],
+            "confidence": round(confidence, 3),
+            "windows_sampled": windows_sampled,
+            "windows_speechy": windows_speechy,
+            "model_id": model_id,
+        }
+    finally:
+        # Best-effort cleanup of the temp WAVs. On error we
+        # still want to clean up.
+        for f in tmp_files:
+            try:
+                f.unlink()
+            except OSError:
+                pass
 
 
 def get_model_entry(choice: str) -> dict[str, Any]:
@@ -271,17 +594,24 @@ def get_model(model_name: str = "base"):
 def transcribe_video(
     video_path: str | Path,
     model_name: str = "base",
+    *,
+    language: str | None = None,
 ) -> dict[str, Any]:
     """Transcribe a video file and return timestamped segments.
 
     Args:
         video_path: Path to the video file.
         model_name: Whisper model to use (base, small, medium, etc.).
+        language: Optional ISO 639-1 code to LOCK whisper's
+            language for the whole file (MVP3.0 #2b, jul 13
+            2026 — see detect_audio_language for the anti-drift
+            rationale). If None, faster-whisper auto-detects per
+            window (legacy behaviour).
 
     Returns:
         Dict with:
             - segments: list of {start, end, text}
-            - language: detected language
+            - language: detected (or locked) language
             - duration: total duration in seconds
     """
     video_path = Path(video_path)
@@ -290,7 +620,19 @@ def transcribe_video(
 
     model = get_model(model_name)
 
-    segments_iter, info = model.transcribe(str(video_path), beam_size=5)
+    # Anti-drift params for faster-whisper too (same idea as
+    # the MLX branch — kill the per-window drift chain on long
+    # audio). These are no-ops for short audio.
+    transcribe_kwargs: dict[str, Any] = {
+        "beam_size": 5,
+        "condition_on_previous_text": False,
+        "compression_ratio_threshold": 1.8,
+    }
+    if language:
+        transcribe_kwargs["language"] = language
+        transcribe_kwargs["initial_prompt"] = get_initial_prompt(language)
+
+    segments_iter, info = model.transcribe(str(video_path), **transcribe_kwargs)
 
     segments = []
     for seg in segments_iter:
@@ -302,7 +644,7 @@ def transcribe_video(
 
     return {
         "segments": segments,
-        "language": info.language,
+        "language": language or info.language,
         "duration": round(info.duration, 2),
     }
 
@@ -312,6 +654,7 @@ def transcribe_with_backend(
     choice: str,
     *,
     on_progress: Any = None,
+    language: str | None = None,
 ) -> dict[str, Any]:
     """Transcribe a video using the user-facing model choice.
 
@@ -336,11 +679,20 @@ def transcribe_with_backend(
         on_progress: Optional callable(done, total, message) for
             progress reporting. Currently only used by mlx-whisper
             (faster-whisper streams segments, not progress %).
+        language: Optional ISO 639-1 code (e.g. "zh", "en") to LOCK
+            whisper's language for the whole file. If None or
+            "unknown", whisper auto-detects per window (old
+            behaviour — susceptible to drift on long audio). If
+            set, this is the primary anti-drift fix (MVP3.0 #2b,
+            jul 13 2026 — see doc/BlockersOrChallengers.md §2.4
+            for the rationale). The caller is expected to have
+            already run detect_audio_language() or otherwise
+            decided on a language; we don't re-validate here.
 
     Returns:
         Dict with `segments`, `language`, `duration`, plus
         `_meta: {backend, model_id, choice, fallback_occurred,
-        fallback_reason}`.
+        fallback_reason, language_locked}`.
     """
     video_path = Path(video_path)
     if not video_path.exists():
@@ -350,24 +702,99 @@ def transcribe_with_backend(
     backend = resolved["backend"]
     model_id = resolved["model_id"]
 
+    # Normalise the language arg. None / "auto" / "unknown" all
+    # mean "let whisper do its own per-window detection" (the
+    # legacy behaviour). A concrete code (zh, en, ja, ...) means
+    # LOCK it for the whole file.
+    locked_language: str | None = None
+    if language and language not in ("auto", "unknown"):
+        locked_language = language
+
     if backend == "faster-whisper":
         # Reuse the existing transcribe_video() — it already
         # handles the faster-whisper model loading, caching, and
-        # segment streaming. We just call it with model_id.
-        result = transcribe_video(video_path, model_id)
+        # segment streaming. We just call it with model_id and
+        # pass the language lock through.
+        result = transcribe_video(video_path, model_id, language=locked_language)
     elif backend == "mlx-whisper":
-        # MLX Whisper is a follow-up commit (Part B). For now,
-        # raise a clear error so a user who picks this on a Mac
-        # without mlx-whisper installed gets a useful message
-        # instead of a generic 500. The resolve_model_choice()
-        # fallback above should usually prevent reaching this
-        # line, but it's a defense-in-depth check.
-        raise NotImplementedError(
-            "mlx-whisper backend is not yet wired up. This is a "
-            "follow-up to the MVP3.0 #2 implementation. To enable "
-            "it now, run: pip install mlx-whisper  (Apple Silicon "
-            "only)."
+        # MLX Whisper — Apple Silicon only. Uses the user's choice
+        # of `model_id` (e.g. `mlx-community/whisper-large-v3-turbo`
+        # or `distil-large-v3`) by passing it as `path_or_hf_repo`
+        # to mlx_whisper.transcribe(). The library auto-downloads
+        # and caches the model weights on first use.
+        #
+        # MVP3.0 #2b (jul 13 2026): the long-audio drift fix. The
+        # 1.7 GB / 2.5h Mandarin file (jul 13 2026) produced 296
+        # identical "Thank you." segments because whisper's per-
+        # window language detection drifted to English, and
+        # `condition_on_previous_text=True` chained the drift across
+        # all subsequent windows. Three changes here:
+        #   1. Pass `language=locked_language` so the model is
+        #      LOCKED to the user/auto-detected language for the
+        #      whole file (no per-window re-detection).
+        #   2. Set `condition_on_previous_text=False` — each 30s
+        #      window is decoded independently, so a single bad
+        #      window can't poison the rest of the file.
+        #   3. Tighten `compression_ratio_threshold` from 2.4 to
+        #      1.8 — catches repetitive-text hallucination
+        #      ("Thank you. You're going to do you.") early by
+        #      falling back to higher temperature.
+        #   4. Set `initial_prompt` from INITIAL_PROMPTS to bias
+        #      the decoder toward the target language (e.g.
+        #      "以下是普通话的对话。" for zh).
+        #
+        # The mlx-whisper API (v0.4+) returns a SINGLE DICT with
+        # keys "text", "segments", "language" (verified against
+        # mlx-whisper 0.4.3 — older versions returned a tuple,
+        # but the current stable API is the dict). Note: the dict
+        # does NOT include "duration" — we compute it from the
+        # last segment's end time so the output shape matches
+        # faster-whisper (which does include duration).
+        #
+        # Segment timestamps in mlx-whisper are in **seconds**
+        # (verified against the lib's docs: "timestamps are in
+        # seconds"), so no HH.MM conversion is needed. We just
+        # strip whitespace and round to 2 decimals (matches
+        # faster-whisper output).
+        import mlx_whisper  # local import — only required when used
+        kwargs: dict[str, Any] = {
+            "path_or_hf_repo": model_id,
+            # Anti-drift params (always on for MLX — even with
+            # a locked language, these prevent a different class
+            # of "the model is fine but it loops" bug).
+            "condition_on_previous_text": False,
+            "compression_ratio_threshold": 1.8,
+        }
+        if locked_language:
+            kwargs["language"] = locked_language
+            kwargs["initial_prompt"] = get_initial_prompt(locked_language)
+        result_dict = mlx_whisper.transcribe(
+            str(video_path),
+            **kwargs,
         )
+        segments: list[dict[str, Any]] = []
+        for seg in result_dict.get("segments", []):
+            segments.append({
+                "start": round(float(seg.get("start", 0.0)), 2),
+                "end": round(float(seg.get("end", 0.0)), 2),
+                "text": str(seg.get("text", "")).strip(),
+            })
+        # mlx-whisper 0.4+ doesn't return duration in the dict
+        # (unlike faster-whisper's info.duration). Compute it from
+        # the last segment's end time. Fall back to 0 if there
+        # are no segments.
+        duration = round(
+            float(segments[-1]["end"]) if segments else 0.0, 2
+        )
+        # If we locked the language, trust the lock and use it as
+        # the canonical language in the result (rather than
+        # whatever whisper's per-window detection came up with,
+        # which is the whole point of locking).
+        result = {
+            "segments": segments,
+            "language": locked_language or result_dict.get("language", "unknown"),
+            "duration": duration,
+        }
     else:
         raise ValueError(f"Unknown backend: {backend!r}")
 
@@ -381,6 +808,7 @@ def transcribe_with_backend(
         "model_id": model_id,
         "fallback_occurred": resolved["fallback_occurred"],
         "fallback_reason": resolved["fallback_reason"],
+        "language_locked": locked_language,
     }
     return result
 

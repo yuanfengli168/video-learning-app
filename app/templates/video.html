@@ -64,6 +64,20 @@
                             <option value="local-best-and-extremely-fast">⚡ Local best and extremely fast (MLX, M-series only)</option>
                         </optgroup>
                     </select>
+                    <!-- Language selector (MVP3.0 #2b, anti-drift).
+                         Default = "auto" — the worker auto-detects from
+                         the first 10 min. User can lock to en/zh for
+                         known-content videos. The pre-selected value
+                         comes from `video.language` (set by the worker
+                         after auto-detection) or "auto" if NULL. -->
+                    <select id="whisper-language" title="Primary language (locks whisper for the whole file — prevents the long-audio drift that caused the 1.7GB Mandarin file to hallucinate 'Thank you' for 2.5h)" class="px-2 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                        <option value="auto" {% if not video.language %}selected{% endif %}>Auto-detect</option>
+                        <option value="en" {% if video.language == "en" %}selected{% endif %}>English</option>
+                        <option value="zh" {% if video.language == "zh" %}selected{% endif %}>中文 (简体)</option>
+                    </select>
+                    <span id="language-detected-label" class="hidden text-xs text-gray-500 dark:text-gray-400" title="Language auto-detected from the first 10 min of audio. Change the dropdown to override and click Transcribe to re-run.">
+                        Detected: <span id="language-detected-code"></span>
+                    </span>
                     <button onclick="transcribeVideo()" id="transcribe-btn" class="px-3 py-1 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
                         🎙️ Transcribe
                     </button>
@@ -160,6 +174,11 @@
 <script>
 const videoId = '{{ video.id }}';
 let transcriptData = null;
+// MVP3.0 #2b — set to true once a transcript has been loaded
+// for this video. Used by transcribeVideo() to decide whether
+// to show a confirmation modal before clobbering the existing
+// transcript with a re-run.
+let transcriptAlreadyLoaded = false;
 // SSR pre-population: when the server-rendered HTML already contains a
 // summary, treat the cache as filled so the first loadSummary() call
 // is a no-op. Otherwise the JS path below would race with SSR and could
@@ -226,8 +245,30 @@ async function loadTranscript() {
         // transcript is somehow gone again (e.g. concurrent delete).
         const wrap = document.getElementById('download-transcript-wrap');
         if (wrap) wrap.classList.remove('hidden');
+        // MVP3.0 #2b: if a transcript loaded and the page has a
+        // language set (e.g. the user re-loaded after a previous
+        // run), show the "Detected: zh" hint. Set the flag so
+        // re-transcribe can show a confirmation modal.
+        transcriptAlreadyLoaded = true;
+        if (transcriptData.language) {
+            showDetectedLanguage(transcriptData.language);
+        }
     } catch (e) {
         document.getElementById('transcript-container').innerHTML = '<p class="text-gray-400 py-4 text-center">Failed to load transcript.</p>';
+    }
+}
+
+// MVP3.0 #2b — show the "Detected: 中文" hint next to the
+// language dropdown. Hidden by default; shown when we know
+// the language (after auto-detection on a previous transcribe).
+function showDetectedLanguage(code) {
+    const labelMap = { 'zh': '中文', 'en': 'English', 'ja': '日本語', 'ko': '한국어' };
+    const label = labelMap[code] || code;
+    const el = document.getElementById('language-detected-code');
+    const wrap = document.getElementById('language-detected-label');
+    if (el && wrap) {
+        el.textContent = label;
+        wrap.classList.remove('hidden');
     }
 }
 
@@ -399,17 +440,33 @@ function clearSearch() {
 //   3. When the job completes, the page reloads to show the transcript
 async function transcribeVideo() {
     const modelName = document.getElementById('whisper-model').value;
+    const language = document.getElementById('whisper-language').value;
     const btn = document.getElementById('transcribe-btn');
     const container = document.getElementById('transcript-container');
+
+    // MVP3.0 #2b: if the user is about to re-transcribe and
+    // there is already a transcript, confirm before clobbering
+    // it (protects against accidental clicks). Skips when
+    // there's no existing transcript (first run is harmless).
+    if (transcriptAlreadyLoaded && language !== 'auto') {
+        const ok = confirm(
+            'Re-transcribing will REPLACE the existing transcript.\n\n' +
+            'Language: ' + (language === 'zh' ? '中文 (简体)' : 'English') + '\n' +
+            'Model: ' + modelName + '\n\n' +
+            'Continue?'
+        );
+        if (!ok) return;
+    }
 
     btn.disabled = true;
     btn.textContent = '⏳ Starting…';
     container.innerHTML = renderProgressBar('transcribe');
 
     try {
-        const resp = await fetch(`/api/videos/${videoId}/transcribe?model_name=${modelName}`, {
-            method: 'POST',
-        });
+        const resp = await fetch(
+            `/api/videos/${videoId}/transcribe?model_name=${encodeURIComponent(modelName)}&language=${encodeURIComponent(language)}`,
+            { method: 'POST' }
+        );
         if (resp.status === 202) {
             // Background job started. Poll for status.
             const data = await resp.json();
