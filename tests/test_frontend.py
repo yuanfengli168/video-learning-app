@@ -1003,6 +1003,77 @@ def test_video_view_delete_button_present(client: TestClient):
     assert "courseId" in response.text
 
 
+def test_video_view_discuss_tab_present(client: TestClient):
+    """The Discuss tab (whole-video chat, MVP2.0) must render on every video page.
+
+    Regression test for the bug where the Discuss tab + delete button
+    were accidentally removed by the smart-pick Part A (commit 2a96049)
+    on 2026-07-11, and stayed missing until 2026-07-14. We test the
+    full set of components that have to be there for the feature to
+    actually work in the browser:
+
+      1. The tab BUTTON (id="tab-discuss", calls switchTab('discuss'))
+      2. The tab CONTENT container (id="content-discuss", hidden by default)
+      3. The chat input + send button (id="discuss-input", id="discuss-send-btn")
+      4. The JS that starts a session (startDiscussSession) and sends
+         a message (sendDiscussMessage) — without these, clicking the
+         tab does nothing.
+      5. The 'discussSessionId' variable declared at script top-level
+         (so switchTab() can reference it without a TDZ error).
+      6. A "Chat History" link for the user to find their session later.
+    """
+    import io
+
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("x.mp4", io.BytesIO(b"fake"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+    assert response.status_code == 200
+    text = response.text
+
+    # 1. Tab button
+    assert "tab-discuss" in text, "Discuss tab button missing"
+    assert "💬 Discuss" in text, "Discuss tab label missing"
+    assert "switchTab('discuss')" in text, "Discuss tab click handler missing"
+
+    # 2. Tab content container (must be hidden by default — Tailwind
+    # `hidden` class) so it doesn't show on initial page load.
+    assert 'id="content-discuss"' in text, "Discuss tab content container missing"
+    assert 'id="content-discuss" class="hidden' in text, "Discuss content should be hidden by default"
+
+    # 3. Chat UI inside the Discuss tab
+    assert 'id="discuss-input"' in text, "Discuss input field missing"
+    assert 'id="discuss-send-btn"' in text, "Discuss send button missing"
+    assert 'id="discuss-messages"' in text, "Discuss messages container missing"
+
+    # 4. JS functions that wire up the chat
+    assert "function startDiscussSession" in text or "async function startDiscussSession" in text, \
+        "startDiscussSession() function missing"
+    assert "function sendDiscussMessage" in text or "async function sendDiscussMessage" in text, \
+        "sendDiscussMessage() function missing"
+
+    # 5. The discussSessionId variable (declared before switchTab references it)
+    assert "let discussSessionId" in text, "discussSessionId variable missing"
+
+    # 6. The "Chat History" link inside the Discuss tab (so users can
+    # find their session later).
+    assert 'href="/chat-history"' in text, "Chat History link missing"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Course and section delete UI (MVP2.0, manualTodo #5 extension)
 # ─────────────────────────────────────────────────────────────────────────────

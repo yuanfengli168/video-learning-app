@@ -11,6 +11,22 @@
 {% endblock %}
 
 {% block content %}
+<!-- Video page header — title + delete button
+     (MVP2.0, manualTodo #5). The delete button opens a
+     confirmation modal; on confirm it calls
+     DELETE /api/videos/{id} and redirects to the course page. -->
+<div class="flex items-start justify-between gap-3 mb-4">
+    <h1 class="text-2xl font-bold break-words min-w-0">{{ video.title }}</h1>
+    <button
+        onclick="showDeleteModal()"
+        id="delete-video-btn"
+        class="flex-shrink-0 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg"
+        title="Delete this video"
+    >
+        🗑️ Delete
+    </button>
+</div>
+
 <div class="flex flex-col lg:flex-row gap-4 lg:gap-6 min-w-0">
     <!-- Left: Video Player + Transcript -->
     <div class="lg:w-3/5 space-y-4 min-w-0">
@@ -122,6 +138,7 @@
                 <button onclick="switchTab('flashcards')" id="tab-flashcards" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Flashcards</button>
                 <button onclick="switchTab('quiz')" id="tab-quiz" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Quiz</button>
                 <button onclick="switchTab('mindmap')" id="tab-mindmap" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Mindmap</button>
+                <button onclick="switchTab('discuss')" id="tab-discuss" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">💬 Discuss</button>
             </div>
 
             <!-- Tab content -->
@@ -165,6 +182,40 @@
                         🔍 Expand to Full Screen
                     </button>
                 </div>
+
+                <!-- Discuss (MVP2.0) — chat about the whole video
+                     (transcript + summary + mindmap + quiz). Separate
+                     from the per-flashcard chat on the Flashcards tab.
+                     See app/routers/chat.py /api/chat/video-sessions
+                     and app/services/chat.py:build_video_system_prompt. -->
+                <div id="content-discuss" class="hidden flex flex-col" style="height: 500px;">
+                    <div id="discuss-messages" class="flex-1 overflow-y-auto space-y-3 mb-3 pr-1">
+                        <p class="text-sm text-gray-400 text-center py-4">
+                            Ask anything about this video. The AI can see the full transcript, summary, mindmap, and quiz.
+                        </p>
+                    </div>
+                    <div class="border-t border-gray-200 dark:border-gray-700 pt-3">
+                        <div class="flex gap-2">
+                            <input
+                                id="discuss-input"
+                                type="text"
+                                placeholder="Ask about the video…"
+                                class="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); sendDiscussMessage(); }"
+                            />
+                            <button
+                                id="discuss-send-btn"
+                                onclick="sendDiscussMessage()"
+                                class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium"
+                            >
+                                Send
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-2">
+                            Sessions are saved in <a href="/chat-history" class="text-indigo-500 hover:underline">Chat History</a> with a "Video" badge.
+                        </p>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -173,6 +224,17 @@
 <script src="/static/js/transcript-follow.js" defer></script>
 <script>
 const videoId = '{{ video.id }}';
+// courseId is exposed as a JS constant so confirmDelete() can redirect
+// to the right course page after deletion. See the comment on the
+// redirect inside confirmDelete() for the full rationale. course
+// may be None in rare cases (broken FK, shared deep link) so we
+// fall back to /dashboard in that case.
+const courseId = '{{ course.id if course else "" }}';
+// discussSessionId is set lazily by startDiscussSession() the first
+// time the user opens the Discuss tab. Before it's set, sendDiscussMessage()
+// will start a session on demand (so pressing Enter before the tab
+// is fully loaded still works).
+let discussSessionId = null;
 let transcriptData = null;
 // MVP3.0 #2b — set to true once a transcript has been loaded
 // for this video. Used by transcribeVideo() to decide whether
@@ -217,6 +279,7 @@ function switchTab(tab) {
     if (tab === 'flashcards' && !contentCache.flashcards) loadFlashcards();
     if (tab === 'quiz' && !contentCache.quiz) loadQuiz();
     if (tab === 'mindmap' && !contentCache.mindmap) loadMindmap();
+    if (tab === 'discuss' && !discussSessionId) startDiscussSession();
 }
 
 // ── Auth token helper ──
@@ -1576,6 +1639,222 @@ async function sendChatMessage() {
 
 // ── Init ──
 loadTranscript();
+
+// ── Discuss (whole-video chat, MVP2.0) ──
+// Lazily creates a chat session the first time the user opens the
+// Discuss tab. The session gets the full transcript + summary +
+// mindmap + quiz as the system prompt (see app/services/chat.py:
+// build_video_system_prompt), so the AI can answer questions about
+// the video as a whole — not just one flashcard at a time.
+
+async function startDiscussSession() {
+    if (discussSessionId) return;
+    const messagesDiv = document.getElementById('discuss-messages');
+    const sendBtn = document.getElementById('discuss-send-btn');
+    const input = document.getElementById('discuss-input');
+    try {
+        if (sendBtn) sendBtn.disabled = true;
+        if (input) input.disabled = true;
+        const token = await getAuthToken();
+        const resp = await fetch('/api/chat/video-sessions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+            body: JSON.stringify({video_id: videoId}),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to start discussion');
+        }
+        const data = await resp.json();
+        discussSessionId = data.session_id;
+        // Clear the placeholder, show a tiny intro
+        messagesDiv.innerHTML = `
+            <div class="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-lg p-3 text-sm text-indigo-700 dark:text-indigo-300">
+                💡 I can see the full transcript, summary, mindmap, and quiz. Ask me anything about this video.
+            </div>
+        `;
+        if (input) {
+            input.disabled = false;
+            input.placeholder = 'Try: "Why is the correct answer B?" or "Explain the third concept"';
+            input.focus();
+        }
+    } catch (e) {
+        messagesDiv.innerHTML = `<p class="text-red-500 text-sm py-4 text-center">❌ ${escapeHtml(e.message)}</p>`;
+    } finally {
+        if (sendBtn) sendBtn.disabled = false;
+    }
+}
+
+function appendDiscussMessage(role, content) {
+    const messagesDiv = document.getElementById('discuss-messages');
+    if (!messagesDiv) return;
+    const isUser = role === 'user';
+    // We don't trust the AI response to be safe HTML (Ollama could
+    // return anything). Escape it and only insert via textContent on
+    // a <div>. We lose rich formatting but gain safety.
+    const wrapper = document.createElement('div');
+    wrapper.className = isUser ? 'flex justify-end' : 'flex justify-start';
+    const bubble = document.createElement('div');
+    bubble.className = isUser
+        ? 'bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[80%] text-sm whitespace-pre-wrap break-words'
+        : 'bg-gray-100 dark:bg-gray-700 rounded-lg px-3 py-2 max-w-[80%] text-sm whitespace-pre-wrap break-words';
+    bubble.textContent = content;
+    wrapper.appendChild(bubble);
+    messagesDiv.appendChild(wrapper);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+function appendDiscussTyping() {
+    // Show a placeholder "..." bubble while waiting for the AI. Returns
+    // the bubble element so it can be removed when the response arrives.
+    const messagesDiv = document.getElementById('discuss-messages');
+    if (!messagesDiv) return null;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex justify-start';
+    wrapper.id = 'discuss-typing-indicator';
+    const bubble = document.createElement('div');
+    bubble.className = 'bg-gray-100 dark:bg-gray-700 rounded-lg px-3 py-2 max-w-[80%] text-sm text-gray-500';
+    bubble.innerHTML = '<span class="animate-pulse">●●●</span>';
+    wrapper.appendChild(bubble);
+    messagesDiv.appendChild(wrapper);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    return wrapper;
+}
+
+function removeDiscussTyping() {
+    const el = document.getElementById('discuss-typing-indicator');
+    if (el) el.remove();
+}
+
+async function sendDiscussMessage() {
+    const input = document.getElementById('discuss-input');
+    const sendBtn = document.getElementById('discuss-send-btn');
+    const content = (input && input.value || '').trim();
+    if (!content) return;
+    if (!discussSessionId) {
+        // Session not started yet (e.g. user hit Enter before the
+        // initial POST resolved). Start it now.
+        await startDiscussSession();
+        if (!discussSessionId) return;  // start failed
+    }
+    // Render the user's message immediately
+    appendDiscussMessage('user', content);
+    input.value = '';
+    // Disable input + button while waiting for the AI
+    if (sendBtn) sendBtn.disabled = true;
+    if (input) input.disabled = true;
+    const typing = appendDiscussTyping();
+    try {
+        const token = await getAuthToken();
+        const resp = await fetch(`/api/chat/sessions/${discussSessionId}/messages`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+            body: JSON.stringify({content: content}),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || 'Chat request failed');
+        }
+        const data = await resp.json();
+        removeDiscussTyping();
+        appendDiscussMessage('assistant', data.ai_message.content);
+    } catch (e) {
+        removeDiscussTyping();
+        appendDiscussMessage('assistant', `❌ ${e.message}`);
+    } finally {
+        if (sendBtn) sendBtn.disabled = false;
+        if (input) input.disabled = false;
+        if (input) input.focus();
+    }
+}
+
+// ── Delete video (MVP2.0) ──
+// Three functions: showDeleteModal / hideDeleteModal / confirmDelete.
+// The modal is a fixed overlay with Cancel + Delete buttons. On confirm:
+//   1. Call DELETE /api/videos/{id}
+//   2. Show a toast with the cascade summary (e.g. "Deleted 4 assets,
+//      2 chat sessions")
+//   3. Redirect to the course page so the user sees the section list
+//      without the deleted video
+//
+// Why a modal, not a native confirm()? Better UX — lets us list exactly
+// what will be deleted, gives a clear "this cannot be undone" warning,
+// and matches the design language of the rest of the app.
+
+function showDeleteModal() {
+    const modal = document.getElementById('delete-modal');
+    if (modal) modal.classList.remove('hidden');
+    // Focus the cancel button by default — safer default action.
+    const cancelBtn = document.getElementById('delete-cancel-btn');
+    if (cancelBtn) cancelBtn.focus();
+}
+
+function hideDeleteModal() {
+    const modal = document.getElementById('delete-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function confirmDelete() {
+    const confirmBtn = document.getElementById('delete-confirm-btn');
+    const cancelBtn = document.getElementById('delete-cancel-btn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = '⏳ Deleting...';
+    }
+    if (cancelBtn) cancelBtn.disabled = true;
+    try {
+        const resp = await fetch(`/api/videos/${videoId}`, {
+            method: 'DELETE',
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        // Build a short summary for the toast.
+        const parts = [];
+        if (data.deleted.file) parts.push('video file');
+        if (data.deleted.assets > 0) parts.push(`${data.deleted.assets} asset${data.deleted.assets === 1 ? '' : 's'}`);
+        if (data.deleted.chat_sessions > 0) parts.push(`${data.deleted.chat_sessions} chat session${data.deleted.chat_sessions === 1 ? '' : 's'}`);
+        const summary = parts.length > 0 ? ` (deleted ${parts.join(', ')})` : '';
+        showToast(`Video deleted${summary}`, 'success');
+        // Redirect to the course page so the user sees the section list
+        // without the deleted video. We use `courseId` (rendered
+        // server-side) instead of scraping
+        // `document.querySelector('a[href^="/course/"]')` — the previous
+        // DOM-scrape approach grabbed the FIRST course link on the page,
+        // which was often a sidebar/course-list link, NOT the course
+        // this video belongs to. User caught this in production
+        // (2026-07-11): deleting a video in the "Tests" course
+        // redirected to "DIY OpenClaw - Chinese" because that link
+        // came earlier in the DOM. Hard-coding the course id from the
+        // template is 100% reliable. If the video somehow doesn't have
+        // a course (e.g. shared deep link, broken FK), fall back to
+        // /dashboard.
+        const target = courseId ? `/course/${courseId}` : '/dashboard';
+        setTimeout(() => { window.location.href = target; }, 1200);
+    } catch (e) {
+        // Reset the button so the user can try again
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Delete permanently';
+        }
+        if (cancelBtn) cancelBtn.disabled = false;
+        showToast('Delete failed: ' + e.message, 'error');
+    }
+}
+
+// ── escapeHtml (utility, used in error toasts) ──
+function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 // Pre-load the Markmap script in the background so the mindmap tab
 // renders instantly when the user clicks it (saves ~1-2s CDN fetch time).
 preloadMarkmapScript();
@@ -1635,4 +1914,42 @@ window.addEventListener('resize', () => {
     }
 })();
 </script>
+
+<!-- Delete confirmation modal — hidden by default, shown by
+     showDeleteModal() when the user clicks the delete button.
+     Uses the same fixed-overlay pattern as the mindmap fullscreen
+     modal in the JS section below. -->
+<div id="delete-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h2 class="text-lg font-semibold mb-2">🗑️ Delete this video?</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            This will permanently delete:
+        </p>
+        <ul class="text-sm text-gray-700 dark:text-gray-300 list-disc ml-5 mb-4 space-y-1">
+            <li>The video file on disk</li>
+            <li>The transcript (if generated)</li>
+            <li>All learning materials (summary, mindmap, flashcards, quiz)</li>
+            <li>Any chat history for this video</li>
+        </ul>
+        <p class="text-sm font-medium text-red-600 dark:text-red-400 mb-4">
+            This cannot be undone.
+        </p>
+        <div class="flex justify-end gap-2">
+            <button
+                onclick="hideDeleteModal()"
+                id="delete-cancel-btn"
+                class="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="confirmDelete()"
+                id="delete-confirm-btn"
+                class="px-4 py-2 text-sm bg-red-600 text-white hover:bg-red-700 rounded-lg"
+            >
+                Delete permanently
+            </button>
+        </div>
+    </div>
+</div>
 {% endblock %}
