@@ -1,14 +1,14 @@
 # How to start the backend
 
 > Quick reference for the FastAPI dev server (`app/main.py`).
-> Last updated: 2026-07-11 (after MVP2.0 retry-button fix on commit `162c85d`).
+> Last updated: 2026-07-14 (after Part A — anti-drift language policy — on commit `08c118d`).
 
 ---
 
 ## TL;DR
 
 ```bash
-cd "/Users/jackyli/Library/CloudStorage/OneDrive-Personal/Documents/Githubs/video-learning-app"
+cd ~/Desktop/Githubs/video-learning-app
 source venv/bin/activate
 ./scripts/start.sh
 ```
@@ -20,12 +20,16 @@ Then open <http://localhost:8000/login> in your browser.
 ## One-time setup (only if `venv/` is missing)
 
 ```bash
-cd "/Users/jackyli/Library/CloudStorage/OneDrive-Personal/Documents/Githubs/video-learning-app"
+cd ~/Desktop/Githubs/video-learning-app
 python3.14 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ./scripts/setup.sh        # creates firebase-service-account.json symlink if needed
 ```
+
+> **Note on venv**: the venv is a **symlink** to `~/Desktop/video-learning-app/venv`
+> (saves ~450 MB of duplicate packages). If you ever see `venv` as a broken
+> symlink, just `rm venv && ln -s ~/Desktop/video-learning-app/venv venv`.
 
 ---
 
@@ -51,7 +55,7 @@ automatically, and the inline logs make debugging easier.
 ### Option B — manual (background, survives terminal close)
 
 ```bash
-cd "/Users/jackyli/Library/CloudStorage/OneDrive-Personal/Documents/Githubs/video-learning-app"
+cd ~/Desktop/Githubs/video-learning-app
 source venv/bin/activate
 nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > logs/server.log 2>&1 &
 echo "PID=$!"
@@ -136,7 +140,7 @@ You forgot to `cd` into the project root, or you ran the command from
 outside the venv. Always:
 
 ```bash
-cd /Users/jackyli/Library/CloudStorage/OneDrive-Personal/Documents/Githubs/video-learning-app
+cd ~/Desktop/Githubs/video-learning-app
 source venv/bin/activate
 ```
 
@@ -185,7 +189,10 @@ source venv/bin/activate
 python -m pytest --no-cov
 ```
 
-Expected: `396 passed` (as of 2026-07-11).
+Expected: `487 passed, 12 pre-existing failures` (as of 2026-07-14, after Part A — anti-drift language policy).
+The 12 failures are pre-existing frontend + node tests, **not** regressions from
+Part A. They cover: `test_frontend.py` (3), `test_loadSummary_dom.py` (4),
+`test_transcript_follow.py` (5).
 
 ---
 

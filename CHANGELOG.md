@@ -127,3 +127,72 @@ Alembic / Celery" pillars are still in design or pending. See
 
 [2.0.0]: https://github.com/yuanfengli168/video-learning-app/compare/v1.0.0...MVP2.0
 [1.0.0]: https://github.com/yuanfengli168/video-learning-app/releases/tag/v1.0.0
+
+## [2.0.1] - 2026-07-14 — MVP2.0 Part A (anti-drift language policy)
+
+🎯 **One bug, one feature, one number.** Fixes the "Thank you" hallucination
+loop on long Mandarin audio (and other languages) by **locking whisper's
+language for the whole file** and adding **anti-drift kwargs**.
+
+**Proven result**: on a 2.5h Mandarin video, the same file went from
+**~0% Mandarin output → 97.8% Mandarin output** — a clean, single-transcript
+result with no `condition_on_previous_text` chain.
+
+### ✨ Features
+
+- **Language dropdown on the video page** (`08c118d`) — three options: `Auto` /
+  `English` / `中文`. When the worker has already auto-detected a language, the
+  UI shows a `Detected: 中文` label so the user knows what was inferred. The
+  dropdown ships a confirmation modal so accidental language changes don't
+  silently re-transcribe an already-correct transcript.
+- **Backend `language=` param wired end-to-end** — new
+  `app/services/transcription.py::INITIAL_PROMPTS` + `get_initial_prompt()`
+  + `LANGUAGE_CHOICES` + `LANGUAGE_LOCKED_CODES`. Locked codes: `zh`, `en`,
+  `auto`. Each locked code maps to a bias prompt:
+  - `zh` → `"以下是普通话的对话。"`
+  - `en` → `","` (the comma-only English bias prompt)
+  - `auto` → no bias, no `language=` arg (let whisper decide)
+- **Auto-detection in the worker** (`08c118d`) — when a video has
+  `videos.language IS NULL`, the worker samples 20 windows with
+  `faster-whisper`'s `detect_language` and locks to the first language whose
+  speech probability exceeds the configured threshold (default 50%). Settings
+  exposed via `LANGUAGE_DETECT_SAMPLE_WINDOWS` + `LANGUAGE_DETECT_SPEECH_THRESHOLD`
+  in `.env`.
+- **MLX-whisper path now actually dispatches** (`08c118d`) — the placeholder
+  `NotImplementedError` from commit `2a96049` (whisper-model-picker Part A)
+  is replaced with a real call. Tests in `test_whisper_picker.py` updated to
+  verify the new behavior (3 new tests).
+
+### 🐛 Bug fixes
+
+- **`fix(transcription):` "Thank you" loop on long Mandarin** — root cause
+  was the default `condition_on_previous_text=True` chaining the first
+  30 seconds of hallucination ("Thank you. Thank you for watching. ...")
+  across every subsequent 30-second window. The fix is
+  `condition_on_previous_text=False` + `compression_ratio_threshold=1.8`
+  (rejects any segment whose output is too repetitive, a classic
+  hallucination signature) + locking the language with `language="zh"` so
+  the model never drifts to English in the middle of a Mandarin file.
+- **Post-transcript worker `NOT NULL` constraint** on `videos.language` —
+  the new column is added with a default of `NULL` for existing rows
+  (so the migration is non-destructive), and the worker writes the resolved
+  language back so re-runs don't re-detect.
+
+### 📚 Docs
+
+- [`doc/HowToStart.md`](doc/HowToStart.md) — workspace path refreshed to
+  `~/Desktop/Githubs/video-learning-app/` (the OneDrive path is no longer
+  used). Test count updated to 487 passing.
+- `app/config.py` — 2 new env settings documented inline.
+
+### 🧪 Tests
+
+- 487 passing, 12 pre-existing failures (no new regressions)
+- 3 new tests in `tests/test_whisper_picker.py`:
+  - `test_transcribe_with_backend_mlx_path_calls_mlx_whisper`
+  - `test_transcribe_with_backend_mlx_path_passes_language`
+  - `test_transcribe_with_backend_mlx_path_no_language_when_auto`
+- 1 test rewritten: the old `test_transcribe_with_backend_mlx_path_raises_not_implemented`
+  is replaced by the three above (the `NotImplementedError` is gone).
+
+[2.0.1]: https://github.com/yuanfengli168/video-learning-app/compare/97c4e4d...08c118d
