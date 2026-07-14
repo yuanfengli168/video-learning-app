@@ -49,4 +49,19 @@ we just embed a api? like Notion, etc into the page, but just save data into our
 -- 8. can we add a small feature on how many hours, and minutes a pending finally turned to ready when we open the section, 
 like beside ready - done in 09:08 means from generating to ready, it used 9 minutes and 8 seconds
 
-
+[july14]:
+1. logout but still can see summary
+2. where is the remove button of single video page?
+3. why I moved the repo, but the video need to readd, reupload?
+4. can we add a new function called transfer webm to MP4, but not as part of the main functions 
+5. are we able to do some Foundation Models? 
+6. read the paper of Revolute
+7. MVP3. OCR (which will be another thing in pipeline), now we have 
+    1. transcribe (default mlx -> whisper-large-v3-turbo 2.5 hour video 
+    in 5 minutes as well as language detection algorithm of 20 piece evenly 
+    spread 30 seconds video/audio)
+    2. the generating materials (calling Ollama, sometimes rate limited, sometimes glictches, no clear error handling)
+    3. (MVP3.0) the OCR, with a full picture for a whole time range of this whole picture.
+8. the time beside each video should between begin to read, not queued to ready. (in future should be configurable)
+9. not sure why but the number in front of the videos are added by one from the begining, so now the first video is always from 02-....
+10. where is the Chat session that have all transcript, material infomation and I can ask? where does this go? I remember we developed this
