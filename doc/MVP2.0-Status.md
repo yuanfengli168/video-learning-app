@@ -330,3 +330,229 @@ background worker pool.
   ready; the worker will start using it as soon as that pip
   install completes.
 - "Cloud Whisper" paid tier (MVP3.0 #3) — still conceptual, no code.
+
+## 14. 2026-07-14 — Full repo recap + open work snapshot
+
+> Compact end-to-end summary of the repo, what's shipped, what's left, and
+> where to start next. Sourced from a deep read of the entire codebase
+> (models, routers, services, middleware, tests, docs) plus
+> `doc/manualTodo.txt` [july 14] priorities.
+
+### 14.1 What this app does (one paragraph)
+
+A **local-first, AI-powered web app** that turns your downloaded video
+classes (Bilibili, Coursera, university lectures, conference recordings,
+etc.) into **interactive study materials**. You upload a video → Whisper
+transcribes it → Ollama LLM generates a summary, mindmap, quiz, and
+flashcards → you click mindmap nodes to jump to the topic → you can chat
+with the AI about the content (either about a specific concept or about
+the whole video). **One user per install, runs on your Mac.**
+
+### 14.2 Tech stack
+
+| Layer | Choice | Notes |
+|---|---|---|
+| **Backend** | FastAPI (Python 3.14) | async, auto OpenAPI docs |
+| **Frontend** | Jinja2 templates + vanilla JS + Tailwind CSS | dark/light, mobile responsive, no SPA framework |
+| **DB** | SQLite + SQLAlchemy 2.0 | with hand-rolled additive migrations (Alembic deferred) |
+| **Storage** | Local filesystem (`uploads/`, `storage/`) | gitignored |
+| **Auth** | AuthKit (Firebase Auth UI) → httpOnly session cookies | Frontend never sees tokens |
+| **Transcription** | faster-whisper + mlx-whisper (Apple Silicon) | 7 model options, 2 backends |
+| **LLM** | Ollama (local, `glm-5.2:cloud`) | deterministic: `temperature=0`, `seed=42` |
+| **Tests** | pytest + pytest-asyncio + httpx | 487 passing, 87% coverage |
+
+### 14.3 Data model (hierarchy)
+
+```
+Course (e.g. "Machine Learning")
+└── Section (e.g. "Week 1: Neural Networks")
+    └── Video (the class file)
+        ├── Asset (5 types: summary, transcript, flashcards, quiz, mindmap, topic_timestamps)
+        └── ChatSession
+            └── ChatMessage
+```
+
+### 14.4 What we've done (the journey)
+
+**MVP1 (shipped 2026-07-06) — 218 tests, 96% coverage**
+The "local single-user" foundation. Auth, course hierarchy, upload, Whisper
+transcribe, Ollama generate, interactive mindmap, chat with AI, mobile
+responsive UI, dark/light theme, transcript viewer with click-to-seek + search.
+
+**MVP2.0 (shipped Jul 6-11) — 491 tests, 87% coverage**
+*Tagline: bulkUploads and LLMonTransciptsMaterials*
+
+| Pillar | What shipped |
+|---|---|
+| **Auto-pipeline** | Upload → automatically transcribe → automatically generate. Zero clicks after upload. |
+| **Bulk upload** | Drag 20 files, walk away. Per-file progress, 0-byte rejection, 2 GB cap (later 10 GB). |
+| **Retry** | `retry_failed_generate.py` CLI + "Retry all failed" button per section + per-video "Retry" button. Catches both transcribe and generate failures. |
+| **Transcript export** | Download as `.md` / `.json` / `.txt` with proper RFC 5987 unicode filenames. |
+| **Delete** | Video / section / course hard-delete with cascade summary (`{files, assets, chat_sessions}`). |
+| **Session expiry** | Middleware redirects protected pages to `/?session=expired` if cookie is bad. |
+| **Natural sort** | `1.-foo` < `2.-bar` < `10.-baz`. |
+| **Discuss tab** | NEW! Chat about the whole video (transcript + summary + mindmap + quiz as system prompt). Persisted with `scope='video'` badge. |
+
+**MVP2.0.1 Part A (shipped 2026-07-14) — 487 tests**
+*Tagline: anti-drift language policy*
+
+Fixed a real production bug: a 2.5h Mandarin file produced 296 "Thank you"
+hallucinations because Whisper drifted from Chinese to English mid-file. Fixes:
+- **Language dropdown** on the video page (Auto / English / 中文) with confirmation modal
+- **Lock language for the whole file** via `language=` arg
+- **Auto-detect from first 10 min** (20 windows × 30s, weighted by `no_speech_prob < 0.5`)
+- `condition_on_previous_text=False` + `compression_ratio_threshold=1.8` to catch repetitive-text hallucination
+- **MLX-whisper path now actually dispatches** (was a `NotImplementedError` stub from Part 1 of the whisper picker)
+
+**Result: 0% Mandarin → 97.8% Mandarin on the same 2.5h file.** 🎉
+
+**MVP3.0 items shipped (Jul 11-14)**
+1. ✅ 10 GB upload cap (was 2 GB)
+2. ✅ "ready · 9:08" timing badge on section page
+3. ✅ Whisper model picker with 7 options (4 manual + 3 smart picks including MLX)
+
+### 14.5 Code quality / engineering highlights
+
+- **487 tests passing** with structured regression tests for past bugs (route shadowing, JS syntax errors, etc.)
+- **Status-bar JSON-parsing** with 4 fallback strategies (direct / code-fence / preamble-strip / brace-match) for non-deterministic `glm-5.2:cloud` responses
+- **Security headers** that don't break Firebase popup login (the `same-origin-allow-popups` lesson is documented in `BlockersOrChallengers.md`)
+- **Deterministic LLM**: `temperature=0` + `seed=42` — same transcript → same materials
+- **In-memory job tracker** (`app/jobs.py`) with progress + ETA, survives page refresh via DB persistence
+
+### 14.6 Notable bugs we've solved (with full postmortems)
+
+All in `doc/BlockersOrChallengers.md` — these are some of the best learning
+material in the repo:
+
+1. **Transcript panel scrolled to 00:10 instead of 00:00** — `offsetTop` was relative to `<body>`, not container. Fixed with `getBoundingClientRect`.
+2. **Bulk upload 404** — FastAPI route shadowing. `POST /{video_id}/transcribe` was declared before `POST /upload-bulk/{section_id}`. **TestClient didn't reproduce this** — production uvicorn only.
+3. **0-byte upload crashes Whisper** — only the upper size bound was checked.
+4. **"Retry N failed" button did nothing** — endpoint only checked generate failures, not transcribe failures.
+5. **"Thank you" hallucination on 2.5h Mandarin** — per-window language drift.
+6. **Firebase login popup silently failed** — wrong `Cross-Origin-Opener-Policy` value severed `window.opener`. Errors only visible in popup's DevTools, not parent.
+7. **Section delete click did nothing** — a missing `}` in `uploadVideo()` made the whole `<script>` block a JS syntax error; browsers don't run scripts with syntax errors at all.
+
+### 14.7 What's next — the open work
+
+**From `doc/MVP3.0-Status.md` (14 items, 3 P0)**
+
+| Priority | Item | Status |
+|---|---|---|
+| **P0** | 10 GB upload cap | ✅ Done |
+| **P0** | Whisper picker plumbing | ✅ Done, MLX backend wired |
+| **P1** | Background worker pool | Not started — needed for 100-video batches |
+| **P1** | Soft-delete / trash / restore (30-day TTL) | Not started — manualTodo #8 |
+| **P1** | Note section (markdown, DB-backed) | Not started — manualTodo #6 |
+| **P1** | Long-video player (2-hour seek, Plyr swap) | Not started — manualTodo #4 |
+| **P2** | Language consistency in generated materials | Not started — manualTodo #7 |
+| **P2** | Alembic migrations | Not started |
+| **P2** | Architecture data-flow diagram (Mermaid) | Not started — manualTodo #7 |
+| **P3** | OCR of video frames for Discuss tab | Not started — manualTodo #6 |
+| **P3** | Cloud Whisper API (paid tier) | Not started |
+| **P3** | Jira creation via MCP (paid tier) | Not started |
+| **P3** | i18n UI strings | Not started |
+
+**From `doc/manualTodo.txt` [july 14] (the most recent, current focus)**
+1. **Logout but still can see summary** — likely a cache issue; `summary_content` is SSR'd
+2. **Where is the remove button on single video page?** — should be there (commit `40d8c4a`); check console
+3. **Why did moving the repo require re-uploading videos?** — uploads are local filesystem paths, not relative. Need a storage path migration helper.
+4. **WebM → MP4 conversion** as a non-main feature
+5. **Foundation Models** — research
+6. **Read the paper of Revolute** — research
+7. **OCR pipeline** (whisper → generate materials → OCR), as the 3rd stage
+8. **"ready in 9:08" should be from begin-to-read, not queued-to-ready** — currently `generated_at - created_at`; change to `generated_at - transcribed_at`
+9. **Numbering off-by-one** in front of video filename — the `2. ...` prefix bug
+10. **Where is the Chat session that has all transcript, material information?** — this is the **Discuss tab** (MVP2.0 ship), at `POST /api/chat/video-sessions` and `/chat-history` with a VIDEO badge. Let me know if you can't find it in the UI.
+
+### 14.8 Recommended next step
+
+Based on the current `manualTodo.txt` [july 14] priorities and the MVP3.0
+status doc, suggested order:
+
+1. **Quick fixes (today)**: items 1, 2, 8, 9, 10 from july 14 — they're all small, well-scoped bugs/UX
+2. **Soft-delete / trash** (P1) — your manualTodo #8, big UX win
+3. **Note section** (P1) — your manualTodo #6, big UX win
+4. **Background worker pool** (P1) — unlocks 100-video batches and is the foundation for Celery
+5. **OCR pipeline** (P3) — your manualTodo #7, the 3rd stage of the AI pipeline
+
+## 15. 2026-07-14 — Discuss tab clickable timestamp citations (MVP2.0.2)
+
+> User's manualTodo [jul14] #6: "I got question on this quiz, but no
+> way to ask why based on the transcript of video. ... so need
+> somewhere on video page to ask questions on all transcript of the
+> current video, the current materials like mindmap, quiz (and its
+> answers etc) we can discuss ... at least can return the timestamps
+> or sentences, like starting from 00:20 to 00:40 this talks about ...
+> if it can utilize existing feature and jump video to that timestamp
+> (like what we do by clicking on node of mindmap) then it will be
+> even better."
+
+The Discuss tab was already in place from MVP2.0 (commit `b20584a`),
+but the AI couldn't reliably cite timestamps because:
+1. The system prompt mentioned `[12:34]` (M:SS) format without
+   examples
+2. The backend silently swallowed transcript-parse errors and told
+   the LLM "(Transcript present but could not be parsed.)", which
+   made the AI hallucinate explanations for the failure
+3. Even when the AI did emit a citation, the UI just rendered it as
+   plain text — the user had to copy the timestamp, switch tabs,
+   and manually seek the video
+
+### What shipped (commits `ccf30a5`, `cc42b15`)
+
+**Backend (`app/services/chat.py`, `app/routers/chat.py`):**
+- New `parse_citations(text)` function extracts `[M:SS]` / `[H:MM:SS]`
+  markers from a string. Two clean regexes (not one ambiguous one).
+  Returns `{start_seconds, display, offset, raw}` per citation.
+  Fractional seconds preserved (`[1:23.5]` → 83.5s).
+- The `/api/chat/sessions/{id}/messages` endpoint now returns a
+  structured `citations` field alongside the AI message — only for
+  video-scope sessions (flashcard-scope always returns `[]` since
+  there's no transcript to cite from).
+- `_build_video_chat_context` now logs the actual parse error
+  (with a snippet of the failing content) AND gives the LLM a
+  clearer message: "your transcript exists but my parser couldn't
+  read it — try re-transcribing."
+- `VIDEO_CHAT_SYSTEM_PROMPT` rewritten with explicit citation
+  format documentation, examples, and a "be honest when the
+  transcript doesn't cover the topic" rule.
+
+**Frontend (`app/templates/video.html`):**
+- `appendDiscussMessage(role, content, citations)` now takes the
+  backend's citations list and renders each `[M:SS]` marker as a
+  small styled button (matching the mindmap node look).
+- New `renderDiscussTextWithCitations(bubble, text, citations)`
+  splices text + citation buttons into the bubble using
+  `document.createTextNode` for non-citation runs (XSS-safe) and
+  `<button>` elements for the markers. Has a client-side regex
+  fallback for when the backend's `citations` list is missing
+  (e.g. messages loaded from the chat history page).
+- Clicking a citation button:
+  1. Seeks the video to that time
+  2. Highlights the matching transcript line(s) for context
+  3. Leaves the user on the Discuss tab so they can keep reading
+     the response
+
+**Test results:** 523/523 passing (was 500, +23). Coverage on
+`app/services/chat.py` 96%, `app/routers/chat.py` 97%.
+
+**Files changed:** 3 implementation files (chat service, chat
+router, video template) + 3 test files + CHANGELOG + this status
+entry. ~720 insertions across the feature.
+
+**What this unlocks (per user's [jul14] #6):**
+- "为什么这道题的答案是 B？" → AI cites `[3:45]` and `[8:12]`,
+  user clicks each link, the video jumps and the relevant
+  transcript lines are highlighted — instant context.
+- "Which time range covers X?" → AI says "covered from `[3:45]`
+  to `[5:48]`", user clicks `[3:45]` to start there.
+- "Is the answer correct?" (about a quiz question) → AI cites
+  the transcript line + timestamp, user can verify by clicking.
+
+**Not yet done (deferred to future work):**
+- "Show me the whole segment" — currently we highlight ±5s around
+  the citation. A future feature could let the user click-and-drag
+  to expand the range.
+- Semantic search — "find the part about Opus" rather than a
+  specific timestamp. This is a different feature (would need
+  transcript vectorization) and is a separate MVP3+ item.

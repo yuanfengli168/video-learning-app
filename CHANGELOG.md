@@ -196,3 +196,87 @@ result with no `condition_on_previous_text` chain.
   is replaced by the three above (the `NotImplementedError` is gone).
 
 [2.0.1]: https://github.com/yuanfengli168/video-learning-app/compare/97c4e4d...08c118d
+
+## [2.0.2] - 2026-07-14 — Discuss tab clickable timestamp citations
+
+🎯 **One feature.** When the AI cites a moment in the video inside the
+💬 Discuss tab, the timestamp now becomes a clickable link that
+seeks the video to that moment and highlights the matching
+transcript line(s) — same UX as clicking a mindmap node.
+
+**Proven result:** the AI's response `[3:45] 视频提到 Claude Code
+需要付费` now renders as a styled inline button; clicking it
+seeks the video to 3:45 and highlights the relevant transcript
+lines for context.
+
+### ✨ Features
+
+- **Inline clickable citation links in the Discuss tab** —
+  the backend parses `[M:SS]` / `[H:MM:SS]` markers from the
+  AI's response and returns them as a structured `citations`
+  list; the frontend renders each as a small styled button
+  (same look as the mindmap nodes). Clicking the button:
+  1. Seeks the video to that moment
+  2. Highlights the matching transcript line(s) for context
+  3. Leaves the user on the Discuss tab so they can keep
+     reading the response
+- **One source of truth for the citation format** — the
+  `app/services/chat.py:parse_citations()` function. Two clean
+  regexes (M:SS and H:MM:SS) replace the previous ambiguous
+  single-regex attempt. Fractional seconds (e.g. `[1:23.5]`)
+  are preserved (not rounded to int).
+- **Improved system prompt** — VIDEO_CHAT_SYSTEM_PROMPT now
+  explicitly documents the `[M:SS]` citation format with
+  examples and asks the LLM to (1) quote a short verbatim
+  snippet alongside the timestamp so the user can verify,
+  (2) be honest when the transcript doesn't cover the topic.
+- **Client-side fallback parser** — `renderDiscussTextWithCitations`
+  falls back to a client-side regex parse if the backend's
+  `citations` list is missing (e.g. for messages loaded from
+  the chat history page where the original API response was
+  discarded).
+
+### 🐛 Bug fixes
+
+- **Silent transcript-parse failure no longer confuses the AI**
+  — previously the chat endpoint silently swallowed the
+  JSON parse error in `_build_video_chat_context` and told
+  the LLM "(Transcript present but could not be parsed.)",
+  which made the AI hallucinate explanations for why the
+  transcript didn't exist (manualTodo [jul14] #6). Now we:
+  1. Log the underlying error + a snippet of the failing
+     content to the server console
+  2. Give the LLM a clear message so the AI can tell the
+     user "your transcript exists but my parser couldn't
+     read it — try re-transcribing" instead of inventing
+     a reason
+
+### 📚 Docs
+
+- [`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) — feature
+  recorded in the live status doc (was already tracked as
+  the MVP3.0 Part B planned work)
+
+### 🧪 Tests
+
+- 523 passing, 12 pre-existing failures (no new regressions)
+- +23 new tests in 3 files:
+  - `tests/test_chat_service.py` (+14): parse_citations
+    regex coverage — empty input, single M:SS, multiple
+    M:SS, H:MM:SS, mixed, leading zero, fractional seconds,
+    range rejection, tilde rejection, trailing-s rejection,
+    invalid minutes/seconds, unrelated brackets, offset
+    preservation for splice-points, ordering guarantee
+  - `tests/test_chat_router.py` (+6): response-shape
+    coverage — video-scope response includes empty
+    `citations` list, M:SS is parsed, H:MM:SS is parsed,
+    multiple markers all parsed in order, flashcard-scope
+    has empty `citations` (no transcript to cite from)
+  - `tests/test_ui_features.py` (+3): video-page UI
+    presence — Discuss tab + send handler, citation
+    renderer + client-side fallback regex, system prompt
+    documents the citation format
+- `app/services/chat.py`: 96% coverage
+- `app/routers/chat.py`: 97% coverage
+
+[2.0.2]: https://github.com/yuanfengli168/video-learning-app/compare/cc42b15...HEAD
