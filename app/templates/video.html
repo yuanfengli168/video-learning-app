@@ -263,7 +263,12 @@ if (document.getElementById('content-summary').querySelector('.prose')) {
 }
 
 function switchTab(tab) {
-    ['summary', 'flashcards', 'quiz', 'mindmap'].forEach(t => {
+    // Hide all five tab panels and reset their tab-button styles.
+    // NB: 'discuss' MUST be in this list, otherwise clicking another
+    // tab while Discuss is open leaves the Discuss panel visible
+    // underneath the new tab's content (multi-panel rendering bug,
+    // fixed in MVP2.0.2 hotfix — see doc/MVP2.0-Status.md §16+§17).
+    ['summary', 'flashcards', 'quiz', 'mindmap', 'discuss'].forEach(t => {
         document.getElementById('content-' + t).classList.add('hidden');
         const btn = document.getElementById('tab-' + t);
         btn.classList.remove('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
