@@ -1685,23 +1685,108 @@ async function startDiscussSession() {
     }
 }
 
-function appendDiscussMessage(role, content) {
+function appendDiscussMessage(role, content, citations) {
+    // MVP3.0 Part B (manualTodo [jul14] #6): when the AI message comes
+    // with a list of citation markers, render the message text with
+    // each `[M:SS]` wrapped in a clickable link that seeks the video
+    // to that time. The bubble's text is built as DOM nodes (text +
+    // <button> elements) — never via innerHTML on the AI's response —
+    // so this stays XSS-safe even if the LLM emits something weird.
+    //
+    // Args:
+    //   role: 'user' or 'assistant'
+    //   content: the raw text
+    //   citations: optional array from the backend (the
+    //     `parse_citations()` result), used as the structured source
+    //     of truth for which markers to make clickable. We still fall
+    //     back to client-side regex detection when the backend
+    //     returns nothing (e.g. older messages loaded from the DB).
     const messagesDiv = document.getElementById('discuss-messages');
     if (!messagesDiv) return;
     const isUser = role === 'user';
-    // We don't trust the AI response to be safe HTML (Ollama could
-    // return anything). Escape it and only insert via textContent on
-    // a <div>. We lose rich formatting but gain safety.
     const wrapper = document.createElement('div');
     wrapper.className = isUser ? 'flex justify-end' : 'flex justify-start';
     const bubble = document.createElement('div');
     bubble.className = isUser
         ? 'bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[80%] text-sm whitespace-pre-wrap break-words'
         : 'bg-gray-100 dark:bg-gray-700 rounded-lg px-3 py-2 max-w-[80%] text-sm whitespace-pre-wrap break-words';
-    bubble.textContent = content;
+    renderDiscussTextWithCitations(bubble, content, citations);
     wrapper.appendChild(bubble);
     messagesDiv.appendChild(wrapper);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+// Render `text` into `bubble`, converting every citation marker
+// (from `citations` or detected client-side) into a clickable button
+// that seeks the video to that time. Always uses textContent for
+// non-citation runs to avoid XSS.
+function renderDiscussTextWithCitations(bubble, text, citations) {
+    if (!text) return;
+    // Build a sorted list of citation offsets, preferring the backend's
+    // structured list. Fall back to client-side regex detection.
+    let markers = (citations || []).map(c => ({
+        start: c.offset,
+        end: c.offset + c.display.length,
+        display: c.display,
+        seconds: c.start_seconds,
+    }));
+    if (markers.length === 0) {
+        // Client-side fallback — keep in sync with the backend regex
+        // in app/services/chat.py:parse_citations(). Two patterns:
+        // [H:MM:SS] (longer, matched first) and [M:SS].
+        const re = /\[(\d{1,3}):(\d{2}):(\d{2}(?:\.\d+)?)\]|\[(\d{1,2}):(\d{1,2}(?:\.\d+)?)\]/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            let hours = 0, mm = 0, ss = 0;
+            if (m[1] !== undefined) {
+                hours = parseInt(m[1], 10);
+                mm = parseInt(m[2], 10);
+                ss = parseFloat(m[3]);
+            } else {
+                mm = parseInt(m[4], 10);
+                ss = parseFloat(m[5]);
+            }
+            markers.push({
+                start: m.index,
+                end: m.index + m[0].length,
+                display: m[0],
+                seconds: hours * 3600 + mm * 60 + ss,
+            });
+        }
+        markers.sort((a, b) => a.start - b.start);
+    }
+    // Splice text + citation buttons into the bubble.
+    let cursor = 0;
+    for (const mk of markers) {
+        if (mk.start > cursor) {
+            bubble.appendChild(document.createTextNode(text.slice(cursor, mk.start)));
+        }
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'inline-flex items-center px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-200 font-mono text-xs hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors align-baseline mx-0.5';
+        btn.textContent = mk.display;
+        btn.title = `Jump to ${mk.display} in the video`;
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            seekTo(mk.seconds);
+            // Highlight the matching transcript lines (with a small
+            // window so the user sees a few seconds of context). The
+            // helper exists from the mindmap-jump feature; reuse it
+            // so the visual treatment is consistent across the app.
+            if (typeof highlightTranscriptRange === 'function') {
+                highlightTranscriptRange(mk.seconds, mk.seconds + 5);
+            }
+            // Switch to the transcript tab? No — keep the user on Discuss
+            // so they can keep reading. They can see the video seek in
+            // the player above.
+        });
+        bubble.appendChild(btn);
+        cursor = mk.end;
+    }
+    if (cursor < text.length) {
+        bubble.appendChild(document.createTextNode(text.slice(cursor)));
+    }
 }
 
 function appendDiscussTyping() {
@@ -1757,7 +1842,14 @@ async function sendDiscussMessage() {
         }
         const data = await resp.json();
         removeDiscussTyping();
-        appendDiscussMessage('assistant', data.ai_message.content);
+        // MVP3.0 Part B (manualTodo [jul14] #6): the backend returns
+        // a `citations` list alongside the AI message. We pass it
+        // through to appendDiscussMessage so the renderer can turn
+        // each [M:SS] marker into a clickable seek button. The list
+        // is empty for flashcard-scope sessions (where there's no
+        // transcript to cite from) and for messages that don't
+        // contain any markers.
+        appendDiscussMessage('assistant', data.ai_message.content, data.citations || []);
     } catch (e) {
         removeDiscussTyping();
         appendDiscussMessage('assistant', `❌ ${e.message}`);

@@ -16,6 +16,7 @@ from app.services.chat import (
     build_system_prompt,
     build_video_system_prompt,
     chat_with_ollama,
+    parse_citations,
     render_quiz_for_chat,
     transcript_to_chat_text,
 )
@@ -144,6 +145,18 @@ async def send_message(
     db.add(ai_msg)
     db.commit()
 
+    # MVP3.0 Part B (manualTodo [jul14] #6): parse any `[M:SS]` /
+    # `[H:MM:SS]` citation markers the AI emitted so the frontend
+    # can convert each one into a clickable link. The parser is
+    # pure and unit-testable in app/services/chat.py.
+    #
+    # Only attach citations for video-scope sessions — flashcard-scope
+    # chats (default) are about a single concept and the AI doesn't
+    # have a transcript to cite, so any [M:SS] would be a hallucination.
+    citations: list[dict[str, Any]] = []
+    if session.scope == SCOPE_VIDEO:
+        citations = parse_citations(ai_response)
+
     return {
         "user_message": {
             "role": "user",
@@ -153,6 +166,9 @@ async def send_message(
             "role": "assistant",
             "content": ai_response,
         },
+        # Structured list of seek targets. The frontend can either
+        # trust this list OR re-parse on the client (defense in depth).
+        "citations": citations,
     }
 
 
@@ -211,6 +227,41 @@ async def list_chat_sessions(
     ]
 
 
+def _maybe_log_transcript_parse_error(
+    db: Session,
+    video_id: str,
+    exc: Exception,
+    raw_content: str,
+) -> None:
+    """Log a structured warning when the transcript Asset can't be parsed.
+
+    MVP3.0 Part B (manualTodo [jul14] #6): previously the chat endpoint
+    silently swallowed the JSON parse error in _build_video_chat_context
+    and told the LLM "(Transcript present but could not be parsed.)"
+    — which made the AI hallucinate explanations for why the transcript
+    didn't exist. Now we:
+      1. Log to the server console with enough context to debug
+      2. Include a hint in the LLM-facing message so the AI can tell
+         the user "your transcript exists but my parser couldn't read
+         it — try regenerating"
+      3. Return the (already-built) empty transcript text so the rest
+         of the chat flow keeps working.
+
+    The hint text is in English because the LLM can render it in
+    whatever language the user's question is in. Kept short so it
+    doesn't bloat the prompt.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    snippet = (raw_content or "")[:200].replace("\n", " ")
+    logger.warning(
+        "transcript parse failed for video_id=%s: %s | content preview: %r",
+        video_id,
+        exc,
+        snippet,
+    )
+
+
 def _build_video_chat_context(db: Session, video: Video) -> str:
     """Pull the video's transcript + summary + mindmap + quiz and
     format them into the LLM system prompt for a video-scope chat.
@@ -232,9 +283,21 @@ def _build_video_chat_context(db: Session, video: Video) -> str:
         try:
             segments = json_to_transcript(transcript_asset.content)
             transcript_text = transcript_to_chat_text(segments)
-        except Exception:
-            # Bad JSON in the DB — skip the transcript but don't crash
-            transcript_text = "(Transcript present but could not be parsed.)"
+        except Exception as exc:
+            # Bad JSON in the DB — log it for the developer AND give
+            # the LLM a clearer message so it can tell the user what
+            # to do (manualTodo [jul14] #6). Previously we just
+            # substituted "(Transcript present but could not be
+            # parsed.)" and the LLM made up a reason for the failure.
+            _maybe_log_transcript_parse_error(
+                db, video.id, exc, transcript_asset.content,
+            )
+            transcript_text = (
+                "(The transcript exists in the database but could not be "
+                "parsed — likely a stale or malformed JSON. Ask the user to "
+                "re-transcribe the video. The summary, mindmap, and quiz are "
+                "still available below.)"
+            )
 
     # Summary / mindmap: stored as raw markdown text
     summary = (by_type.get("summary").content if by_type.get("summary") else "") or ""

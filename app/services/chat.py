@@ -38,12 +38,42 @@ Focus on HOW and WHERE this concept is applied in practice.
 # System prompt for video-scope chats (whole-video discussion).
 # The actual transcript / materials are appended dynamically so the
 # LLM can answer questions about them.
+#
+# MVP3.0 Part B — citation format. The previous prompt asked the LLM
+# to cite as `[12:34]` (M:SS) but the transcript we actually feed in
+# uses the same `[M:SS]` format. The problem is the LLM often
+# paraphrases ("around the 1:20 mark") or invents ranges ("[00:30-
+# 01:30]") that don't survive a strict regex match.
+#
+# New rules (2026-07-14, manualTodo [jul14] #6):
+#   1. When you reference a specific moment in the video, ALWAYS use
+#      the exact format `[M:SS]` (e.g. `[1:23]`, `[12:34]`, `[1:02:45]`
+#      for > 1h). One timestamp per citation, on its own.
+#   2. Use the same `M:SS` shape you see in the transcript lines
+#      below — the UI's regex picks up exactly that.
+#   3. Prefer citing the START of the relevant segment. If the user
+#      asks about a concept that's covered from `[4:12]` to `[5:48]`,
+#      cite `[4:12]` and mention the range in prose.
+#   4. Quote a short verbatim snippet from the transcript alongside
+#      the timestamp so the user can confirm the LLM is right.
+#   5. If a question cannot be answered from the transcript (the topic
+#      is not covered, or the transcript is missing), say so honestly
+#      — do not invent timestamps.
+#
+# Example good response:
+#   "Claude Code 并不是免费使用 —— 视频在 [3:45] 明确提到它需要付费并
+#    消耗大量 Token。这与 Trae 的免费策略形成对比 (see [8:12])."
+#
+# Example bad response (the OLD behaviour the user complained about):
+#   "很抱歉，虽然视频的字幕文件存在，但无法被正确解析..."
+#   (this happened because the backend swallowed the parse error and
+#    told the LLM the transcript didn't exist)
 VIDEO_CHAT_SYSTEM_PROMPT = """You are a tutor who has just watched this entire video with the student.
 
 The user is learning from a video titled: "{title}"
 
 You have access to:
-- The video's full transcript (below)
+- The video's full transcript (below), with each line prefixed by `[M:SS]` markers
 - A summary of the key points
 - A mindmap of the topics covered
 - The quiz questions and answers
@@ -51,14 +81,26 @@ You have access to:
 Your job:
 - Answer questions about ANY part of the video's content
 - When you cite something from the transcript, include the timestamp
-  in the format `[12:34]` so the user can jump to that point
+  in the format `[M:SS]` (minutes:seconds, e.g. `[1:23]`, `[12:34]`,
+  or `[1:02:45]` for videos over 1 hour). ALWAYS use this exact format
+  with no extra characters, no en-dash, no range. The UI converts
+  every `[M:SS]` it finds into a clickable link that jumps the video
+  to that moment, so consistent format matters.
+- After the timestamp, quote a short verbatim snippet from the
+  transcript (one sentence or phrase) so the user can verify your
+  citation against the original audio.
 - If the user asks about a quiz answer, explain WHY the correct
-  answer is right using the transcript as evidence
+  answer is right using the transcript as evidence, and cite the
+  relevant `[M:SS]` markers.
 - If the user asks something not covered in the video, say so
-  honestly — don't make things up
-- Be concise (2-3 paragraphs max) and conversational
+  honestly — don't make things up.
+- Be concise (2-3 paragraphs max) and conversational.
 - Default to the same language as the user's question (English or
-  Chinese) — match their tone
+  Chinese) — match their tone.
+
+Citation format example:
+  "Claude Code 并不是免费使用 —— 视频在 [3:45] 明确提到它需要付费并
+   消耗大量 Token。这与 Trae 的免费策略形成对比 (see [8:12])."
 
 ---
 
@@ -74,8 +116,9 @@ Your job:
 {quiz}
 
 ## Transcript (with timestamps)
-The transcript is long, so use the timestamps to find what the
-user is asking about:
+The transcript below has each line prefixed with `[M:SS]` markers
+(e.g. `[0:30] Hello world`). Quote from these lines directly and
+cite the corresponding `[M:SS]` marker in your answer:
 {transcript}
 """
 
@@ -242,3 +285,121 @@ def chat_with_ollama(
 
     result = response.json()
     return result.get("message", {}).get("content", "")
+
+
+# ── Citation parsing (MVP3.0 Part B, manualTodo [jul14] #6) ────────────────
+#
+# When the AI response contains `[M:SS]` (or `[H:MM:SS]`) markers, the UI
+# converts each one to a clickable link that seeks the video to that time
+# (same UX as clicking a mindmap node). The backend parses the response and
+# returns a structured `citations` list alongside the text so the frontend
+# doesn't have to re-parse the regex.
+#
+# Why a parser here and not just in the frontend?
+# - One source of truth — the same regex the system prompt documents is the
+#   one we parse. If we change the format later, only this file changes.
+# - The parser is unit-testable in pure Python (no browser required) so the
+#   citation format can evolve without breaking the UI.
+# - The frontend can also re-parse on the client (defense in depth) but
+#   having the structured list saves it work and gives us a clean API.
+#
+# Accepted formats (all of these match because the LLM is inconsistent):
+#   [3:45]      → 225 seconds
+#   [12:34]     → 754 seconds
+#   [1:02:45]   → 3765 seconds  (H:MM:SS for videos > 1 hour)
+#   [03:45]     → 225 seconds  (leading zero tolerated)
+#   [3:45.5]    → 225.5 seconds (fractional — rounded down to int seconds)
+#
+# Rejected formats (intentionally):
+#   [1:23-1:45]  → range — too easy to mis-parse, frontend would have to
+#                   decide which endpoint to seek to. We do NOT match ranges.
+#   [~1:23]      → approximation marker — `~` is not in the regex, ignored.
+#   [1:23s]      → trailing "s" — not in the regex, ignored.
+#   [00:03:45]   → HH:MM:SS with leading zeros — accepted as H:MM:SS
+#                   (zero hours is treated as 0).
+#
+# Implementation note: we use TWO regexes (M:SS and H:MM:SS) and merge
+# the results, sorted by character offset. A single regex with an optional
+# hours group is ambiguous when fed real LLM output (does `[1:23]` mean
+# 1 min 23 sec or 1 hr 23 min?) — two patterns are clearer and easier
+# to reason about. `_CITATION_MSS_RE` matches `[M:SS]` (and `[MM:SS]`);
+# `_CITATION_HHMMSS_RE` matches `[H:MM:SS]` only.
+
+import re as _re  # local alias — keeps the symbol from colliding with anything
+from typing import Any
+
+_CITATION_MSS_RE = _re.compile(r"\[(\d{1,2}):(\d{1,2}(?:\.\d+)?)\]")
+_CITATION_HHMMSS_RE = _re.compile(r"\[(\d{1,3}):(\d{2}):(\d{2}(?:\.\d+)?)\]")
+
+
+def parse_citations(text: str) -> list[dict[str, Any]]:
+    """Extract `[M:SS]` / `[H:MM:SS]` citation markers from `text`.
+
+    Returns a list of `{start_seconds, display, offset, raw}` dicts,
+    in the order they appear in the text. Each citation corresponds
+    to one seek target the user can click.
+
+    Args:
+        text: The AI's response text (or any string — empty / None safe).
+
+    Returns:
+        List of citations. Empty list if none found. Each entry:
+            - start_seconds (float): the seek time in seconds, e.g. 225.0
+            - display (str): the original `[M:SS]` string as written,
+              e.g. "[3:45]" — useful for rendering the link label
+            - offset (int): character offset in `text` where the
+              citation starts. Used by the frontend to splice in a
+              link without losing position info.
+            - raw (str): the full matched substring (same as `display`
+              for now, but kept separate so future formats can carry
+              metadata without breaking the schema).
+    """
+    if not text:
+        return []
+    out: list[dict[str, Any]] = []
+
+    # Match M:SS form first. This is the common case and it's important
+    # to match it BEFORE H:MM:SS so we don't double-count e.g. `[1:23]`
+    # as both M:SS and H:MM:SS.
+    for m in _CITATION_MSS_RE.finditer(text):
+        mm_str, ss_str = m.group(1), m.group(2)
+        # Sanity: minutes must be < 60, seconds < 60. A malformed
+        # `[99:99]` from the LLM is ignored.
+        mm = int(mm_str)
+        # Keep fractional seconds (e.g. `[1:23.5]`) — the video
+        # player's currentTime accepts floats natively, so 0.5s
+        # precision gives the user a smooth seek. Round to 2
+        # decimals to avoid FP noise.
+        ss = round(float(ss_str), 2)
+        if mm >= 60 or int(ss) >= 60:
+            continue
+        start = mm * 60 + ss
+        out.append({
+            "start_seconds": float(start),
+            "display": m.group(0),
+            "offset": m.start(),
+            "raw": m.group(0),
+        })
+
+    # Now H:MM:SS form. Only matches when there's an extra hour
+    # segment, so it doesn't collide with the M:SS form.
+    for m in _CITATION_HHMMSS_RE.finditer(text):
+        h_str, mm_str, ss_str = m.group(1), m.group(2), m.group(3)
+        h = int(h_str)
+        mm = int(mm_str)
+        ss = round(float(ss_str), 2)
+        if h >= 100 or mm >= 60 or int(ss) >= 60:
+            continue
+        start = h * 3600 + mm * 60 + ss
+        out.append({
+            "start_seconds": float(start),
+            "display": m.group(0),
+            "offset": m.start(),
+            "raw": m.group(0),
+        })
+
+    # Sort by character offset so the citations are in the same
+    # order the LLM wrote them in the response. Stable enough for
+    # the frontend to iterate top-to-bottom.
+    out.sort(key=lambda c: c["offset"])
+    return out
