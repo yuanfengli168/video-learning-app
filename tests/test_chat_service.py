@@ -189,3 +189,146 @@ def test_video_scope_placeholder_constant_exists():
     consistent with the chat service."""
     from app.models.chat import VIDEO_SCOPE_CONCEPT_PLACEHOLDER
     assert VIDEO_SCOPE_CONCEPT_PLACEHOLDER == "[whole video]"
+
+
+# ── MVP3.0 Part B (manualTodo [jul14] #6) — parse_citations tests ────────────
+#
+# parse_citations() extracts [M:SS] / [H:MM:SS] markers from the AI's
+# response text and returns them as a list of {start_seconds, display,
+# offset, raw} dicts. The Discuss tab uses this on the backend to
+# build a structured 'citations' field on the /api/chat/sessions/
+# {id}/messages response, which the frontend then renders as
+# clickable seek links.
+#
+# These tests lock the regex contract so the prompt + parser can
+# evolve together without breaking the UI.
+
+
+def test_parse_citations_empty_and_none():
+    """parse_citations must tolerate empty / None input without raising."""
+    from app.services.chat import parse_citations
+    assert parse_citations("") == []
+    assert parse_citations(None) == []
+
+
+def test_parse_citations_no_markers():
+    """Plain text with no markers returns an empty list."""
+    from app.services.chat import parse_citations
+    result = parse_citations("这是普通的中文文本，没有时间戳。")
+    assert result == []
+
+
+def test_parse_citations_single_mmss():
+    """[M:SS] is converted to total seconds."""
+    from app.services.chat import parse_citations
+    result = parse_citations("视频在 [3:45] 提到 Claude Code 需要付费。")
+    assert len(result) == 1
+    assert result[0]["start_seconds"] == 225.0
+    assert result[0]["display"] == "[3:45]"
+    assert result[0]["offset"] == 4  # '视频在 ' is 4 chars (each Chinese char = 1)
+    assert result[0]["raw"] == "[3:45]"
+
+
+def test_parse_citations_multiple_mmss():
+    """Multiple markers in one response all get parsed, in order."""
+    from app.services.chat import parse_citations
+    result = parse_citations("在 [3:45] 和 [8:12] 都有提到。")
+    assert [c["start_seconds"] for c in result] == [225.0, 492.0]
+    # Offsets must be ascending.
+    assert result[0]["offset"] < result[1]["offset"]
+
+
+def test_parse_citations_hhmmss():
+    """[H:MM:SS] is converted to total seconds for > 1h videos."""
+    from app.services.chat import parse_citations
+    result = parse_citations("在 [1:23:45] 处讲解了 Opus 4.6。")
+    assert len(result) == 1
+    assert result[0]["start_seconds"] == 3600 + 23 * 60 + 45  # = 5025
+    assert result[0]["display"] == "[1:23:45]"
+
+
+def test_parse_citations_mixed_mmss_and_hhmmss():
+    """M:SS and H:MM:SS can coexist; both are extracted in source order."""
+    from app.services.chat import parse_citations
+    result = parse_citations("See [1:23] and [1:30:45] for context.")
+    assert [c["start_seconds"] for c in result] == [83.0, 3600 + 30 * 60 + 45]
+
+
+def test_parse_citations_leading_zero():
+    """[03:45] is accepted and parsed the same as [3:45]."""
+    from app.services.chat import parse_citations
+    result = parse_citations("At [03:45] we have the result.")
+    assert len(result) == 1
+    assert result[0]["start_seconds"] == 225.0
+
+
+def test_parse_citations_fractional_seconds():
+    """Fractional seconds (e.g. [1:23.5]) are preserved, not rounded to int."""
+    from app.services.chat import parse_citations
+    result = parse_citations("At [1:23.5] he paused.")
+    assert len(result) == 1
+    assert result[0]["start_seconds"] == 83.5
+
+
+def test_parse_citations_rejects_range():
+    """Ranges like [1:23-1:45] are NOT matched — the parser only
+    handles single-point timestamps. Documented in the docstring."""
+    from app.services.chat import parse_citations
+    result = parse_citations("在 [1:23-1:45] 之间讨论了 Trae。")
+    assert result == []
+
+
+def test_parse_citations_rejects_approximate():
+    """Tilde-prefixed approximations like [~1:23] are not matched."""
+    from app.services.chat import parse_citations
+    result = parse_citations("大概在 [~1:23] 左右提到了。")
+    assert result == []
+
+
+def test_parse_citations_rejects_trailing_s():
+    """[1:23s] is not matched (the LLM sometimes adds a trailing s)."""
+    from app.services.chat import parse_citations
+    result = parse_citations("At [1:23s] the speaker switched topics.")
+    assert result == []
+
+
+def test_parse_citations_rejects_invalid_minutes_or_seconds():
+    """Out-of-range values like [99:99] are silently ignored."""
+    from app.services.chat import parse_citations
+    assert parse_citations("Bad [99:99] time") == []
+    # [99:00] is also invalid because minutes must be < 60.
+    assert parse_citations("Bad [99:00] time") == []
+
+
+def test_parse_citations_ignores_unrelated_brackets():
+    """Bracket content that isn't a timestamp is not matched."""
+    from app.services.chat import parse_citations
+    result = parse_citations("Use [hello] or [cmd+s] for shortcuts.")
+    assert result == []
+
+
+def test_parse_citations_preserves_offsets_for_splicing():
+    """Each citation carries the char offset of its match start, so
+    the frontend can use it as a splice point. Verify with a known
+    string."""
+    from app.services.chat import parse_citations
+    text = "012[3:45]6789[12:34]end"
+    result = parse_citations(text)
+    assert len(result) == 2
+    # `[3:45]` starts at offset 3
+    assert result[0]["offset"] == 3
+    assert result[0]["display"] == "[3:45]"
+    # `[12:34]` starts at offset 13 (after the first citation)
+    assert result[1]["offset"] == 13
+    assert result[1]["display"] == "[12:34]"
+    assert result[1]["start_seconds"] == 12 * 60 + 34
+
+
+def test_parse_citations_ordered_by_offset():
+    """Even if a regex match would naturally produce them in source
+    order, verify the result is sorted by offset (defense in depth
+    against future regex changes)."""
+    from app.services.chat import parse_citations
+    result = parse_citations("[5:30] before [2:00] after [10:00]")
+    offsets = [c["offset"] for c in result]
+    assert offsets == sorted(offsets)

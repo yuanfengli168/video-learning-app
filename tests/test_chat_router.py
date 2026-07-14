@@ -441,3 +441,136 @@ def test_get_video_session_includes_scope(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["scope"] == "video"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Citations (MVP3.0 Part B, manualTodo [jul14] #6)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# When the AI responds with [M:SS] / [H:MM:SS] markers in a video-scope
+# chat, the response should include a structured `citations` list so the
+# frontend can render clickable seek links. Flashcard-scope chats don't
+# have a transcript to cite from, so the citations list is always empty
+# there (even if the LLM invents markers — defense in depth).
+
+
+def _create_video_session(client: TestClient) -> str:
+    """Helper: create a video-scope session for the freshly-uploaded test video."""
+    video_id = _setup_video(client)
+    with _mock_auth():
+        resp = client.post(
+            "/api/chat/video-sessions",
+            json={"video_id": video_id},
+            headers=_auth_headers(),
+        )
+    return resp.json()["session_id"]
+
+
+def test_video_scope_response_includes_empty_citations_list(client: TestClient):
+    """Video-scope response shape includes a (possibly empty) citations
+    list, even when the AI didn't cite any timestamps."""
+    session_id = _create_video_session(client)
+    with _mock_auth():
+        with patch(
+            "app.routers.chat.chat_with_ollama",
+            return_value="这是普通的中文回答，没有时间戳。",
+        ):
+            response = client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "Q?"},
+                headers=_auth_headers(),
+            )
+    assert response.status_code == 200
+    data = response.json()
+    assert "citations" in data
+    assert data["citations"] == []
+
+
+def test_video_scope_response_parses_mmss_citations(client: TestClient):
+    """A response containing [M:SS] markers returns a populated citations list."""
+    session_id = _create_video_session(client)
+    with _mock_auth():
+        with patch(
+            "app.routers.chat.chat_with_ollama",
+            return_value="视频在 [3:45] 提到 Claude Code 需要付费。",
+        ):
+            response = client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "Why?"},
+                headers=_auth_headers(),
+            )
+    data = response.json()
+    assert len(data["citations"]) == 1
+    cite = data["citations"][0]
+    assert cite["start_seconds"] == 225.0
+    assert cite["display"] == "[3:45]"
+    assert "offset" in cite
+    assert "raw" in cite
+
+
+def test_video_scope_response_parses_hhmmss_citations(client: TestClient):
+    """[H:MM:SS] markers work for > 1h videos."""
+    session_id = _create_video_session(client)
+    with _mock_auth():
+        with patch(
+            "app.routers.chat.chat_with_ollama",
+            return_value="See [1:30:45] for the deep dive.",
+        ):
+            response = client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "Show me"},
+                headers=_auth_headers(),
+            )
+    data = response.json()
+    assert len(data["citations"]) == 1
+    assert data["citations"][0]["start_seconds"] == 1 * 3600 + 30 * 60 + 45
+    assert data["citations"][0]["display"] == "[1:30:45]"
+
+
+def test_video_scope_response_parses_multiple_citations(client: TestClient):
+    """Multiple markers in one response produce a list of citations in order."""
+    session_id = _create_video_session(client)
+    with _mock_auth():
+        with patch(
+            "app.routers.chat.chat_with_ollama",
+            return_value="At [0:30] we start, and at [5:00] we pivot.",
+        ):
+            response = client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "Summary?"},
+                headers=_auth_headers(),
+            )
+    data = response.json()
+    citations = data["citations"]
+    assert len(citations) == 2
+    assert citations[0]["start_seconds"] == 30.0
+    assert citations[1]["start_seconds"] == 300.0
+    # Offsets in source order
+    assert citations[0]["offset"] < citations[1]["offset"]
+
+
+def test_flashcard_scope_response_has_empty_citations(client: TestClient):
+    """Flashcard-scope sessions (per-concept) don't get a citations
+    list — there's no transcript to cite from. Even if the AI
+    happens to write [3:45], we don't return it as a citation."""
+    video_id = _setup_video(client)
+    with _mock_auth():
+        session_resp = client.post(
+            "/api/chat/sessions",
+            json={"video_id": video_id, "concept": "RAG"},
+            headers=_auth_headers(),
+        )
+        session_id = session_resp.json()["session_id"]
+        with patch(
+            "app.routers.chat.chat_with_ollama",
+            return_value="RAG is mentioned at [10:00] in the original paper.",
+        ):
+            response = client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "Tell me more"},
+                headers=_auth_headers(),
+            )
+    data = response.json()
+    # The AI text is preserved as-is, but citations is [] for flashcard scope.
+    assert "citations" in data
+    assert data["citations"] == []

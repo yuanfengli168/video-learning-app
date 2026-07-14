@@ -1027,3 +1027,110 @@ def test_video_page_has_progress_bar_html(client: TestClient):
     assert "renderProgressBar('generate')" in response.text
     # ETA text is wired in
     assert "data.eta_text" in response.text
+
+
+def test_video_page_has_discuss_tab_and_send(client: TestClient):
+    """Video page should render the Discuss tab and its send handler.
+
+    MVP2.0 ship: the 💬 Discuss tab is the whole-video chat surface
+    where the AI sees the transcript + summary + mindmap + quiz.
+    """
+    import io
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Discuss tab button + content + send handler
+    assert "tab-discuss" in response.text
+    assert "content-discuss" in response.text
+    assert "discuss-messages" in response.text
+    assert "discuss-input" in response.text
+    assert "sendDiscussMessage()" in response.text
+    assert "startDiscussSession" in response.text
+
+
+def test_video_page_has_citation_renderer_for_discuss(client: TestClient):
+    """Video page should have the JS to render [M:SS] markers as clickable
+    links in the Discuss tab (MVP3.0 Part B, manualTodo [jul14] #6)."""
+    import io
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # The renderer + client-side fallback regex must be present so the
+    # page can still convert markers to links even if the backend's
+    # 'citations' list is missing (e.g. older messages loaded from DB).
+    assert "renderDiscussTextWithCitations" in response.text
+    # The function takes a bubble, text, and citations
+    assert "function renderDiscussTextWithCitations" in response.text
+    # We pass the backend's citations list through to the renderer
+    assert "data.citations" in response.text
+    # The fallback regex must be present. We assert on distinctive
+    # comments/strings from the renderer source rather than the regex
+    # pattern itself (the regex is built with \\d{1,2}, not literal
+    # digits, so substring matching against it is fragile).
+    assert "Client-side fallback" in response.text
+    assert "M:SS" in response.text  # comment naming the format
+    assert "H:MM:SS" in response.text  # comment naming the long form
+    assert "parseFloat" in response.text  # fractional-seconds handling
+    # The renderer must call seekTo + highlightTranscriptRange so
+    # clicking a citation jumps the video AND highlights the relevant
+    # transcript lines. (These are the same helpers the mindmap uses.)
+    assert "seekTo(mk.seconds)" in response.text
+    assert "highlightTranscriptRange" in response.text
+
+
+def test_video_page_video_system_prompt_documents_citation_format(client: TestClient):
+    """The system prompt for video-scope chats must explicitly document
+    the [M:SS] citation format so the LLM cites consistently. We assert
+    on the prompt text in app/services/chat.py because the prompt is
+    built server-side, not in the template — but the regex the prompt
+    references shows up indirectly via the renderer fallback."""
+    from app.services.chat import VIDEO_CHAT_SYSTEM_PROMPT
+    # The prompt must tell the LLM to use [M:SS] format
+    assert "[M:SS]" in VIDEO_CHAT_SYSTEM_PROMPT
+    # It must include the M:SS example shape
+    assert "[1:23]" in VIDEO_CHAT_SYSTEM_PROMPT
+    # It must include the H:MM:SS example for > 1h videos
+    assert "[1:02:45]" in VIDEO_CHAT_SYSTEM_PROMPT
+    # It must mention the requirement to quote a snippet alongside the
+    # citation so the user can verify (this is the most common LLM
+    # failure mode before this change).
+    assert "quote" in VIDEO_CHAT_SYSTEM_PROMPT.lower()
+    # It must tell the LLM not to invent timestamps when the
+    # transcript is missing
+    assert "honestly" in VIDEO_CHAT_SYSTEM_PROMPT.lower()
