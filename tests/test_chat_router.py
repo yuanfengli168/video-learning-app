@@ -574,3 +574,100 @@ def test_flashcard_scope_response_has_empty_citations(client: TestClient):
     # The AI text is preserved as-is, but citations is [] for flashcard scope.
     assert "citations" in data
     assert data["citations"] == []
+
+
+def test_video_chat_context_includes_transcript_with_proper_shape(client: TestClient):
+    """REGRESSION (manualTodo [jul14] #6): the chat prompt must
+    include the transcript text, not the "could not be parsed"
+    fallback. The original bug: `json_to_transcript()` returns a
+    wrapper dict `{"segments": [...], "language": ..., "duration": ...}`,
+    but `transcript_to_chat_text()` expects a list of segments.
+    Passing the wrapper dict straight to the helper crashed with
+    `KeyError: 0`, the exception handler triggered, and the LLM
+    got the "could not be parsed" placeholder.
+
+    This test directly invokes _build_video_chat_context (the
+    function the chat endpoint uses) with a video that has a
+    real transcript in the new format (wrapper dict). If the bug
+    regresses, the prompt contains the fallback string and this
+    test fails loudly.
+    """
+    from app.database import SessionLocal
+    from app.models import Asset
+    from app.routers.chat import _build_video_chat_context
+
+    video_id = _setup_video(client)
+    transcript_json = (
+        '{"segments": ['
+        '{"start": 0.0, "end": 5.0, "text": "Hello everyone."},'
+        '{"start": 5.0, "end": 10.0, "text": "Today we discuss AI."},'
+        '{"start": 10.0, "end": 15.0, "text": "Let us begin."}'
+        '], "language": "en", "duration": 15.0}'
+    )
+    with SessionLocal() as db:
+        # Upsert the transcript asset (test_video helper doesn't
+        # create one because the auto-pipeline is mocked).
+        existing = db.query(Asset).filter_by(
+            video_id=video_id, asset_type="transcript"
+        ).first()
+        if existing:
+            existing.content = transcript_json
+        else:
+            db.add(Asset(
+                video_id=video_id, asset_type="transcript",
+                content=transcript_json,
+            ))
+        db.commit()
+        video = db.get(__import__("app.models").models.Video, video_id) if False else None
+        # Reload via SQLAlchemy to bypass identity map
+        from app.models import Video
+        video = db.get(Video, video_id)
+        prompt = _build_video_chat_context(db, video)
+
+    # The transcript must be present in the prompt as actual
+    # timestamped lines, not as the fallback message.
+    assert "[00:00] Hello everyone." in prompt, (
+        "transcript was not included in the prompt — "
+        "the json_to_transcript -> transcript_to_chat_text "
+        "shape mismatch bug regressed"
+    )
+    assert "[00:05] Today we discuss AI." in prompt
+    assert "could not be parsed" not in prompt
+    assert "couldn't read it" not in prompt
+
+
+def test_video_chat_context_logs_transcript_parse_failure(client: TestClient):
+    """When the transcript Asset's content is genuinely malformed
+    JSON, _build_video_chat_context should return the fallback
+    message (so the LLM knows the transcript is broken) AND log
+    the error so the developer can see what went wrong.
+
+    This locks the manualTodo [jul14] #6 contract: the user gets
+    an honest answer, the developer gets a server log, and the
+    AI doesn't hallucinate an explanation.
+    """
+    from app.database import SessionLocal
+    from app.models import Asset, Video
+    from app.routers.chat import _build_video_chat_context
+
+    video_id = _setup_video(client)
+    with SessionLocal() as db:
+        # Insert genuinely-broken JSON (missing closing brace)
+        existing = db.query(Asset).filter_by(
+            video_id=video_id, asset_type="transcript"
+        ).first()
+        if existing:
+            existing.content = '{"segments": [{"start": 0, "end": 1, "text": "x"'
+        else:
+            db.add(Asset(
+                video_id=video_id, asset_type="transcript",
+                content='{"segments": [{"start": 0, "end": 1, "text": "x"',
+            ))
+        db.commit()
+        video = db.get(Video, video_id)
+        prompt = _build_video_chat_context(db, video)
+
+    # The fallback message must be in the prompt so the LLM can
+    # tell the user "re-transcribe the video".
+    assert "could not be parsed" in prompt
+    assert "re-transcribe" in prompt.lower()

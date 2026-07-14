@@ -281,7 +281,19 @@ def _build_video_chat_context(db: Session, video: Video) -> str:
     transcript_asset = by_type.get("transcript")
     if transcript_asset and transcript_asset.content:
         try:
-            segments = json_to_transcript(transcript_asset.content)
+            # json_to_transcript() returns a wrapper dict
+            # `{"segments": [...], "language": ..., "duration": ...}`. We
+            # only need the segments list for the LLM context, so
+            # extract it explicitly. Passing the wrapper dict straight
+            # to transcript_to_chat_text() would crash with KeyError: 0
+            # (the helper iterates the input expecting a list of
+            # segments) — this was the bug behind manualTodo [jul14] #6.
+            transcript_obj = json_to_transcript(transcript_asset.content)
+            segments = (
+                transcript_obj.get("segments")
+                if isinstance(transcript_obj, dict)
+                else transcript_obj
+            )
             transcript_text = transcript_to_chat_text(segments)
         except Exception as exc:
             # Bad JSON in the DB — log it for the developer AND give
