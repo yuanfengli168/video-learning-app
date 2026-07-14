@@ -1134,3 +1134,69 @@ def test_video_page_video_system_prompt_documents_citation_format(client: TestCl
     # It must tell the LLM not to invent timestamps when the
     # transcript is missing
     assert "honestly" in VIDEO_CHAT_SYSTEM_PROMPT.lower()
+
+
+def test_video_page_switchTab_hides_all_five_panels(client: TestClient):
+    """REGRESSION (MVP2.0.2 hotfix, see doc/MVP2.0-Status.md §17):
+    switchTab() must hide ALL FIVE tab panels (summary, flashcards,
+    quiz, mindmap, discuss) before showing the selected one. The
+    original bug: the forEach iterated over only the first four
+    panels, so clicking any tab while Discuss was open left the
+    Discuss panel visible underneath the new tab's content. Users
+    saw two panels at once — classic single-select tab violation.
+
+    This test reads the source of the page and asserts the
+    forEach loop includes 'discuss'. A more thorough test would
+    run the JS in a headless browser, but reading the source is
+    enough to catch the off-by-one mistake that introduced the
+    bug. The fix is to add 'discuss' to the iteration list.
+    """
+    import io
+    with _mock_auth():
+        course_resp = client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    # Extract the switchTab function body so we can assert on the
+    # forEach list specifically (and not be fooled by other arrays
+    # in the page source).
+    import re
+    m = re.search(
+        r"function\s+switchTab\s*\([^)]*\)\s*\{(.+?)\n\}",
+        response.text,
+        re.DOTALL,
+    )
+    assert m, "switchTab function not found in video.html"
+    body = m.group(1)
+    # The forEach must iterate over all five tabs, including 'discuss'.
+    # Match the array literal in the forEach call.
+    for_each = re.search(
+        r"\[\s*['\"]([a-z]+)['\"]([^]]*)\]\s*\.forEach",
+        body,
+    )
+    assert for_each, "forEach call not found in switchTab"
+    items_str = for_each.group(0)
+    # Collect every 'tab' or "tab" string in the forEach literal
+    items = re.findall(r"['\"]([a-z]+)['\"]", for_each.group(1) + for_each.group(0))
+    expected = {"summary", "flashcards", "quiz", "mindmap", "discuss"}
+    assert expected.issubset(set(items)), (
+        f"switchTab's forEach is missing one or more tabs. "
+        f"Found: {sorted(set(items))}, expected subset: {sorted(expected)}. "
+        "Adding 'discuss' fixes the multi-panel rendering bug."
+    )
