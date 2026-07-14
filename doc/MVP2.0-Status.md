@@ -556,3 +556,92 @@ entry. ~720 insertions across the feature.
 - Semantic search — "find the part about Opus" rather than a
   specific timestamp. This is a different feature (would need
   transcript vectorization) and is a separate MVP3+ item.
+
+## 16. 2026-07-14 — Transcript parse fix (hotfix, follow-up to §15)
+
+> User verification caught a real bug: even after the §15 fix
+> added the "could not be parsed" fallback message, the AI was
+> still saying the transcript couldn't be parsed on a video
+> where the transcript was perfectly valid. Commit `08175d6`.
+
+### Root cause
+
+`_build_video_chat_context` had this code path:
+
+```python
+transcript_obj = json_to_transcript(transcript_asset.content)
+transcript_text = transcript_to_chat_text(transcript_obj)
+```
+
+But `json_to_transcript()` returns a **wrapper dict**
+`{"segments": [...], "language": ..., "duration": ...}`, while
+`transcript_to_chat_text()` expects a **list of segments**. The
+helper tried to do `segments[0]`, which raised `KeyError: 0`.
+The exception handler caught it and substituted the fallback
+message — so the AI always saw "could not be parsed" for every
+video, even when the transcript was fine.
+
+This bug existed before the §15 fix (it was the **root cause**
+of the original "AI says transcript is broken" complaint from
+the user). My §15 fix made the failure visible (better log
+message, clearer LLM-facing text) but did NOT fix the underlying
+shape mismatch.
+
+### Fix
+
+Extract `.segments` from the wrapper dict before passing it to
+the helper:
+
+```python
+transcript_obj = json_to_transcript(transcript_asset.content)
+segments = (
+    transcript_obj.get("segments")
+    if isinstance(transcript_obj, dict)
+    else transcript_obj
+)
+transcript_text = transcript_to_chat_text(segments)
+```
+
+Verified end-to-end with the user's actual video
+(`de3e5a8c-3da8-4a2e-982d-ee5ce14faaf4`): the system prompt
+now contains the real `[00:00] 各位同学,大家好...` transcript
+lines instead of the fallback message.
+
+### Regression tests added (2 new, 525 total)
+
+- `test_video_chat_context_includes_transcript_with_proper_shape` —
+  feeds a real transcript and asserts the prompt contains the
+  actual lines. **This test would have caught the original bug.**
+- `test_video_chat_context_logs_transcript_parse_failure` —
+  feeds genuinely-broken JSON and asserts the fallback
+  message is in the prompt. Catches the "silent failure"
+  regression (where the helper starts swallowing errors
+  again).
+
+### Lesson
+
+When the AI "hallucinated" an explanation for the transcript
+not being parseable, it was actually being **lied to** by the
+backend (which had been silently broken for some time — this
+shape mismatch predates the §15 fix). The §15 fix exposed
+the failure mode but didn't fix it. This is a good reminder
+that **the exception-handler should not be the only defense**:
+when a parser has a known data shape, the call site should
+match it, and the exception handler should be reserved for
+truly unexpected errors.
+
+### Impact
+
+After the user starts a **new** chat session on this video
+(system prompt is built fresh at session creation), the AI
+will:
+1. See the actual transcript with `[M:SS]` markers
+2. Be able to cite specific moments in response to the user's
+   questions (e.g. "工具简介 covered at [0:00] in the video")
+3. Each citation will render as a clickable button that seeks
+   the video to that time (the §15 UI feature)
+
+The previous chat session still has the old (broken) system
+prompt in its DB row, so the user will need to start a new
+session to see the fix. This is by design — we don't want to
+silently rewrite session history.
