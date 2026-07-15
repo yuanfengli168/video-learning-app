@@ -39,19 +39,41 @@ deleted after 30 days, or manually deleted in the trash folder empty all button 
 
 [jul11]
 1. mvp2 main name: ---> MVP2.0: bulkUploads and LLMonTransciptsMaterials
-2. mvp3 main name: ---> MVP3.0: optimize performance and prompt engineering etc, with Jira creation (MCP)
-3. bug: 4 gb not able to proceed
+2. mvp3 main name: ---> MVP3.0: optimize performance and prompt engineering etc, with Jira creation (MCP) + OCR (smart OCR -> 
+                                detect informative slides/pages/screenshot, combine screenshots to only the most informative one and 
+                                apply this single one over the minutes)
+                                This OCR will be a separate repo that is private and will be a paid version, only paid user can use 
+                                these.
+3. mvp4: (OCR, Agent (cronjobs, smart analysis of your schedule, mobile version works as well. mobile version only share texts, no videos, no image) )
+    - optimize all functions in previous MVPs, such as transfer webm to mp4 etc 
+    - optimize prompt, and adding guardrail to make sure things always generate the same when using default
+    - Add Donation page
+    - Add Paid method for OCR function, for unblocking detection algorithm, and unblocking faster way for mlx-based acceleration
+    - Agentic behavior: cron jobs, auto insert on MCP, auto browsing web, 
+    - smart dynamic adjust, each day are different, if today busy tomorrow have more cron job, or even push the deadline a few days 
+    - logging, shared, or hosted database storage. (otherwise mobile won't see anything from your Desktop version).
+4. mvp5: 
+    - behavior analysis, for all your delays, all your morning/nigh owl behavior 
+5. 
+
+
+
+
+
+
+3. [done in mvp2]bug: 4 gb not able to proceed
 4. video bar can't manually see the end of 2 hours, webmw style not liked
---5. How can we speed up the performance for Transcribe generation and materials generalization?
--- 6. I need a note section as well, can do markdown for now, but also need markdown preview function, but should 
+--5. [done in mvp2] How can we speed up the performance for Transcribe generation and materials generalization?
+  -- 
+--[postponing it to later MVP, as of now we can use other tools like Notion, googleDoc， LarkDoc etc] 6. I need a note section as well, can do markdown for now, but also need markdown preview function, but should 
 we just embed a api? like Notion, etc into the page, but just save data into our databases?
 -- 7. can you draw data flow chart of all functions in our app?
--- 8. can we add a small feature on how many hours, and minutes a pending finally turned to ready when we open the section, 
+--[fixed, and pushed, in mvp2.0] 8. can we add a small feature on how many hours, and minutes a pending finally turned to ready when we open the section, 
 like beside ready - done in 09:08 means from generating to ready, it used 9 minutes and 8 seconds
 
 [july14]:
 1. logout but still can see summary
-2. where is the remove button of single video page?
+2. [fixed, and pushed, in mvp2.0] where is the remove button of single video page?
 3. why I moved the repo, but the video need to readd, reupload?
 4. can we add a new function called transfer webm to MP4, but not as part of the main functions 
 5. are we able to do some Foundation Models? 
@@ -64,4 +86,6 @@ like beside ready - done in 09:08 means from generating to ready, it used 9 minu
     3. (MVP3.0) the OCR, with a full picture for a whole time range of this whole picture.
 8. the time beside each video should between begin to read, not queued to ready. (in future should be configurable)
 9. not sure why but the number in front of the videos are added by one from the begining, so now the first video is always from 02-....
-10. where is the Chat session that have all transcript, material infomation and I can ask? where does this go? I remember we developed this
+10. [fixed, and pushed, in mvp2.0]where is the Chat session that have all transcript, material infomation and I can ask? where does this go? I remember we developed this
+11. if user ask a question, and asked things, then a link in the chat can direct user to the related part of sentences like 
+    mindmap did would be great.
