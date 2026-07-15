@@ -922,3 +922,96 @@ tautology.
 
 532 → 540 (+8 new tests, all passing; 0 regressions in the
 rest of the suite).
+
+## 20. 2026-07-15 — MVP2.0 sign-off + logout still sees summary (MVP2.0.6)
+
+> **🎉 MVP2.0 is officially closed.** All 6 sub-versions
+> (2.0.0, 2.0.0a, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5) are
+> shipped and pushed to `main` via branch `MVP2.0`. The
+> 2.0.6 fix below is a post-close hotfix for the
+> "logout but still sees summary" UX bug that was
+> standing in the way of MVP2.0 being truly done.
+
+### MVP2.0 final state
+
+- **Branch:** `MVP2.0` is 70+ commits ahead of `main`, all
+  pushed.
+- **Tests:** 543/543 passing, 87% coverage.
+- **Versions:** 2.0.0 → 2.0.6 all in CHANGELOG.md.
+- **Post-MVP2.0 backlog:** see the discussion in §19 for the
+  next-up items (collapse/expand on video page, plugin
+  tools, soft-delete, etc.) and the deferred MVP2.1
+  (background worker pool with throttle=3, own branch).
+
+### Item #1 — Logout still sees summary (MVP2.0.6 hotfix)
+
+> User feedback: "logout but still can see summary" (manualTodo
+> [jul14] #1). Reported as a P2 in the post-MVP2.0 backlog;
+> upgraded to a blocker once we decided to call MVP2.0 done.
+
+#### The bug
+
+The `SessionExpiryMiddleware` (added in MVP2.0 #7) detects
+*present-but-invalid* cookies on protected SSR routes
+(`/course/`, `/video/`, `/chat-history`) and redirects to
+`/?session=expired`. But it let *absent* cookies through
+— assuming the page would render a "Sign in" prompt like
+the dashboard does. The dashboard's "Sign in" prompt works
+because the dashboard is the public landing page; the OTHER
+protected routes don't have a sign-in prompt in their
+template. So a user who logged out and then hit a deep
+link (e.g. browser bookmark, link from a friend) would see
+a half-rendered page with no data and no explanation.
+
+#### The fix
+
+In `app/middleware_session.py`, the `dispatch()` method now
+treats an absent cookie on a *non-dashboard* protected
+route the same as a present-but-invalid cookie: redirect
+to `/?session=expired`. The dashboard's special case
+(anonymous visits render the "Sign in" prompt) is
+preserved. ~5 lines of code change.
+
+#### The fallout
+
+Adding the redirect for absent cookies broke **58 existing
+tests** that didn't set a cookie when hitting protected
+routes — they relied on the old "no cookie = pass
+through" behavior. The fix at the test level was twofold:
+
+1. **Update `tests/conftest.py` `client` fixture** to set
+   a default valid session cookie, so tests that don't
+   care about the cookie state just work.
+2. **Patch `verify_token` at all three namespaces where
+   it's bound** (`app.auth.firebase_admin`,
+   `app.middleware_session`, `app.auth.dependencies`) —
+   Python's `from X import Y` binds the name in the
+   importer's namespace at import time, so later patches
+   to X.Y don't reach the importer. This is a common
+   testing gotcha that's worth documenting for future
+   contributors.
+3. **Add `client.cookies.clear()`** to the ~12 tests that
+   explicitly test the no-cookie path (auth tests, the
+   three new middleware tests, switch-accounts tests).
+
+#### Tests
+
+- 3 new tests in `test_session_expiry_middleware.py` (one
+  per protected route).
+- 1 new test asserting the dashboard's anonymous-friendly
+  behavior is preserved.
+- All 543 tests pass.
+
+The fix is verified to fail when the redirect is removed
+(regression test catches the bug).
+
+### Why this fix ships as 2.0.6 (not 2.1)
+
+It's a one-line middleware change with a follow-up test
+fixture update. No new features, no schema changes, no
+new endpoints. By the skill-commit convention (Part A,
+Part B, stale doc upgrade), this is the smallest
+shippable unit. Calling it 2.0.6 keeps the changelog
+honest about scope and makes it easy to revert if it
+breaks anything in production.
+

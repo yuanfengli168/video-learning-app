@@ -456,3 +456,51 @@ through.
      upload endpoint without using the helper.
 
 [2.0.5]: https://github.com/yuanfengli168/video-learning-app/compare/5bd11a4...HEAD
+
+## [2.0.6] - 2026-07-15 — Logout still sees summary (manualTodo [jul14] #1)
+
+🐛 **Bug fix.** When a user logged out (or had no session
+cookie), hitting a deep link like `/video/{id}`,
+`/course/{id}`, or `/chat-history` would render the page
+shell but every data API call silently 401'd in the
+background. The user saw a "phantom" page with no
+explanation.
+
+**Proven result:** an anonymous user can no longer see a
+half-rendered video page. They get redirected to the
+dashboard with the existing "session expired" toast, which
+makes the issue visible instead of silent.
+
+### 🐛 Bug fixes
+
+- **Phantom SSR pages on protected routes** — the
+  `SessionExpiryMiddleware` previously only redirected
+  *present-but-invalid* cookies. Anonymous visits (no
+  cookie) were let through, and the page rendered a
+  half-broken shell. Now they redirect to
+  `/?session=expired` like the expired-cookie case. The
+  dashboard's special-case ("anonymous visitors see the
+  Sign in prompt") is preserved. Manual todo [jul14] #1
+  "logout but still can see summary".
+
+### 🧪 Tests
+
+- 543 passing (was 540, +3 new tests in
+  `tests/test_session_expiry_middleware.py`):
+  1. `test_protected_video_route_with_no_cookie_redirects` —
+     `/video/{id}` with no cookie now redirects.
+  2. `test_protected_course_route_with_no_cookie_redirects` —
+     `/course/{id}` with no cookie now redirects.
+  3. `test_protected_chat_history_route_with_no_cookie_redirects` —
+     `/chat-history` with no cookie now redirects.
+- `test_dashboard_with_no_cookie_is_not_redirected` (new
+  positive-case test) — verifies the dashboard still lets
+  anonymous visitors through (they see the "Sign in" prompt).
+- Updated `tests/conftest.py` `client` fixture to set a
+  default valid session cookie, so all existing tests that
+  exercise protected routes keep working. Tests that
+  explicitly test the no-cookie path (the 4 new ones above
+  + 2 existing ones) call `client.cookies.clear()` to
+  override the default.
+
+[2.0.6]: https://github.com/yuanfengli168/video-learning-app/compare/eaf32d4...HEAD

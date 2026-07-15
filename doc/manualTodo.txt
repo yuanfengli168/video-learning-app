@@ -1,5 +1,5 @@
 [jul092026] 
-1. smart, always all not working properly, need a stop, like not move at all thing, only
+1.[ignore please] smart, always all not working properly, need a stop, like not move at all thing, only
 stop at the first line selected
 2. looks like the prompt for glm5.2 for longer video have less mindmap nodes, need to manually make sure
     - example that in 2 miinutes there are 4 but in 12minte (first 2minute are same) then less nodes
@@ -12,8 +12,8 @@ Done 4.2: can we add number in front of the video with 2. ..... for filename?
 
 
 【jul10】
-5. we also don't have delete button on the video page to delete it, is this hard to add it?
-6. I got question on this quiz, but no way to ask why based on the transcript of video and ocr information on video.
+5. [done]we also don't have delete button on the video page to delete it, is this hard to add it?
+6.[done] I got question on this quiz, but no way to ask why based on the transcript of video and ocr information on video.
 ```
 5. 安装新 Skill 后，AI 模型有时不会自动调用，应该怎么做？
 
@@ -29,12 +29,12 @@ I wanted to ask:
 so need somewhere on video page to ask questions on all trascript of the current video, the current materials like mindmap, quiz (and its answers etc) we can discuss
 
 
---7. 为什么有的时候generated materials 是中文，有的时候是英文？ 我觉得应该consistancy, or can generate 2 versions etc, or just translate etc
+--7. [looks ok now, ]为什么有的时候generated materials 是中文，有的时候是英文？ 我觉得应该consistancy, or can generate 2 versions etc, or just translate etc
     - should based on language of video
     - can you show me the prompt you send to generate each material?
 
-8. can we delete the video quickly on section page and on video page and when delete the thing moved to trash folder, and will be permanently
-deleted after 30 days, or manually deleted in the trash folder empty all button etc, and can have restore button in trash bin
+8. [done]can we delete the video quickly on section page and on video page and when delete the thing moved to trash folder, and will be permanently
+8.2: [postpone to other mvp]deleted after 30 days, or manually deleted in the trash folder empty all button etc, and can have restore button in trash bin
 
 
 [jul11]
@@ -44,6 +44,7 @@ deleted after 30 days, or manually deleted in the trash folder empty all button 
                                 apply this single one over the minutes)
                                 This OCR will be a separate repo that is private and will be a paid version, only paid user can use 
                                 these.
+2.2 remove all UI, and just commented out all distll related model, and smart picks in UI, and now add what we added these days, I remeber it is called what, sorry fogot
 3. mvp4: (OCR, Agent (cronjobs, smart analysis of your schedule, mobile version works as well. mobile version only share texts, no videos, no image) )
     - optimize all functions in previous MVPs, such as transfer webm to mp4 etc 
     - optimize prompt, and adding guardrail to make sure things always generate the same when using default
@@ -72,10 +73,11 @@ we just embed a api? like Notion, etc into the page, but just save data into our
 like beside ready - done in 09:08 means from generating to ready, it used 9 minutes and 8 seconds
 
 [july14]:
-1. logout but still can see summary
+1. [done, mvp2.0.6]logout but still can see summary
+0. add a collapse and expand courses/items in each video page, so no need to jump to sections pages for all content on section, can change video from video easily, should also have asc, and desc by name function etc.
 2. [fixed, and pushed, in mvp2.0] where is the remove button of single video page?
 3. why I moved the repo, but the video need to readd, reupload?
-4. can we add a new function called transfer webm to MP4, but not as part of the main functions 
+4. [postpone to mvp 5 for optimization]can we add a new function called transfer webm to MP4, but not as part of the main functions 
 5. are we able to do some Foundation Models? 
 6. read the paper of Revolute
 7. MVP3. OCR (which will be another thing in pipeline), now we have 
@@ -87,5 +89,18 @@ like beside ready - done in 09:08 means from generating to ready, it used 9 minu
 --[fixed, and pushed, in mvp2.0.4] 8. the time beside each video should between begin to read, not queued to ready. (in future should be configurable)
 9. not sure why but the number in front of the videos are added by one from the begining, so now the first video is always from 02-....
 10. [fixed, and pushed, in mvp2.0]where is the Chat session that have all transcript, material infomation and I can ask? where does this go? I remember we developed this
-11. if user ask a question, and asked things, then a link in the chat can direct user to the related part of sentences like 
+11. [done]if user ask a question, and asked things, then a link in the chat can direct user to the related part of sentences like 
     mindmap did would be great.
+
+
+```
+🎯 The order
+#	Item	Branch	Effort	Risk
+1	Logout still sees summary	MVP2.0 (hotfix)	1-2h	Low
+0	Collapse/expand on video page (frontend only)	MVP2.0	~½ day	Very low
+2.2	Remove smart picks; name the turbo	MVP2.0	~1h	Low
+4	Plugin Tools tab + WebM→MP4	MVP2.0 (or MVP2.1-plugins)	2-3 days	Low
+5	Worker pool, throttle=3, configurable	MVP2.1 (new branch, last)	1-2 weeks (option A: 1-2 days)	Medium
+Total for the 4 MVP2.0+ items: ~3-4 days. MVP2.1 (worker pool) starts after.
+
+```
