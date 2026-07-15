@@ -127,6 +127,18 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "language",
         "ALTER TABLE videos ADD COLUMN language VARCHAR(8)",
     ),
+    # MVP2.0.4 — transcribe_started_at. Stamped at the top of
+    # _run_transcribe_job (BEFORE whisper loads) so that
+    # transcribed_at - transcribe_started_at gives the actual
+    # transcribe duration WITHOUT queue-wait time. Nullable so
+    # legacy rows (uploaded before MVP2.0.4) keep working — the
+    # course page template falls back to the old
+    # generated_at - created_at formula for those.
+    (
+        "videos",
+        "transcribe_started_at",
+        "ALTER TABLE videos ADD COLUMN transcribe_started_at DATETIME",
+    ),
 ]
 
 

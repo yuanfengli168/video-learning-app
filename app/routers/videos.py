@@ -462,6 +462,20 @@ def _run_transcribe_job(video_id: str, model_choice: str) -> None:
                 db.commit()
             return
 
+        # MVP2.0.4 — stamp transcribe_started_at NOW (BEFORE whisper
+        # loads and the model runs). This is the moment this video's
+        # transcribe worker actually began work, AFTER any queue wait
+        # for prior videos in the same bulk upload. Combined with
+        # transcribed_at (stamped at the end), this lets the course
+        # page show the true per-video transcribe duration instead of
+        # the wall-clock-from-upload time (which previously included
+        # the queue wait and made video #34 of a 34-video batch
+        # show "36:55" instead of its real ~55s processing time).
+        # Re-stamped on every fresh transcribe run (manual retry,
+        # etc.) so the duration always reflects the most recent
+        # transcribe work for this video.
+        video.transcribe_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
         set_progress(
             job, done=5, total=100,
             message=f"Transcribing with '{model_choice}'...",

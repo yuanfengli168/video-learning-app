@@ -126,6 +126,19 @@ class Video(Base):
     # rows (videos uploaded before MVP3.0) and for videos still in flight.
     # Stored as naive UTC (consistent with created_at) so SQLAlchemy +
     # SQLite don't choke on tzinfo serialization.
+    # MVP2.0.4 — added transcribe_started_at (the moment this video's
+    # transcribe worker FIRST began work, i.e. AFTER any queue wait
+    # for prior videos in the same batch). Stamped at the very top
+    # of _run_transcribe_job, before whisper loads. Combined with
+    # transcribed_at + generated_at this gives us:
+    #   transcribe duration = transcribed_at - transcribe_started_at
+    #   generate duration   = generated_at - transcribed_at
+    # both per-video (no queue wait included), and the course page
+    # renders them as "T:0:55, G:0:44" beside the status badge.
+    # Nullable for legacy rows (existing rows have NULL and the
+    # template falls back to the old generated_at - created_at
+    # formula so the badge still shows *something*).
+    transcribe_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     transcribed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
