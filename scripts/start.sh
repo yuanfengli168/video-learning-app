@@ -55,4 +55,17 @@ echo "  ⏹️  Press Ctrl+C to stop"
 echo ""
 
 # Tee to log file so we can debug 500s after the terminal is gone
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 2>&1 | tee -a "$LOG_FILE"
+#
+# h11_max_incomplete_event_size: h11's internal receive buffer defaults
+# to 16 KB. When a browser uploads a large multipart body (e.g. bulk
+# upload of 3+ files at 1+ GB), the buffer can briefly exceed 16 KB
+# between next_event() calls, which triggers h11.RemoteProtocolError.
+# uvicorn catches that and returns a plain-text 400 "Invalid HTTP
+# request received." — which the frontend JSON-parses and surfaces as
+# the cryptic "Bulk upload error: Unexpected token I in JSON at
+# position 0". We bump the limit to 64 MB so the buffer is never the
+# bottleneck for realistic upload sizes (10 GB max per file, well
+# under 64 MB). See doc/MVP2.0-Status.md §19 for the postmortem.
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 \
+    --h11-max-incomplete-event-size 67108864 \
+    2>&1 | tee -a "$LOG_FILE"

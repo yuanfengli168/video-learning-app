@@ -150,6 +150,33 @@
             return div.innerHTML;
         }
 
+        // Safely parse a fetch() response as JSON, falling back to
+        // plain text if the response isn't JSON. Returns a promise of
+        // {ok, status, data} where data is either the parsed JSON
+        // object or {detail: <text-content>}. The server should
+        // always return JSON (we have a global exception handler in
+        // main.py for that), but if uvicorn or a proxy returns plain
+        // text (e.g. "Invalid HTTP request received." for an h11
+        // buffer overflow on huge multipart bodies), the user used
+        // to see a cryptic "Unexpected token I in JSON at position
+        // 0" error. This helper turns that into a readable message.
+        // See doc/MVP2.0-Status.md §19 for the postmortem.
+        async function safeJsonParse(resp) {
+            const contentType = resp.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                const data = await resp.json().catch(() => ({ detail: null }));
+                return { ok: resp.ok, status: resp.status, data };
+            }
+            // Non-JSON response (plain text or HTML). Truncate to
+            // 200 chars to keep the alert readable.
+            const text = await resp.text().catch(() => '');
+            return {
+                ok: resp.ok,
+                status: resp.status,
+                data: { detail: text.slice(0, 200) || '(empty response body)' },
+            };
+        }
+
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebar-overlay');

@@ -173,8 +173,12 @@ async function createCourse(e) {
     if (resp.ok) {
         location.reload();
     } else {
-        const err = await resp.json();
-        alert('Failed to create course: ' + (err.detail || 'Unknown error'));
+        // Use safeJsonParse so plain-text 4xx/5xx responses
+        // (e.g. from uvicorn/h11) don't crash the alert with a
+        // cryptic "Unexpected token..." error. See base.html
+        // safeJsonParse and doc/MVP2.0-Status.md §19.
+        const { data } = await safeJsonParse(resp);
+        alert('Failed to create course: ' + (data.detail || 'Unknown error'));
     }
 }
 // Dashboard upload — uploads to the section picked in the dropdown.
@@ -198,7 +202,7 @@ function uploadToSection(sectionId, file) {
         method: 'POST',
         body: form,
     })
-    .then(resp => resp.json().then(data => ({ok: resp.ok, data})))
+    .then(resp => safeJsonParse(resp))
     .then(({ok, data}) => {
         if (ok) {
             if (status) {
@@ -239,11 +243,12 @@ function uploadMultipleToSection(sectionId, files) {
     const form = new FormData();
     for (const f of files) form.append('files', f);
     fetch('/api/videos/upload-bulk/' + sectionId, { method: 'POST', body: form })
-    .then(resp => resp.json().then(data => ({ ok: resp.ok, data })))
+    .then(resp => safeJsonParse(resp))
     .then(({ ok, data }) => {
         if (!status) return;
         if (!ok) {
-            status.textContent = `❌ Bulk upload failed: ${data.detail || 'Unknown error'}`;
+            const detail = data && data.detail ? data.detail : 'Unknown error (no detail from server)';
+            status.textContent = `❌ Bulk upload failed (server): ${detail}`;
             status.className = 'mt-2 text-xs text-red-500 dark:text-red-400 min-h-[1rem]';
             return;
         }
@@ -263,7 +268,10 @@ function uploadMultipleToSection(sectionId, files) {
     })
     .catch(err => {
         if (status) {
-            status.textContent = `❌ Bulk upload error: ${err.message}`;
+            // Network error (server unreachable, CORS, etc.) — the
+            // request never even got a response. Show the network
+            // error so the user knows it's not the app's fault.
+            status.textContent = `❌ Bulk upload error (network): ${err.message}`;
             status.className = 'mt-2 text-xs text-red-500 dark:text-red-400 min-h-[1rem]';
         }
     });

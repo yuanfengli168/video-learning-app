@@ -267,25 +267,25 @@ async function uploadVideo(sectionId, input) {
         const form = new FormData();
         form.append('file', files[0]);
         const resp = await fetch('/api/videos/upload/' + sectionId, { method: 'POST', body: form });
-        if (resp.ok) {
-            const data = await resp.json();
+        const { ok, data } = await safeJsonParse(resp);
+        if (ok) {
             window.location.href = '/video/' + data.video_id;
         } else {
-            alert('Upload failed: ' + (await resp.json()).detail);
+            alert('Upload failed: ' + (data.detail || 'Unknown error'));
         }
     } else {
         // Multiple files: use bulk endpoint and reload to show results
         const form = new FormData();
         for (const f of files) form.append('files', f);
         const resp = await fetch('/api/videos/upload-bulk/' + sectionId, { method: 'POST', body: form });
-        if (resp.ok) {
-            const data = await resp.json();
+        const { ok, data } = await safeJsonParse(resp);
+        if (ok) {
             const msg = `Queued: ${data.queued}, Skipped: ${data.skipped}.`
                 + (data.skipped > 0 ? '\n\nSkipped files:\n' + data.results.filter(r => r.status === 'skipped').map(r => `${r.filename}: ${r.error}`).join('\n') : '');
             alert(msg);
             location.reload();
         } else {
-            alert('Bulk upload failed: ' + (await resp.json()).detail);
+            alert('Bulk upload failed: ' + (data.detail || 'Unknown error'));
         }
     }
 }
