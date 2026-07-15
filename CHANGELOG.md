@@ -602,8 +602,9 @@ back to course → click video #3).
 
 - **Section-videos panel on the video page** — collapsible
   `<details>` element above the tabs. Each video shows
-  its title, status badge, and the new per-step timing
-  badge (T:..., G:...) from §18.
+  its title, status badge, and a link to its video page.
+  The user clicks any video in the list to switch to it in
+  1 click (no need to navigate back to the course page).
 - **Sort dropdown** — 4 options: Name ↑, Name ↓, Date
   ↑, Date ↓. Client-side sort using pre-computed
   `data-sort-key` (natural sort, e.g. "1. intro" before
@@ -613,6 +614,31 @@ back to course → click video #3).
 - **Current-video highlight** — the playing video has
   `bg-indigo-50` + `border-l-4 border-indigo-500` in the
   panel list. The user never gets lost.
+
+### 📝 Amendment (2026-07-15, same day)
+
+User feedback right after the 2.0.8 ship: the panel is
+for **quick context switching**, not status reporting. The
+per-step timing badge (`T:0:55, G:0:44`, from §18) is
+**removed from the panel** — the user only needs the plain
+status word (`ready` / `error` / `transcribing` / etc.) to
+decide which video to click. The timing badge is kept
+on the **course page** (where users scan the full section
+and want to see processing times) — see
+`app/templates/course.html:74`. Same-version amendment;
+no version bump.
+
+- **Panel status badge is plain** — just the status
+  word. No `T:..., G:...` suffix.
+- **Course page status badge is unchanged** — still
+  shows the per-step timing when available.
+- New regression test
+  `test_section_videos_panel_omits_per_step_timing_badge`
+  verifies the panel doesn't render `T:` / `G:`.
+- Companion test
+  `test_course_page_still_shows_per_step_timing_badge`
+  guards against an over-zealous cleanup that might
+  also strip the badge from the course page.
 
 ### Implementation notes
 
@@ -634,8 +660,8 @@ back to course → click video #3).
 
 ### 🧪 Tests
 
-- 550 passing (was 540, +10 new tests in
-  `tests/test_video_page_section_panel.py`):
+- 552 passing (was 540, +12 new tests in
+  `tests/test_video_page_section_panel.py`:
   1. `test_section_videos_panel_renders` — the panel
      `<details>` element is present.
   2. `test_section_videos_panel_shows_all_videos` — the

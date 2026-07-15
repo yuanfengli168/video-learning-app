@@ -1178,18 +1178,74 @@ leave it to do common tasks.
   panel + the JS functions (`sortSectionVideos`,
   `applyStoredSectionStateOnLoad`, the localStorage
   helpers). ~110 lines of HTML + ~80 lines of JS.
-- `tests/test_video_page_section_panel.py` — 10 new
+  **22.1 amendment**: removed the per-step timing
+  suffix from the panel's status badge (kept on
+  the course page).
+- `tests/test_video_page_section_panel.py` — 12 new
   tests covering the panel rendering, sort dropdown,
-  current-video highlight, data attributes, and the
-  JS function presence.
+  current-video highlight, data attributes, the
+  JS function presence, AND the timing-badge
+  amendment (panel omits, course page keeps).
 
 No backend changes, no model changes, no migration,
 no new endpoint. Pure frontend work as requested.
 
 ### Tests
 
-- 540 → 550 (+10 new tests in
+- 540 → 552 (+12 new tests in
   `tests/test_video_page_section_panel.py`).
-- 7 of the 10 tests are verified to FAIL when the
-  panel is removed (regression coverage is solid).
+- 7 of the 10 panel tests are verified to FAIL when
+  the panel is removed (regression coverage is solid).
+- The 2 amendment tests are verified to FAIL when the
+  timing suffix is restored (regression coverage for
+  the UX decision).
+
+
+
+### 22.1 Amendment (same day, 2026-07-15) — remove per-step timing badge from the panel
+
+User feedback right after the 2.0.8 ship: the panel is
+for **quick context switching**, not status reporting.
+The per-step timing badge (`T:0:55, G:0:44`, from §18)
+was too much information for the panel — the user only
+needs the plain status word (`ready` / `error` /
+`transcribing` / etc.) to decide which video to click.
+
+**What changed:** the `{% if v.status == 'ready' and
+v.generated_at %} · T:..., G:...` block was removed from
+the panel's status badge in `app/templates/video.html`.
+The course page (`app/templates/course.html:74`) is
+**unchanged** — users still see the per-step timing when
+scanning a section's full list of videos.
+
+**Why two pages need different renderings:** the course
+page is for "show me all the videos in this section
+and their status" — processing times help users spot
+stuck or slow videos. The video page is for "switch to
+a different video in 2 clicks or fewer" — the timing
+is noise that slows down the eye-scanning the user does
+to pick a video.
+
+**Tests:**
+- New regression test
+  `test_section_videos_panel_omits_per_step_timing_badge`
+  verifies the panel doesn't render `T:` / `G:` even when
+  the video is in `ready` state with timestamps set. Uses
+  the same setup pattern as
+  `tests/test_per_step_timing.py` (set the video to ready
+  with timestamps via the DB, then fetch the page and
+  assert the rendered HTML).
+- Companion test
+  `test_course_page_still_shows_per_step_timing_badge`
+  guards against an over-zealous cleanup that might also
+  strip the badge from the course page. Verified to pass
+  on the course page render.
+
+**Test count:** 550 → 552 (+2 new tests). All 552 pass.
+
+**Versioning:** this is a same-day amendment to 2.0.8,
+not a new version. The original 2.0.8 commit shipped the
+panel with the timing badge; the amendment removed it
+after user feedback. The CHANGELOG 2.0.8 entry has a
+dedicated "📝 Amendment" section documenting this.
 
