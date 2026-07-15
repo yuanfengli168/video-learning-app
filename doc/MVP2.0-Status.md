@@ -4,6 +4,9 @@
 >
 > For full milestone history, see [`doc/MVP2.0-first-designQuestions.md`](MVP2.0-first-designQuestions.md). For bug postmortems, see [`doc/Blockers.md`](Blockers.md).
 
+> **📌 Current snapshot (2026-07-15)**: Branch `MVP2.0` is **65 commits ahead of `main`**, all pushed. **532/532 tests passing**, 87% coverage maintained. MVP2.0.0 / 2.0.0a / 2.0.1 (language policy) / 2.0.2 (Discuss-tab citations) / 2.0.3 (tab switching) / 2.0.4 (per-step timing) are all shipped. The original "2.0.2 (i18n, mindmap tuning)" was re-scoped to a 2.0.0+ feature. Remaining MVP2.0 work: soft-delete (item 5 in MVP3.0-Status.md), bulk upload still single-process. See §18 for the latest item and §19 for the next-up plan.
+
+
 ---
 
 ## 1. Phasing recap (from the design doc)
@@ -250,10 +253,10 @@ background worker pool.
 - Also updated `test_upload_bulk_partial_success` to use 11 GB instead of 3 GB (the old "3 GB > cap" trick no longer works under the new 10 GB cap)
 - No server-level change needed (Starlette reads the full body; uvicorn has no client_max_body_size in this setup). Trade-off: a 10 GB upload peaks at ~10 GB RAM during the upload, noted in the comment.
 
-**Item #8: "ready · 9:08" timing on the section page (P2)**
+**Item #8: "ready · 9:08" timing on the section page (P2)** — superseded by §18 / MVP2.0.4
 - Two new nullable columns on `videos`: `transcribed_at` and `generated_at`, set by the workers when each step reaches `status=ready`. Naive UTC, consistent with `created_at`.
 - New Jinja filter `format_duration` in `app/routers/frontend.py`: renders seconds as `M:SS` (< 1h) or `H:MM:SS` (>= 1h). Empty string for `None`/negative.
-- Course page status badge now reads `ready · 9:08` (or `ready · 2:05:33` for > 1h) when both timestamps are present. Legacy videos (no `generated_at` populated) just show `ready` — no misleading `0:00`.
+- **(MVP2.0.4 supersession)** Course page status badge now reads `ready · T:0:55, G:0:44` for videos with all three timestamps, where T = transcribe time and G = generate time. For legacy videos (no `transcribe_started_at` populated), falls back to the original `ready · 9:08` (or `ready · 2:05:33` for > 1h). Videos with neither fall back just show `ready` — no misleading `0:00`. See §18 for the bulk-upload bug this solved.
 - Failure semantics: timestamps are NOT stamped on worker failure, so an errored video never gets a fake "ready in N" label.
 - 13 new tests in `tests/test_ready_timing.py` covering model, migration, both workers (success + failure), template (4 cases), filter unit, filter registration.
 
@@ -306,9 +309,9 @@ background worker pool.
 
 **Bug fix bundled in (was broken before Part A):**
 - The `format_duration` Jinja filter (used by the course page's
-  "ready · 9:08" badge from MVP3.0 #8) was missing from
-  `app/routers/frontend.py`. Restored as part of this commit so
-  `tests/test_ready_timing.py` passes again.
+  "ready · T:..., G:..." badge from MVP3.0 #8 / MVP2.0.4) was
+  missing from `app/routers/frontend.py`. Restored as part of
+  this commit so `tests/test_ready_timing.py` passes again.
 - The `transcription._model_cache` is a module-level dict that was
   leaking between tests, causing flaky behaviour in
   `test_ready_timing.py`. Added an autouse fixture
@@ -408,12 +411,12 @@ hallucinations because Whisper drifted from Chinese to English mid-file. Fixes:
 
 **MVP3.0 items shipped (Jul 11-14)**
 1. ✅ 10 GB upload cap (was 2 GB)
-2. ✅ "ready · 9:08" timing badge on section page
+2. ✅ "ready · T:..., G:..." timing badge on section page (MVP2.0.4: split into per-step times — see §18)
 3. ✅ Whisper model picker with 7 options (4 manual + 3 smart picks including MLX)
 
 ### 14.5 Code quality / engineering highlights
 
-- **487 tests passing** with structured regression tests for past bugs (route shadowing, JS syntax errors, etc.)
+- **487 tests passing** with structured regression tests for past bugs (route shadowing, JS syntax errors, etc.) — now 532 after MVP2.0.4 (§18)
 - **Status-bar JSON-parsing** with 4 fallback strategies (direct / code-fence / preamble-strip / brace-match) for non-deterministic `glm-5.2:cloud` responses
 - **Security headers** that don't break Firebase popup login (the `same-origin-allow-popups` lesson is documented in `BlockersOrChallengers.md`)
 - **Deterministic LLM**: `temperature=0` + `seed=42` — same transcript → same materials
@@ -460,7 +463,7 @@ material in the repo:
 5. **Foundation Models** — research
 6. **Read the paper of Revolute** — research
 7. **OCR pipeline** (whisper → generate materials → OCR), as the 3rd stage
-8. **"ready in 9:08" should be from begin-to-read, not queued-to-ready** — currently `generated_at - created_at`; change to `generated_at - transcribed_at`
+8. ✅ **"ready · T:..., G:..." split into per-step times** — was a follow-up to #1; fixed in MVP2.0.4 (§18)
 9. **Numbering off-by-one** in front of video filename — the `2. ...` prefix bug
 10. **Where is the Chat session that has all transcript, material information?** — this is the **Discuss tab** (MVP2.0 ship), at `POST /api/chat/video-sessions` and `/chat-history` with a VIDEO badge. Let me know if you can't find it in the UI.
 

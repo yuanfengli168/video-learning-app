@@ -35,7 +35,7 @@
 | 5 | Soft-delete / trash / restore (30-day TTL) | Reliability | **P1** | Not started | `doc/manualTodo.txt` [jul10] #8. Currently we hard-delete on click. |
 | 6 | Note section (markdown, preview, save to DB) | UX | **P1** | Not started | `doc/manualTodo.txt` [jul11] #6. Could be Notion embed + DB-backed, or full markdown editor. |
 | 7 | Video player: manual scroll-to-end on 2-hour videos | UX | **P1** | Not started | `doc/manualTodo.txt` [jul11] #4. Current player struggles with long files. Plyr / video.js swap candidate. |
-| 8 | Show "ready in 9:08" timing next to each video's status badge | UX | **P2** | **Done** (`ae4df7d`) | `doc/manualTodo.txt` [jul11] #8. Store `transcribed_at` + `generated_at`, render `ready in N:SS` on section page. |
+| 8 | Show "ready · T:..., G:..." timing next to each video's status badge (per-step) | UX | **P2** | **Done** (`ae4df7d`, `493da3d`, `4573812`, `4d0eaa3`) | `doc/manualTodo.txt` [jul11] #8 + [jul14] #8. Store `transcribe_started_at` + `transcribed_at` + `generated_at`, render `ready · T:M:SS, G:M:SS` on section page. MVP2.0.4 added per-step split after the [jul14] #8 follow-up (bulk-upload queue wait was inflating the duration). |
 | 9 | Language consistency in generated materials | Content | **P2** | Not started | `doc/manualTodo.txt` [jul10] #7. Today: sometimes Chinese, sometimes English. Make it deterministic (always match video language). |
 | 10 | OCR of video frames for the Discuss tab | Content | **P3** | Not started | `doc/manualTodo.txt` [jul10] #6. Currently only Whisper transcript + materials. |
 | 11 | Data flow chart of all functions in the app | Docs | **P2** | Not started | `doc/manualTodo.txt` [jul11] #7. Generate a `doc/architecture.md` with Mermaid. |
