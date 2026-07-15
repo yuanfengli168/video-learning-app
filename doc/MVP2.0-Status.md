@@ -4,7 +4,7 @@
 >
 > For full milestone history, see [`doc/MVP2.0-first-designQuestions.md`](MVP2.0-first-designQuestions.md). For bug postmortems, see [`doc/Blockers.md`](Blockers.md).
 
-> **📌 Current snapshot (2026-07-15)**: Branch `MVP2.0` is **65 commits ahead of `main`**, all pushed. **540/540 tests passing**, 87% coverage maintained. MVP2.0.0 / 2.0.0a / 2.0.1 (language policy) / 2.0.2 (Discuss-tab citations) / 2.0.3 (tab switching) / 2.0.4 (per-step timing) / 2.0.5 (bulk-upload 400 fix) are all shipped. The original "2.0.2 (i18n, mindmap tuning)" was re-scoped to a 2.0.0+ feature. Remaining MVP2.0 work: soft-delete (item 5 in MVP3.0-Status.md), bulk upload still single-process. See §19 for the latest item and §20 for the next-up plan.
+> **📌 Current snapshot (2026-07-15)**: Branch `MVP2.0` is **67 commits ahead of `main`**, all pushed. **552/552 tests passing**, 87% coverage maintained. MVP2.0.0 / 2.0.0a / 2.0.1 (language policy) / 2.0.2 (Discuss-tab citations) / 2.0.3 (tab switching) / 2.0.4 (per-step timing) / 2.0.5 (bulk-upload 400 fix) / 2.0.6 (logout fix) / 2.0.7 (distil smart picks removed; turbo renamed) / 2.0.8 (collapsible section-videos panel on video page; same-day amendment removed the per-step timing badge from the panel — timing still shown on the course page) are all shipped. The original "2.0.2 (i18n, mindmap tuning)" was re-scoped to a 2.0.0+ feature. Remaining MVP2.0 work: soft-delete (item 5 in MVP3.0-Status.md), bulk upload still single-process. See §19 for the latest item and §20 for the next-up plan, and §22.1 for the 2.0.8 amendment.
 
 
 ---
@@ -1167,10 +1167,21 @@ section, the user had to:
 2. Click video #3.
 
 For sections with many videos, this is a significant UX
-win. Combined with the per-step timing badge (§18) and
-the Discuss-tab citations (§15), the video page is now
-much more "self-contained" — the user rarely needs to
-leave it to do common tasks.
+win. Combined with the per-step timing badge on the
+**course** page (§18) and the Discuss-tab citations
+(§15), the video page is now much more
+"self-contained" — the user rarely needs to leave it
+to do common tasks.
+
+> **Note (2.0.8 amendment)**: the per-step timing
+> badge is intentionally **omitted** from the
+> section-videos panel on the video page — the panel
+> is for quick context switching (status word only,
+> e.g. `ready` / `error` / `transcribing`), not status
+> reporting. The course page keeps the full
+> `ready · T:M:SS, G:M:SS` rendering because users
+> there scan a full section's worth of videos. See
+> §22.1 for the full rationale.
 
 ### Files changed
 
