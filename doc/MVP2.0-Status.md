@@ -1015,3 +1015,97 @@ shippable unit. Calling it 2.0.6 keeps the changelog
 honest about scope and makes it easy to revert if it
 breaks anything in production.
 
+
+## 21. 2026-07-15 — Remove distil smart picks; rename turbo (MVP2.0.7)
+
+> User feedback (manualTodo 2.2): "remove all UI, and just
+> commented out all distll related model, and smart picks
+> in UI, and now add what we added these days, I remeber
+> it is called what, sorry fogot". The user wanted the
+> bulk-upload model (mlx-community/whisper-large-v3-turbo)
+> to be the visible, named smart pick in the UI.
+
+### What changed
+
+The model dropdown's "Smart picks (recommended)" group
+previously had 2 distil-large-v3 options:
+- `local-best-and-fast` (faster-whisper + distil-large-v3)
+- `local-best-and-extremely-fast` (mlx-whisper + distil-large-v3)
+
+Plus 1 multilingual option:
+- `local-large-turbo` (mlx-whisper + mlx-community/whisper-large-v3-turbo)
+
+The 2 distil options are now **commented out** in
+`MODEL_REGISTRY` (not deleted) per the user's "comment
+out" preference. The only smart pick that remains is
+`local-large-turbo`, which is now both the default and
+the only smart pick.
+
+The user-facing label for `local-large-turbo` changed
+from "🚀 Local Large-v3 Turbo (MLX, M-series, multilingual)"
+to **"🚀 MLX Whisper Large V3 Turbo (recommended)"** —
+shorter, identifies the engine (MLX), names the model
+(Whisper Large V3 Turbo), and signals the recommended
+status. The user said "we should give proper name on it".
+
+### Why remove the distil options
+
+distil-large-v3 is **English-biased** and ignores the
+`language="zh"` lock — it was producing all-English
+hallucination loops on Chinese videos even with the
+anti-drift kwargs. The turbo model is a strict
+superset for Chinese / multilingual and only ~1.5-2x
+slower than distil-large-v3 on M-series. The user's
+preference is now encoded in the default: every new
+upload uses the multilingual model unless the user
+explicitly picks a manual one.
+
+### Files changed
+
+- `app/services/transcription.py` — comment out the 2
+  distil entries in `MODEL_REGISTRY`; update
+  `get_default_model_choice()` to fall back to "base"
+  (instead of the now-removed distil) on non-MLX Macs;
+  update `resolve_model_choice()` MLX-unavailable
+  fallback to "base" (instead of the distil); rename
+  the local-large-turbo label.
+- `app/templates/video.html` — update the dropdown
+  HTML to remove the 2 distil options and use the new
+  label.
+- `app/routers/videos.py` — update the docstring
+  example to reflect the new dropdown shape.
+
+### Bonus fix: latent tab-switching regression
+
+While running the test suite after the model-registry
+changes, the existing
+`test_video_page_switchTab_hides_all_five_panels` test
+FAILED. Investigation revealed a latent regression
+from commit `dc11d5f` (MVP2.0.2 hotfix). The commit
+added a "Hide all five tab panels" comment to
+`switchTab()` but forgot to actually add `'discuss'`
+to the forEach loop. So clicking any other tab while
+Discuss was open left the Discuss panel visible
+underneath — the exact bug the commit claimed to
+fix. The test was added in that same commit but
+somehow the assertion passed at the time (probably
+because the regex was loose and matched the
+forEach label even with only 4 items).
+
+Fixed by adding 'discuss' to the forEach. The test
+now serves as a proper regression test (verified to
+fail when 'discuss' is removed).
+
+### Tests
+
+- All `tests/test_whisper_picker.py` tests updated to
+  reflect the new structure (5 registry entries, 1
+  smart pick, fallback chain ends at "base").
+- 3 regression tests verify the registry has the
+  expected structure; they FAIL if the distil entries
+  are restored.
+- Test count went from 543 → 540 (-3) because 3
+  distil-related tests were removed (their scenarios
+  no longer apply) and replaced with 3 turbo-related
+  tests (same coverage, new keys).
+

@@ -504,3 +504,76 @@ makes the issue visible instead of silent.
   override the default.
 
 [2.0.6]: https://github.com/yuanfengli168/video-learning-app/compare/eaf32d4...HEAD
+
+## [2.0.7] - 2026-07-15 — Remove distil smart picks; rename turbo
+
+🎨 **UI cleanup + UX fix.** The model dropdown's "Smart picks
+(recommended)" group previously had 2 distil-large-v3 options
+(`local-best-and-fast`, `local-best-and-extremely-fast`)
+plus the new `local-large-turbo`. The distil options are
+removed because distil-large-v3 is English-biased and
+ignores the `language="zh"` lock — it was producing
+all-English hallucination loops on Chinese videos. The
+only smart pick that remains is `local-large-turbo`
+(MLX Whisper Large V3 Turbo), which is multilingual and
+is now both the default and the only smart pick.
+
+**Proven result:** the dropdown now shows 5 options
+(4 manual + 1 smart), the smart option has a proper
+user-facing name ("MLX Whisper Large V3 Turbo
+(recommended)"), and bulk uploads use this option by
+default. The previous "(MLX, M-series, multilingual)"
+label was descriptive but didn't name the model or
+signal "recommended".
+
+### ✨ Features
+
+- **Proper name for `local-large-turbo`** — the
+  user-facing label is now "🚀 MLX Whisper Large V3
+  Turbo (recommended)" (was "🚀 Local Large-v3 Turbo
+  (MLX, M-series, multilingual)"). Shorter, identifies
+  the engine (MLX), names the model (Whisper Large V3
+  Turbo), and signals the recommended status.
+
+### 🐛 Bug fixes
+
+- **Bonus fix caught by the test sweep**: the
+  `switchTab()` function in `app/templates/video.html`
+  was a latent regression from MVP2.0.2 (commit
+  `dc11d5f`). The commit added a "Hide all five tab
+  panels" comment but forgot to actually add `'discuss'`
+  to the forEach loop, so the Discuss tab stayed
+  visible when other tabs were clicked. The
+  `test_video_page_switchTab_hides_all_five_panels`
+  test caught this. Fixed by adding 'discuss' to the
+  forEach.
+
+### 🧪 Tests
+
+- 540 passing (was 543, -3 because the 2 distil-related
+  tests were replaced/removed; net -3).
+- All `tests/test_whisper_picker.py` tests updated to
+  reflect the new model structure (5 entries instead
+  of 7, 1 smart pick instead of 3).
+- 3 new regression tests verify the registry has the
+  expected structure; they FAIL if the distil entries
+  are restored.
+- `test_video_page_switchTab_hides_all_five_panels`
+  catches the latent tab-switching regression.
+
+### Migration notes
+
+- The 2 distil entries are **commented out** in
+  `MODEL_REGISTRY`, not deleted. They can be restored
+  by uncommenting if needed (e.g. for an English-only
+  workload where distil-large-v3 is genuinely faster).
+- The non-MLX default changed from
+  `local-best-and-fast` (distil) to `base` (the
+  recommended manual pick). On Apple Silicon, the
+  default is unchanged (`local-large-turbo`).
+- Existing videos already on disk are unaffected —
+  they have a `whisper_model` value that points to
+  their original choice. Only new uploads use the
+  new defaults.
+
+[2.0.7]: https://github.com/yuanfengli168/video-learning-app/compare/748a557...HEAD

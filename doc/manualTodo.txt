@@ -44,7 +44,7 @@ so need somewhere on video page to ask questions on all trascript of the current
                                 apply this single one over the minutes)
                                 This OCR will be a separate repo that is private and will be a paid version, only paid user can use 
                                 these.
-2.2 remove all UI, and just commented out all distll related model, and smart picks in UI, and now add what we added these days, I remeber it is called what, sorry fogot
+2.2 [done, mvp2.0.7] remove all UI, and just commented out all distll related model, and smart picks in UI, and now add what we added these days, I remeber it is called what, sorry fogot
 3. mvp4: (OCR, Agent (cronjobs, smart analysis of your schedule, mobile version works as well. mobile version only share texts, no videos, no image) )
     - optimize all functions in previous MVPs, such as transfer webm to mp4 etc 
     - optimize prompt, and adding guardrail to make sure things always generate the same when using default
