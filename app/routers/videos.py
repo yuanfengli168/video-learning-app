@@ -59,7 +59,9 @@ async def list_whisper_models() -> dict[str, Any]:
 
     MVP3.0 #2: returns a richer shape than before — the UI now
     groups choices into a manual group (the 4 originals) and a
-    smart-picks group (the 2 new recommended defaults), so it
+    smart-picks group (currently just `local-large-turbo` —
+    the distil-large-v3 smart picks were removed in MVP2.0.6
+    per manualTodo 2.2 because they're English-biased), so it
     can render an optgroup dropdown with labels. The legacy
     `models` field is preserved for any caller that still wants
     a flat list.
@@ -70,11 +72,9 @@ async def list_whisper_models() -> dict[str, Any]:
           {"key": "tiny", "label": "tiny (fastest)", "group": "manual"},
           {"key": "base", "label": "base (default)", "group": "manual"},
           ...
-          {"key": "local-best-and-fast", "label": "✨ ...", "group": "smart"},
-          ...
+          {"key": "local-large-turbo", "label": "🚀 MLX Whisper Large V3 Turbo (recommended)", "group": "smart"},
         ],
-        "default": "local-best-and-extremely-fast"  (or "local-best-and-fast"
-                                                     on Intel / no MLX),
+        "default": "local-large-turbo"  (or "base" on Intel / no MLX),
         "models": ["tiny", "base", "small", "medium"],  # legacy flat list
       }
     """

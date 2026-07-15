@@ -39,7 +39,9 @@ _model_cache: dict[str, Any] = {}
 #   - backend: "faster-whisper" | "mlx-whisper"
 #   - requires_mlx: True if the entry needs Apple Silicon
 #   - group: "manual" (the 4 original tiny/base/small/medium) or
-#     "smart" (the 2 new recommended picks)
+#     "smart" (the recommended pick — currently just
+#     `local-large-turbo`; the 2 distil-large-v3 smart picks
+#     are commented out below per manualTodo 2.2 / MVP2.0.6)
 #
 # Adding a new model = adding one row here. The dropdown, the
 # endpoint validator, and the worker all read from this single
@@ -75,32 +77,48 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "group": "manual",
     },
     # ── Smart picks (group="smart") — recommended defaults ──
-    # Note: distil-large-v3 is a HuggingFace model name. The faster-whisper
-    # backend accepts HF model IDs, so it will auto-download from
-    # https://huggingface.co/distil-whisper/distil-large-v3 on first use.
-    "local-best-and-fast": {
-        "label": "✨ Local best and fast (Distil-large-v3)",
-        "model_id": "distil-large-v3",
-        "backend": "faster-whisper",
-        "requires_mlx": False,
-        "group": "smart",
-    },
-    "local-best-and-extremely-fast": {
-        "label": "⚡ Local best and extremely fast (MLX, M-series only)",
-        "model_id": "distil-large-v3",
-        "backend": "mlx-whisper",
-        "requires_mlx": True,
-        "group": "smart",
-    },
-    # The default since 2026-07-14. Replaces the distil-large-v3 entries
-    # as the recommended pick because distil-large-v3 is English-biased
-    # and ignores the `language="zh"` lock — it was producing all-English
-    # hallucination loops on Chinese videos even with the anti-drift
-    # kwargs (Part A). mlx-community/whisper-large-v3-turbo is a strict
-    # superset for Chinese / multilingual and only ~1.5-2x slower than
-    # distil-large-v3 on M-series. Apple Silicon only.
+    # MVP2.0.6 (2026-07-15, manualTodo 2.2): the two distil-large-v3
+    # smart picks are commented out because distil-large-v3 is
+    # English-biased and ignores the `language="zh"` lock. The
+    # only smart pick that survives is `local-large-turbo`
+    # (mlx-community/whisper-large-v3-turbo via mlx-whisper),
+    # which is multilingual and is now both the default and
+    # the only smart pick. Kept here as commented-out code so
+    # they can be restored if needed (e.g. for an English-only
+    # workload where distil-large-v3 is genuinely faster).
+    #
+    # "local-best-and-fast": {
+    #     "label": "✨ Local best and fast (Distil-large-v3)",
+    #     "model_id": "distil-large-v3",
+    #     "backend": "faster-whisper",
+    #     "requires_mlx": False,
+    #     "group": "smart",
+    # },
+    # "local-best-and-extremely-fast": {
+    #     "label": "⚡ Local best and extremely fast (MLX, M-series only)",
+    #     "model_id": "distil-large-v3",
+    #     "backend": "mlx-whisper",
+    #     "requires_mlx": True,
+    #     "group": "smart",
+    # },
+    # The default since 2026-07-14, and now the ONLY smart pick.
+    # Replaces the distil-large-v3 entries as the recommended
+    # pick because distil-large-v3 is English-biased and ignores
+    # the `language="zh"` lock — it was producing all-English
+    # hallucination loops on Chinese videos even with the
+    # anti-drift kwargs. mlx-community/whisper-large-v3-turbo is
+    # a strict superset for Chinese / multilingual and only
+    # ~1.5-2x slower than distil-large-v3 on M-series. Apple
+    # Silicon only.
     "local-large-turbo": {
-        "label": "🚀 Local Large-v3 Turbo (MLX, M-series, multilingual)",
+        # MVP2.0.6: the user-facing label was given a proper
+        # name (vs the previous "Local Large-v3 Turbo (MLX,
+        # M-series, multilingual)" which was descriptive but
+        # didn't name the model or signal "recommended"). The
+        # new label is shorter and more useful: identifies the
+        # engine (MLX), the model (Whisper Large V3 Turbo), and
+        # marks it as recommended.
+        "label": "🚀 MLX Whisper Large V3 Turbo (recommended)",
         "model_id": "mlx-community/whisper-large-v3-turbo",
         "backend": "mlx-whisper",
         "requires_mlx": True,
@@ -501,16 +519,17 @@ def resolve_model_choice(
       1. If `choice` is unknown → raise ValueError.
       2. If the choice requires MLX but MLX isn't available on this
          Mac (Intel, or Apple Silicon without mlx-whisper installed),
-         fall back to the "local-best-and-fast" entry and return
-         `fallback_occurred=True` so the caller can show a warning.
+         fall back to "base" (the recommended manual pick) and
+         return `fallback_occurred=True` so the caller can show a
+         warning.
       3. Otherwise return the choice's entry unchanged.
 
     Args:
-        choice: A key from MODEL_REGISTRY (e.g. "base", "local-best-and-fast").
-        prefer_mlx: When True (the default), the "local-best-and-extremely-fast"
-            choice is preferred when both are available. When False,
-            always use faster-whisper. Currently unused but reserved
-            for a future "force CPU" toggle.
+        choice: A key from MODEL_REGISTRY (e.g. "base", "local-large-turbo").
+        prefer_mlx: When True (the default), the MLX choice is
+            preferred when available. When False, always use
+            faster-whisper. Currently unused but reserved for a
+            future "force CPU" toggle.
 
     Returns:
         A dict with keys: label, model_id, backend, requires_mlx,
@@ -523,8 +542,13 @@ def resolve_model_choice(
 
     if entry["requires_mlx"] and not is_mlx_available():
         # MLX requested but not usable here. Fall back to the
-        # faster-whisper smart pick (best non-MLX option).
-        fallback = MODEL_REGISTRY["local-best-and-fast"]
+        # recommended manual pick ("base"). The previous fallback
+        # was "local-best-and-fast" (distil-large-v3 via
+        # faster-whisper), but that's commented out per
+        # manualTodo 2.2 because distil-large-v3 is
+        # English-biased. "base" is the new recommended
+        # non-MLX default.
+        fallback = MODEL_REGISTRY["base"]
         result = dict(fallback)
         result["fallback_occurred"] = True
         result["fallback_reason"] = (
@@ -538,38 +562,38 @@ def resolve_model_choice(
 def get_default_model_choice() -> str:
     """Return the recommended default choice for this Mac.
 
-    As of 2026-07-14, the default is "local-large-turbo" (mlx-
-    community/whisper-large-v3-turbo via mlx-whisper) on Apple
-    Silicon, and "local-best-and-fast" on x86 / arm64 without
-    MLX. The "local-best-and-*" entries still exist in the
-    registry for users who want to pick them manually, but the
-    default no longer routes to distil-large-v3 because that
-    model is English-biased and ignores `language="zh"` (it
-    produced all-English hallucination loops on Chinese videos
-    even with the Part A anti-drift kwargs).
+    As of MVP2.0.6 (2026-07-15), the default is
+    "local-large-turbo" (mlx-community/whisper-large-v3-turbo
+    via mlx-whisper) on Apple Silicon, and "base" on
+    x86 / arm64 without MLX. Before MVP2.0.6, the
+    non-MLX fallback was "local-best-and-fast" (distil-
+    large-v3 via faster-whisper), but those distil entries
+    are now commented out per manualTodo 2.2 because
+    distil-large-v3 is English-biased and ignores
+    `language="zh"` (it produced all-English hallucination
+    loops on Chinese videos even with the Part A
+    anti-drift kwargs).
 
-    The legacy fallback chain is:
+    The fallback chain is:
       1. MLX on Apple Silicon → "local-large-turbo"
-      2. Otherwise → "local-best-and-fast" (faster-whisper
-         distil-large-v3 — still the fastest non-MLX option,
-         just not the default)
+      2. Otherwise → "base" (the recommended default
+         manual pick — small enough to be fast, large
+         enough to be accurate for most content)
       3. Defensive last resort → "base"
 
     Computed at call time (not import time) so that the answer
     adapts if the user `pip install mlx-whisper` later.
 
-    All smart-pick keys are hard-coded literals (always present
-    in MODEL_REGISTRY), so we don't need a defensive try/except
-    — the fallback chain is just a list of known-good options.
+    The registry is module-level and immutable at runtime,
+    so the keys are always present (the distil entries are
+    commented out, not deleted).
     """
     if is_mlx_available() and "local-large-turbo" in MODEL_REGISTRY:
         return "local-large-turbo"
-    if "local-best-and-fast" in MODEL_REGISTRY:
-        return "local-best-and-fast"
-    # Defensive: if the registry is somehow missing both smart
-    # picks, fall through to the legacy "base" choice. (In
-    # practice, the registry is module-level and immutable at
-    # runtime, so this is purely a safety net.)
+    # MVP2.0.6: the distil-large-v3 smart pick is no longer the
+    # default fallback (it's commented out in MODEL_REGISTRY
+    # per manualTodo 2.2). On non-MLX Macs, fall back to "base"
+    # — the recommended manual pick.
     return "base"
 
 
