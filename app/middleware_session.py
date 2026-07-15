@@ -42,25 +42,41 @@ Why middleware, not per-route
     page). Per-route would mean editing four handlers, easy to
     miss one.
 
-Cookie "present-but-invalid" semantics
----------------------------------------
-    This middleware ONLY redirects when:
+Cookie "absent" vs "present-but-invalid" semantics
+--------------------------------------------------
+Since MVP2.0.6 (2026-07-15) this middleware distinguishes three
+cookie states for non-dashboard protected routes (/course/,
+/video/, /chat-history):
 
-        1. The request has an `fb_token` cookie, AND
-        2. `verify_token` raises any exception (ValueError, the
-           actual FirebaseError subclass it really raises, or any
-           other failure — we catch broadly; see the dispatch
-           method for the rationale).
+    1. **Absent cookie** → redirect to /?session=expired. The
+       user sees a phantom page otherwise (HTML shell renders,
+       every API call 401s). Reported as manualTodo [jul14] #1
+       "logout but still can see summary". The previous behavior
+       was "leave alone, the page will render a Sign-in prompt"
+       which only works for the dashboard, not for deep links
+       like /video/{id}.
+    2. **Present-but-invalid cookie** → redirect to
+       /?session=expired. (Original behavior, unchanged.)
+    3. **Valid cookie** → request proceeds. (Unchanged.)
 
-    A request with NO cookie (anonymous user) is NOT redirected.
-    The existing templates already render a "Sign in" prompt for
-    anonymous users (e.g. dashboard.html: the upload zone shows
-    a "Sign in to start learning" card). Bouncing anonymous
-    users to `/?session=expired` would be wrong — they never had
-    a session in the first place.
+For the dashboard `/`, the absent-cookie case is treated
+differently: anonymous visits render the "Sign in" prompt
+(unchanged), but a present-but-invalid cookie still redirects
+to itself with ?session=expired (unchanged). Bouncing
+anonymous dashboard visitors to /?session=expired would be
+wrong (they never had a session).
 
-    A request with a VALID cookie is also NOT redirected; the
-    existing handlers do their normal work.
+Why "session=expired" for the absent-cookie case
+------------------------------------------------
+Using the same `?session=expired` query string for both
+"absent" and "expired" cookies means the dashboard's existing
+toast handler picks up both cases with no new code. From the
+user's perspective, "your session is no longer valid" covers
+both "you never had one" and "the one you had expired", so
+the same toast is the right message. The only difference is
+the toast variant text could be improved in a future UX pass
+(e.g. "Sign in to continue" vs "Your session expired") — for
+now they share the same toast.
 
 Performance
 -----------
@@ -141,9 +157,20 @@ class SessionExpiryMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Only act on protected SSR routes. Everything else (API, static,
-        # login, root-without-bad-cookie) passes through unchanged.
-        # We treat "/" as protected ONLY when there's a cookie that
-        # fails verification — see the special-case below.
+        # login) passes through unchanged.
+        #
+        # MVP2.0.6 (2026-07-15): split the "protected" check into two:
+        #   - `is_other_protected` (/course/, /video/, /chat-history):
+        #     these ALWAYS require a valid cookie. Anonymous visits
+        #     (no cookie) get bounced to /?session=expired because
+        #     otherwise the user sees a "phantom" page where the HTML
+        #     shell renders but every API call 401s. Reported as
+        #     manualTodo [jul14] #1 — "logout but still can see summary".
+        #   - `is_dashboard` (/): the dashboard is the "public landing
+        #     page". Anonymous visits render the "Sign in" prompt; we
+        #     don't bounce them. A present-but-invalid cookie DOES
+        #     redirect (so a returning user with an expired cookie
+        #     gets the toast instead of a silent empty dashboard).
         is_dashboard = path == "/"
         is_other_protected = _is_protected_ssr(path)
 
@@ -151,9 +178,25 @@ class SessionExpiryMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         cookie_token = request.cookies.get(COOKIE_NAME)
+
+        # MVP2.0.6: on a protected non-dashboard route, an absent
+        # cookie means "you're anonymous" — and the page would
+        # render a phantom shell with no data. Bounce to the
+        # dashboard so the user gets the sign-in prompt (or, if
+        # they had a session that just expired, the session-
+        # expired toast). This is the same UX as a present-but-
+        # invalid cookie, just with a different reason. We use the
+        # same `?session=expired` query string so the dashboard's
+        # existing toast handler picks it up.
+        if not cookie_token and is_other_protected:
+            return RedirectResponse(
+                url="/?session=expired",
+                status_code=302,
+            )
+
         if not cookie_token:
-            # Anonymous visit — leave alone, the page will render its
-            # "Sign in" prompt.
+            # Anonymous visit to the dashboard — leave alone, the
+            # page will render its "Sign in" prompt.
             return await call_next(request)
 
         # Cookie is present. Verify it. If it's valid, let the request
