@@ -74,7 +74,7 @@ like beside ready - done in 09:08 means from generating to ready, it used 9 minu
 
 [july14]:
 1. [done, mvp2.0.6]logout but still can see summary
-0. add a collapse and expand courses/items in each video page, so no need to jump to sections pages for all content on section, can change video from video easily, should also have asc, and desc by name function etc.
+0. [done, mvp2.0.8] add a collapse and expand courses/items in each video page, so no need to jump to sections pages for all content on section, can change video from video easily, should also have asc, and desc by name function etc.
 2. [fixed, and pushed, in mvp2.0] where is the remove button of single video page?
 3. why I moved the repo, but the video need to readd, reupload?
 4. [postpone to mvp 5 for optimization]can we add a new function called transfer webm to MP4, but not as part of the main functions 

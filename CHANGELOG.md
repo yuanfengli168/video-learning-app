@@ -577,3 +577,88 @@ signal "recommended".
   new defaults.
 
 [2.0.7]: https://github.com/yuanfengli168/video-learning-app/compare/748a557...HEAD
+
+## [2.0.8] - 2026-07-15 — Collapsible section-videos panel on video page
+
+🎨 **UI feature.** The video page now has a collapsible
+panel above the tabbed interface (Summary / Flashcards /
+Quiz / Mindmap / Discuss) that shows the current section's
+video list. The user can:
+- Click any video in the list to switch to it (no need to
+  navigate back to the course page).
+- Sort by name (asc/desc) or date (asc/desc) via a
+  dropdown.
+- The panel's open/closed state AND the sort direction
+  persist in `localStorage`, so the user's choice
+  survives page reloads.
+- The currently-playing video is visually highlighted
+  with a left border + indigo background.
+
+**Proven result:** on a 3-video section, the user can
+go from video #1 to video #3 in 1 click (was 2 clicks:
+back to course → click video #3).
+
+### ✨ Features
+
+- **Section-videos panel on the video page** — collapsible
+  `<details>` element above the tabs. Each video shows
+  its title, status badge, and the new per-step timing
+  badge (T:..., G:...) from §18.
+- **Sort dropdown** — 4 options: Name ↑, Name ↓, Date
+  ↑, Date ↓. Client-side sort using pre-computed
+  `data-sort-key` (natural sort, e.g. "1. intro" before
+  "10. conclusion") and `data-date` (ISO 8601) attributes.
+- **localStorage persistence** — `videoPageSectionVideos_
+  <section_id>_sort` and `_open`. Survives page reloads.
+- **Current-video highlight** — the playing video has
+  `bg-indigo-50` + `border-l-4 border-indigo-500` in the
+  panel list. The user never gets lost.
+
+### Implementation notes
+
+- **No new endpoint** — `section.videos` is already in
+  the template context via the existing `video_view()`
+  route. The user explicitly chose this over a new
+  endpoint.
+- **No next/previous buttons** — the user explicitly
+  skipped those for now. The video list serves the same
+  purpose (switching videos) without the keyboard-
+  navigation complexity.
+- **Reuses the existing `natural_sort_key_str` Jinja
+  filter** (added in MVP3.0 #2) — no new sort logic
+  needed.
+- **Mirrors the existing course-page sort pattern** —
+  same `data-sort-key` attribute, same `natural_sort_key`
+  comparison. Two pages (course + video) now share a
+  consistent sort UX.
+
+### 🧪 Tests
+
+- 550 passing (was 540, +10 new tests in
+  `tests/test_video_page_section_panel.py`):
+  1. `test_section_videos_panel_renders` — the panel
+     `<details>` element is present.
+  2. `test_section_videos_panel_shows_all_videos` — the
+     panel lists every video in the section.
+  3. `test_section_videos_panel_current_video_highlighted`
+     — the playing video has the highlight classes.
+  4. `test_section_videos_panel_data_sort_key_present` —
+     each `<a>` has a `data-sort-key` attribute.
+  5. `test_section_videos_panel_data_date_present` —
+     each `<a>` has a `data-date` attribute.
+  6. `test_section_videos_sort_dropdown_present` — the
+     `<select>` has all 4 sort options.
+  7. `test_section_videos_empty_state_message` — handles
+     1-video edge case.
+  8. `test_section_videos_panel_collapsed_by_default` —
+     the panel doesn't have `open` attribute on first
+     load.
+  9. `test_section_videos_sort_function_present` — the
+     `sortSectionVideos()` JS function is defined.
+  10. `test_section_videos_localstorage_keys_present` —
+      the localStorage prefix is in the script.
+
+  7 of the 10 tests are verified to FAIL when the panel
+  is removed (regression test).
+
+[2.0.8]: https://github.com/yuanfengli168/video-learning-app/compare/6eff8d7...HEAD

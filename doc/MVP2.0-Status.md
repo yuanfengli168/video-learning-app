@@ -1109,3 +1109,87 @@ fail when 'discuss' is removed).
   no longer apply) and replaced with 3 turbo-related
   tests (same coverage, new keys).
 
+
+## 22. 2026-07-15 — Collapsible section-videos panel on video page (MVP2.0.8)
+
+> User feedback (manualTodo [july14] #0): "add a collapse
+> and expand courses/items in each video page, so no need
+> to jump to sections pages for all content on section,
+> can change video from video easily, should also have
+> asc, and desc by name function etc."
+
+### What shipped
+
+A collapsible `<details>` panel above the tabbed interface
+on the video page, showing the current section's video
+list. Each video in the list is a link to its video page
+(so the user can switch videos in 1 click instead of
+"back to course → click video"). The list has a sort
+dropdown (Name ↑/↓, Date ↑/↓), and both the open/closed
+state AND the sort direction are persisted in
+`localStorage` so the user's choice survives page
+reloads.
+
+### Design decisions (per user call)
+
+- **No new endpoint.** `section.videos` is already in
+  the template context via the existing `video_view()`
+  route. The user explicitly chose this over a new
+  endpoint. Saves a round-trip and a route to test.
+- **No next/previous buttons.** The user explicitly
+  skipped those for now. The video list panel serves
+  the same purpose (switching videos) without the
+  keyboard-navigation complexity. Easy to add later if
+  the user wants.
+- **Reuses the existing `natural_sort_key_str` Jinja
+  filter** (added in MVP3.0 #2). The video-list sort
+  uses the same natural-sort pattern as the course page,
+  so the two pages now share a consistent sort UX.
+- **Collapsed by default.** The panel is collapsed on
+  first visit (so the video page looks the same as
+  before for users who don't care). Once the user
+  expands it, the choice is remembered in localStorage.
+- **Current-video highlight.** The playing video has
+  a left border + indigo background, so the user
+  never gets lost when scanning the list.
+
+### Why this is worth shipping
+
+**Before:** to switch from video #1 to video #3 in a
+section, the user had to:
+1. Click "back to course" (or use the breadcrumb).
+2. Scroll to video #3.
+3. Click it.
+
+**After:**
+1. Expand the section-videos panel (if not already
+   open — the state persists).
+2. Click video #3.
+
+For sections with many videos, this is a significant UX
+win. Combined with the per-step timing badge (§18) and
+the Discuss-tab citations (§15), the video page is now
+much more "self-contained" — the user rarely needs to
+leave it to do common tasks.
+
+### Files changed
+
+- `app/templates/video.html` — add the `<details>`
+  panel + the JS functions (`sortSectionVideos`,
+  `applyStoredSectionStateOnLoad`, the localStorage
+  helpers). ~110 lines of HTML + ~80 lines of JS.
+- `tests/test_video_page_section_panel.py` — 10 new
+  tests covering the panel rendering, sort dropdown,
+  current-video highlight, data attributes, and the
+  JS function presence.
+
+No backend changes, no model changes, no migration,
+no new endpoint. Pure frontend work as requested.
+
+### Tests
+
+- 540 → 550 (+10 new tests in
+  `tests/test_video_page_section_panel.py`).
+- 7 of the 10 tests are verified to FAIL when the
+  panel is removed (regression coverage is solid).
+
