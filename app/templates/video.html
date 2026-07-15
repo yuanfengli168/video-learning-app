@@ -141,8 +141,63 @@
         </div>
     </div>
 
-    <!-- Right: Tabbed Interface -->
-    <div class="lg:w-2/5 min-w-0">
+    <!-- Right: Tabbed Interface (and collapsible section-videos panel above it) -->
+    <div class="lg:w-2/5 min-w-0 space-y-4">
+        <!-- MVP2.0.8 (manualTodo [jul14] #0): collapsible panel
+             showing the current section's video list, with a
+             sort dropdown. Lets the user switch videos without
+             navigating back to the course page. The panel is
+             collapsed by default; its state (open/closed +
+             sort direction) is persisted in localStorage so
+             the user's choice survives page reloads. Sort is
+             client-side using data-sort-key attributes (the
+             server pre-computes natural sort keys via
+             `natural_sort_key_str`). No new endpoint needed —
+             section.videos is already in the template context
+             via the existing video_view() route. -->
+        <details id="section-videos-panel" class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <summary class="cursor-pointer p-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg select-none">
+                <span class="font-medium text-sm">
+                    📂 Section videos
+                    <span class="text-gray-400 font-normal">(<span id="section-video-count">{{ section.videos | length }}</span>)</span>
+                </span>
+                <div class="flex items-center gap-2" onclick="event.stopPropagation()">
+                    <label for="section-videos-sort" class="text-xs text-gray-500">Sort:</label>
+                    <select id="section-videos-sort"
+                            onchange="sortSectionVideos()"
+                            class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700">
+                        <option value="name-asc">Name ↑</option>
+                        <option value="name-desc">Name ↓</option>
+                        <option value="date-asc">Date ↑</option>
+                        <option value="date-desc">Date ↓</option>
+                    </select>
+                </div>
+            </summary>
+            <div data-video-list class="border-t border-gray-200 dark:border-gray-700 max-h-80 overflow-y-auto">
+                {% for v in section.videos %}
+                <a href="/video/{{ v.id }}"
+                   data-sort-key="{{ v.title | natural_sort_key_str }}"
+                   data-date="{{ v.created_at.isoformat() }}"
+                   data-video-id="{{ v.id }}"
+                   class="video-row-video flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50
+                          {% if v.id == video.id %}bg-indigo-50 dark:bg-indigo-900/30 border-l-4 border-indigo-500{% else %}border-l-4 border-transparent{% endif %}">
+                    <span class="flex items-center space-x-2 min-w-0">
+                        <span>🎬</span>
+                        <span class="truncate {% if v.id == video.id %}font-semibold text-indigo-700 dark:text-indigo-300{% endif %}">{{ v.title }}</span>
+                    </span>
+                    <span class="flex-shrink-0 text-xs px-2 py-1 rounded
+                        {% if v.status == 'ready' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
+                        {% elif v.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                        {% elif v.status in ('transcribing', 'generating', 'queued') %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
+                        {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
+                        {{ v.status }}{% if v.status == 'ready' and v.generated_at %}{% if v.transcribe_started_at and v.transcribed_at %} · T:{{ (v.transcribed_at - v.transcribe_started_at).total_seconds() | format_duration }}, G:{{ (v.generated_at - v.transcribed_at).total_seconds() | format_duration }}{% elif v.created_at %} · {{ (v.generated_at - v.created_at).total_seconds() | format_duration }}{% endif %}{% endif %}
+                    </span>
+                </a>
+                {% else %}
+                <p class="text-sm text-gray-400 py-3 px-3">No other videos in this section.</p>
+                {% endfor %}
+            </div>
+        </details>
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
             <!-- Tab buttons -->
             <div class="flex border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
@@ -301,6 +356,116 @@ function switchTab(tab) {
     if (tab === 'quiz' && !contentCache.quiz) loadQuiz();
     if (tab === 'mindmap' && !contentCache.mindmap) loadMindmap();
     if (tab === 'discuss' && !discussSessionId) startDiscussSession();
+}
+
+// ── Section-videos panel (MVP2.0.8) ──
+// Collapsible panel showing the current section's video list,
+// with a sort dropdown (name asc/desc, date asc/desc). Sort is
+// client-side (the server pre-computes natural sort keys via
+// the `natural_sort_key_str` Jinja filter — see app/routers/
+// frontend.py:65). State (open/closed + sort direction) is
+// persisted in localStorage so the user's choice survives
+// page reloads. The current video is highlighted with
+// `bg-indigo-50` + `border-l-4 border-indigo-500`.
+
+const SECTION_VIDEOS_STORAGE_PREFIX = 'videoPageSectionVideos_';
+const currentSectionId = '{{ section.id if section else "" }}';
+const currentVideoId = '{{ video.id }}';
+
+function getStoredSectionSort() {
+    try {
+        return localStorage.getItem(SECTION_VIDEOS_STORAGE_PREFIX + currentSectionId + '_sort') || 'name-asc';
+    } catch (e) { return 'name-asc'; }
+}
+
+function setStoredSectionSort(value) {
+    try {
+        localStorage.setItem(SECTION_VIDEOS_STORAGE_PREFIX + currentSectionId + '_sort', value);
+    } catch (e) { /* localStorage may be disabled */ }
+}
+
+function isStoredSectionOpen() {
+    try {
+        const v = localStorage.getItem(SECTION_VIDEOS_STORAGE_PREFIX + currentSectionId + '_open');
+        // Default to closed on first visit (open=false is stored as '0')
+        return v === '1';
+    } catch (e) { return false; }
+}
+
+function setStoredSectionOpen(value) {
+    try {
+        localStorage.setItem(SECTION_VIDEOS_STORAGE_PREFIX + currentSectionId + '_open', value ? '1' : '0');
+    } catch (e) { /* localStorage may be disabled */ }
+}
+
+function sortSectionVideos() {
+    const list = document.querySelector('[data-video-list]');
+    if (!list) return;
+    const select = document.getElementById('section-videos-sort');
+    if (!select) return;
+    const sortKey = select.value;  // e.g. "name-asc", "name-desc", "date-asc", "date-desc"
+    setStoredSectionSort(sortKey);
+
+    const rows = Array.from(list.querySelectorAll('a.video-row-video'));
+    if (rows.length < 2) return;  // no need to sort 0 or 1 row
+
+    const cmp = (a, b) => {
+        if (sortKey.startsWith('name')) {
+            // Lexicographic compare on the server-computed natural
+            // sort key (e.g. "0001:abc" → "0002:def" sorts correctly
+            // even with leading numbers, vs plain "1. abc" which
+            // would sort as 1, 10, 11, 2, 3, ...).
+            const ka = a.getAttribute('data-sort-key') || '';
+            const kb = b.getAttribute('data-sort-key') || '';
+            return sortKey === 'name-asc'
+                ? ka.localeCompare(kb)
+                : kb.localeCompare(ka);
+        } else {
+            // Date sort: compare the ISO 8601 strings (lexicographic
+            // order is the same as chronological order for ISO 8601
+            // strings, no need to parse).
+            const da = a.getAttribute('data-date') || '';
+            const db = b.getAttribute('data-date') || '';
+            return sortKey === 'date-asc'
+                ? da.localeCompare(db)
+                : db.localeCompare(da);
+        }
+    };
+
+    rows.sort(cmp);
+    // Re-append in sorted order. (The "No other videos" fallback
+    // <p> element is not a `.video-row-video`, so it's preserved
+    // at the end if present.)
+    rows.forEach(row => list.appendChild(row));
+}
+
+function applyStoredSectionStateOnLoad() {
+    // 1. Set the sort dropdown to the stored value
+    const select = document.getElementById('section-videos-sort');
+    if (select) {
+        select.value = getStoredSectionSort();
+        // Apply the sort on initial load
+        sortSectionVideos();
+    }
+    // 2. Set the panel's open/closed state
+    const panel = document.getElementById('section-videos-panel');
+    if (panel) {
+        panel.open = isStoredSectionOpen();
+        // Persist on toggle
+        panel.addEventListener('toggle', () => {
+            setStoredSectionOpen(panel.open);
+        });
+    }
+}
+
+// Apply on page load. We use DOMContentLoaded to ensure the
+// panel HTML is in the DOM. If the script runs at the bottom
+// of <body>, the elements are already present, but the
+// listener is still safer via this event.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyStoredSectionStateOnLoad);
+} else {
+    applyStoredSectionStateOnLoad();
 }
 
 // ── Auth token helper ──
