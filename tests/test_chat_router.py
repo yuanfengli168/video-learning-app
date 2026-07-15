@@ -273,6 +273,9 @@ def test_chat_session_ownership(client: TestClient):
 
 def test_unauthorized_chat_access(client: TestClient):
     """Should return 401 without auth."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it for this unauthenticated test.
+    client.cookies.clear()
     response = client.get("/api/chat/sessions")
     assert response.status_code == 401
 

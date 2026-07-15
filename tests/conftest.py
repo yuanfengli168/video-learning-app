@@ -82,9 +82,52 @@ def db_session() -> Generator[Session, None, None]:
 
 @pytest.fixture(scope="function")
 def client(db_session: Session) -> Generator[TestClient, None, None]:
-    """Provide a FastAPI test client with the test database."""
-    with TestClient(app) as c:
-        yield c
+    """Provide a FastAPI test client with the test database.
+
+    MVP2.0.6: set a valid `fb_token` cookie by default so the
+    SessionExpiryMiddleware lets the request through. Before
+    MVP2.0.6, the middleware let anonymous visits to
+    /video/, /course/, /chat-history through (the user saw a
+    phantom page), so tests didn't need a cookie. Now those
+    routes redirect to /?session=expired without a cookie, so
+    every test that exercises a protected SSR route needs a
+    valid cookie. We set the cookie here at the fixture level
+    so individual tests don't have to remember. Tests that
+    specifically want to test the no-cookie case (see
+    tests/test_session_expiry_middleware.py) can pass
+    `cookies={}` to client.get() to override the default.
+
+    The `verify_token` is mocked at every namespace where it's
+    bound: `app.auth.firebase_admin` (the source), and
+    `app.middleware_session` + `app.auth.dependencies` (the
+    two importers that do `from app.auth.firebase_admin
+    import verify_token`). Python's `from X import Y` binds
+    the name in the importer's namespace at import time, so
+    later patches to X.Y don't reach the importer. Patching
+    only the firebase_admin namespace is not enough. A dummy
+    cookie value like "test-token" is sufficient — the
+    middleware will see it as "valid".
+    """
+    from app.auth.session import COOKIE_NAME
+    from app.auth import firebase_admin as fa
+    from app.auth import dependencies as auth_deps
+    from app import middleware_session as ms
+
+    fake = lambda token: {"uid": "test-uid", "email": "test@test.com"}
+    original_fa = fa.verify_token
+    original_ms = ms.verify_token
+    original_deps = auth_deps.verify_token
+    fa.verify_token = fake
+    ms.verify_token = fake
+    auth_deps.verify_token = fake
+    try:
+        with TestClient(app) as c:
+            c.cookies.set(COOKIE_NAME, "test-token")
+            yield c
+    finally:
+        fa.verify_token = original_fa
+        ms.verify_token = original_ms
+        auth_deps.verify_token = original_deps
 
 
 @pytest.fixture(autouse=True)

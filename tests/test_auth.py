@@ -7,6 +7,9 @@ from fastapi.testclient import TestClient
 
 def test_me_without_token(client: TestClient):
     """/api/auth/me should return 401 without a Bearer token."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it for this unauthenticated test.
+    client.cookies.clear()
     response = client.get("/api/auth/me")
     assert response.status_code == 401
     assert "Not authenticated" in response.json()["detail"]
@@ -14,12 +17,18 @@ def test_me_without_token(client: TestClient):
 
 def test_verify_without_token(client: TestClient):
     """/api/auth/verify should return 401 without a Bearer token."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it for this unauthenticated test.
+    client.cookies.clear()
     response = client.get("/api/auth/verify")
     assert response.status_code == 401
 
 
 def test_me_with_invalid_token(client: TestClient):
     """/api/auth/me should return 401 with an invalid token."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it so only the Authorization header is read.
+    client.cookies.clear()
     with patch("app.auth.dependencies.verify_token", side_effect=ValueError("Invalid token")):
         response = client.get(
             "/api/auth/me",
@@ -72,6 +81,9 @@ def test_verify_with_valid_token(client: TestClient):
 
 def test_me_with_malformed_auth_header(client: TestClient):
     """/api/auth/me should return 401 with a malformed Authorization header."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it so only the Authorization header is read.
+    client.cookies.clear()
     response = client.get(
         "/api/auth/me",
         headers={"Authorization": "NotBearer token"},

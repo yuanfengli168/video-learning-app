@@ -1215,6 +1215,9 @@ def test_delete_video_unauthenticated(client: TestClient):
     course_id, section_id = _create_course_and_section(client)
     video_id = _create_video_with_assets(client, section_id)
     # No _mock_auth() here
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it for this unauthenticated test.
+    client.cookies.clear()
     resp = client.delete(f"/api/videos/{video_id}")
     assert resp.status_code == 401
 

@@ -273,6 +273,9 @@ def test_delete_section_unauthenticated(client: TestClient):
     """Returns 401 without auth."""
     course_id, section_id = _create_course_and_section(client)
     # No _mock_auth() here
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it for this unauthenticated test.
+    client.cookies.clear()
     resp = client.delete(
         f"/api/courses/{course_id}/sections/{section_id}",
     )
@@ -385,6 +388,9 @@ def test_delete_course_missing_files_on_disk(client: TestClient):
 def test_delete_course_unauthenticated(client: TestClient):
     """Returns 401 without auth."""
     course_id, _ = _create_course_and_section(client)
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it for this unauthenticated test.
+    client.cookies.clear()
     resp = client.delete(f"/api/courses/{course_id}")
     assert resp.status_code == 401
 
@@ -477,6 +483,9 @@ def test_course_ownership(client: TestClient):
 
 def test_unauthorized_access(client: TestClient):
     """Should return 401 without auth."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it for this unauthenticated test.
+    client.cookies.clear()
     response = client.get("/api/courses")
     assert response.status_code == 401
 

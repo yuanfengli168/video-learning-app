@@ -25,6 +25,9 @@ TOKEN_B = "fake-token-for-bob"
 def test_switch_accounts_via_new_session_cookie(client: TestClient):
     """After login/logout/login with a different account, /api/auth/me
     should return the NEW user, not the old one."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it so the test starts from a clean state.
+    client.cookies.clear()
     # 1) Sign in as Alice — sets fb_token=TOKEN_A
     with patch("app.auth.session.verify_token", return_value=USER_A):
         resp = client.post("/api/auth/session", json={"id_token": TOKEN_A})
@@ -88,6 +91,9 @@ def test_logout_clears_cookie_completely(client: TestClient):
 def test_new_session_overwrites_old_cookie(client: TestClient):
     """POSTing /api/auth/session with a new token MUST overwrite any
     existing fb_token cookie (not append or duplicate it)."""
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it so the test starts from a clean state.
+    client.cookies.clear()
     # Initial login as Alice
     with patch("app.auth.session.verify_token", return_value=USER_A):
         client.post("/api/auth/session", json={"id_token": TOKEN_A})
@@ -106,6 +112,9 @@ def test_new_session_overwrites_old_cookie(client: TestClient):
 # ── Frontend regression test for the "can't switch accounts" bug ──────────
 
 def test_login_page_forces_signout_before_subscribing(client: TestClient):
+    # MVP2.0.6: conftest client fixture sets a default valid
+    # cookie. Clear it so the test starts from a clean state.
+    client.cookies.clear()
     """Regression test for the bug where logging in as a new account
     after logout silently re-signed-in the previous account.
 

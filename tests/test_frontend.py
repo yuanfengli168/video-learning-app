@@ -41,6 +41,10 @@ def test_dashboard_authenticated(client: TestClient):
 
 def test_login_page(client: TestClient):
     """Login page should render with AuthKit."""
+    # MVP2.0.6: the client fixture sets a default valid cookie.
+    # Clear it for this test so we can exercise the
+    # unauthenticated path.
+    client.cookies.clear()
     response = client.get("/login")
     assert response.status_code == 200
     assert "auth-anchor" in response.text
@@ -320,11 +324,17 @@ def test_chat_history_route_exists(client: TestClient):
 
 def test_chat_history_shows_signin_when_unauthenticated(client: TestClient):
     """Unauthenticated users see a sign-in prompt, not the session list."""
-    response = client.get("/chat-history")
-    assert response.status_code == 200
-    assert "Sign in" in response.text
-    # Should NOT show the session list UI
-    assert 'id="session-list"' not in response.text
+    # MVP2.0.6: the client fixture sets a default valid cookie.
+    # Clear it for this test so we can exercise the
+    # unauthenticated path.
+    client.cookies.clear()
+    response = client.get("/chat-history", follow_redirects=False)
+    # The SessionExpiryMiddleware now redirects unauthenticated
+    # visits to /chat-history to /?session=expired (the
+    # phantom-page fix). The dashboard at /?session=expired
+    # shows a sign-in / session-expired toast.
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?session=expired"
 
 
 def test_chat_history_has_session_list_ui_for_authenticated(client: TestClient):

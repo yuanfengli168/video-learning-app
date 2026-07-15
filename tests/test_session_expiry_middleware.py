@@ -224,19 +224,69 @@ def test_protected_route_with_valid_cookie_is_not_redirected(client: TestClient)
     assert "location" not in {k.lower() for k in response.headers.keys()}
 
 
-def test_protected_route_with_no_cookie_is_not_redirected(client: TestClient):
-    """Anonymous visit to a protected route should NOT redirect.
-
-    The page will render a Sign-in prompt; the existing template
-    handles that UX. Bouncing anonymous users to /?session=expired
-    would be wrong (they never had a session in the first place).
+def test_protected_video_route_with_no_cookie_redirects(client: TestClient):
+    """MVP2.0.6: anonymous visit to /video/{id} (no cookie) now
+    redirects to /?session=expired, instead of rendering a
+    phantom page where the HTML shell loads but every API call
+    401s. Reported as manualTodo [jul14] #1 "logout but still
+    can see summary". The previous behavior (404, no redirect)
+    was a UX bug — the user saw an empty page with no
+    explanation. Now they get the same toast as the
+    present-but-invalid case.
     """
+    # MVP2.0.6: the conftest client fixture sets a default valid
+    # cookie. Clear it so we can test the no-cookie path.
+    client.cookies.clear()
     response = client.get(
         "/video/00000000-0000-0000-0000-000000000000",
         follow_redirects=False,
     )
-    # 404 because the video doesn't exist, but no redirect.
-    assert response.status_code == 404
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?session=expired"
+
+
+def test_protected_course_route_with_no_cookie_redirects(client: TestClient):
+    """MVP2.0.6: anonymous visit to /course/{id} (no cookie)
+    also redirects. Same rationale as the video test above.
+    """
+    client.cookies.clear()
+    response = client.get(
+        "/course/00000000-0000-0000-0000-000000000000",
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?session=expired"
+
+
+def test_protected_chat_history_route_with_no_cookie_redirects(client: TestClient):
+    """MVP2.0.6: anonymous visit to /chat-history (no cookie)
+    also redirects. Same rationale as the video test above.
+    """
+    client.cookies.clear()
+    response = client.get(
+        "/chat-history",
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    assert response.headers["location"] == "/?session=expired"
+
+
+def test_dashboard_with_no_cookie_is_not_redirected(client: TestClient):
+    """Anonymous visit to the dashboard is still allowed (no
+    redirect) so the user sees the "Sign in" prompt. This is
+    the special case — the dashboard is the public landing
+    page, and bouncing anonymous visitors to /?session=expired
+    would be wrong (they never had a session). The
+    MVP2.0.6 fix only changes behavior for the OTHER
+    protected routes (/course/, /video/, /chat-history), NOT
+    the dashboard.
+    """
+    response = client.get(
+        "/",
+        follow_redirects=False,
+    )
+    # 200 (dashboard renders) — not a redirect.
+    assert response.status_code == 200
     assert "location" not in {k.lower() for k in response.headers.keys()}
 
 
