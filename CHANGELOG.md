@@ -375,3 +375,84 @@ queue + process time.
      verifies the badge is hidden for non-ready statuses.
 
 [2.0.4]: https://github.com/yuanfengli168/video-learning-app/compare/4573812...HEAD
+
+## [2.0.5] - 2026-07-15 — Bulk upload 400 "error when parsing the body" fix
+
+🐛 **Bug fix + UX improvement.** Uploading 3+ files at 1+ GB
+to the bulk endpoint returned a 400 Bad Request that the
+user saw as a cryptic "error when parsing the body". The
+real cause was a 3-layer failure that the user couldn't see
+through.
+
+**The chain that produced the error:**
+
+1. **uvicorn/h11**: the HTTP/1.1 receive buffer is capped at
+   16 KB by default (`h11._connection.DEFAULT_MAX_INCOMPLETE_EVENT_SIZE`).
+   For a multi-GB multipart body, the buffer can briefly
+   exceed 16 KB between `next_event()` calls, triggering
+   `h11.RemoteProtocolError` ("Receive buffer too long").
+2. **uvicorn**: catches that error and returns a plain-text
+   400 with body `"Invalid HTTP request received."` — no JSON,
+   no `detail` field.
+3. **Frontend**: calls `await resp.json()` on the plain-text
+   response, which throws `SyntaxError: Unexpected token I in
+   JSON at position 0`. The user sees this surfaced as
+   "Bulk upload error: Unexpected token I in JSON at
+   position 0", which the user paraphrased as "error when
+   parsing the body" (the "parsing" they refer to is the JS
+   `JSON.parse`, not the server's multipart parser).
+
+**The fix (3 layers):**
+
+- **Server, layer 1 — uvicorn flag**: bump
+  `--h11-max-incomplete-event-size` from 16 KB to 64 MB in
+  `scripts/start.sh`. This prevents the 16 KB buffer from
+  triggering for realistic upload sizes (10 GB max per file,
+  well under 64 MB).
+- **Server, layer 2 — global exception handlers**: add
+  `@app.exception_handler(StarletteHTTPException)` and
+  `@app.exception_handler(Exception)` in `app/main.py`.
+  These ensure ANY uncaught error during request processing
+  is returned as a proper JSON `{"detail": "..."}` response
+  — never plain text, never HTML tracebacks.
+- **Frontend — `safeJsonParse()` helper**: add a global
+  `safeJsonParse(resp)` helper in `app/templates/base.html`
+  that defensively checks `Content-Type` and falls back to
+  `resp.text()` if the response isn't JSON. Update
+  `dashboard.html` and `course.html` upload handlers to use
+  the helper.
+
+### 🐛 Bug fixes
+
+- **Misleading "error when parsing the body" on bulk upload**
+  — the user couldn't tell whether the error was the server's
+  fault, their own network, or browser-side. Now they see the
+  actual server error (e.g. "File too large. Max size: 10 GB")
+  in a clear alert, with a "(server)" or "(network)" prefix
+  to disambiguate.
+
+### 🧪 Tests
+
+- 540 passing (was 532, +8 new tests in
+  `tests/test_bulk_upload_error_handling.py`):
+  1. `test_starlette_http_exception_handler_returns_json` —
+     verifies HTTPExceptions return JSON.
+  2. `test_unhandled_exception_handler_is_registered` —
+     structural check that the catch-all Exception handler
+     is on the app.
+  3. `test_bulk_upload_route_returns_json_on_404` — verifies
+     the bulk endpoint returns JSON for 404s.
+  4. `test_base_html_contains_safeJsonParse_helper` —
+     structural check that the helper is defined in base.
+  5. `test_dashboard_uses_safeJsonParse_for_bulk_upload` —
+     structural check that the dashboard uses the helper.
+  6. `test_course_uses_safeJsonParse_for_bulk_upload` —
+     structural check that the course page uses the helper.
+  7. `test_start_sh_bumps_h11_max_incomplete_event_size` —
+     structural check that the uvicorn flag is set to
+     ≥ 1 MB (default is 16 KB).
+  8. `test_all_upload_handlers_use_safeJsonParse` —
+     guards against future regressions if someone adds a new
+     upload endpoint without using the helper.
+
+[2.0.5]: https://github.com/yuanfengli168/video-learning-app/compare/5bd11a4...HEAD

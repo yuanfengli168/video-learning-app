@@ -4,7 +4,7 @@
 >
 > For full milestone history, see [`doc/MVP2.0-first-designQuestions.md`](MVP2.0-first-designQuestions.md). For bug postmortems, see [`doc/Blockers.md`](Blockers.md).
 
-> **📌 Current snapshot (2026-07-15)**: Branch `MVP2.0` is **65 commits ahead of `main`**, all pushed. **532/532 tests passing**, 87% coverage maintained. MVP2.0.0 / 2.0.0a / 2.0.1 (language policy) / 2.0.2 (Discuss-tab citations) / 2.0.3 (tab switching) / 2.0.4 (per-step timing) are all shipped. The original "2.0.2 (i18n, mindmap tuning)" was re-scoped to a 2.0.0+ feature. Remaining MVP2.0 work: soft-delete (item 5 in MVP3.0-Status.md), bulk upload still single-process. See §18 for the latest item and §19 for the next-up plan.
+> **📌 Current snapshot (2026-07-15)**: Branch `MVP2.0` is **65 commits ahead of `main`**, all pushed. **540/540 tests passing**, 87% coverage maintained. MVP2.0.0 / 2.0.0a / 2.0.1 (language policy) / 2.0.2 (Discuss-tab citations) / 2.0.3 (tab switching) / 2.0.4 (per-step timing) / 2.0.5 (bulk-upload 400 fix) are all shipped. The original "2.0.2 (i18n, mindmap tuning)" was re-scoped to a 2.0.0+ feature. Remaining MVP2.0 work: soft-delete (item 5 in MVP3.0-Status.md), bulk upload still single-process. See §19 for the latest item and §20 for the next-up plan.
 
 
 ---
@@ -794,3 +794,131 @@ legacy fallback, and non-ready-status hiding.
 
 526 → 532 (+6 new tests, all passing; 0 regressions in the rest
 of the suite).
+
+## 19. 2026-07-15 — Bulk upload "error when parsing the body" (MVP2.0.5)
+
+> User feedback: "I got an error when uploading 3 files all
+> bigger than 1 GB, the bulk upload fails error when parsing
+> the body". The user attached no log, no stack trace, no
+> repro — just the symptom in the UI.
+
+### The 3-layer failure
+
+What looked like a single bug was actually a chain of three
+independent issues, each masked by the next:
+
+1. **uvicorn/h11 receive buffer too small.** h11's
+   `DEFAULT_MAX_INCOMPLETE_EVENT_SIZE` is 16 KB. For a
+   multi-GB multipart body, the receive buffer can briefly
+   exceed 16 KB between `next_event()` calls. h11 raises
+   `RemoteProtocolError("Receive buffer too long")`. This is
+   the underlying h11 issue.
+2. **uvicorn swallows the h11 error and returns plain text.**
+   `uvicorn/protocols/http/h11_impl.py` catches
+   `h11.RemoteProtocolError` and returns a plain-text 400 with
+   body `"Invalid HTTP request received."`. **No JSON, no
+   `detail` field.** The user can't see what actually went
+   wrong.
+3. **Frontend crashes on the plain-text body.** The old
+   dashboard upload handler did
+   `.then(resp => resp.json().then(data => ({ok: resp.ok, data})))`.
+   When `resp.json()` throws on the plain-text body, the
+   `.then()` chain breaks. The user sees the JS error
+   `SyntaxError: Unexpected token I in JSON at position 0` —
+   which the user paraphrased as **"error when parsing the
+   body"** (the "parsing" is `JSON.parse`, not the server's
+   multipart parser).
+
+The user couldn't tell that:
+- The server's multipart parser was fine.
+- The server's body was being rejected by h11, not the route.
+- The frontend was failing on a JSON parse, not a network error.
+
+The error message gave them no useful info. From their POV, the
+"bulk upload fails" and they "get an error when parsing the
+body" — true statements, but pointing at completely the wrong
+layer.
+
+### The fix (3 layers, one per link in the chain)
+
+**Layer 1 — Server, h11 buffer** (`scripts/start.sh`):
+Bump `--h11-max-incomplete-event-size` from the default 16 KB
+to 64 MB. This prevents the underlying h11 trigger for any
+realistic upload size (10 GB max per file, well under 64 MB).
+The fix is one CLI flag; no code change.
+
+**Layer 2 — Server, global exception handlers** (`app/main.py`):
+Add `@app.exception_handler(StarletteHTTPException)` and
+`@app.exception_handler(Exception)`. These wrap every error
+response in a proper `JSONResponse({"detail": "..."})`. Even
+if some OTHER unexpected error path returns plain text, the
+handler ensures it doesn't. This is defense in depth — the
+h11 fix should be enough on its own, but if we ever hit a
+similar issue with a different framework layer, the frontend
+will at least get a proper JSON response.
+
+**Layer 3 — Frontend, `safeJsonParse()` helper**
+(`app/templates/base.html` + `dashboard.html` + `course.html`):
+Add a global `safeJsonParse(resp)` helper that defensively
+parses the response as JSON or falls back to `text()`. The
+helper is in `base.html` (which is on every page), so all
+upload handlers can use it. The dashboard and course upload
+handlers were updated. Error messages now have a `(server)` or
+`(network)` prefix so the user can tell which layer failed.
+
+### Why the h11 trigger is intermittent
+
+The 16 KB buffer only fills up when:
+- The body is large enough that h11's internal events are
+  processed slower than the network delivers data.
+- The OS hands data to h11 in large TCP segments (e.g. on
+  localhost, the loopback buffer is huge).
+- The browser uses `Transfer-Encoding: chunked` (which most
+  browsers do for fetch() with FormData and large bodies).
+
+For small uploads (1 MB or under), the buffer never fills.
+For 1+ GB uploads, the trigger is much more likely. That
+explains why the user saw the error only with "3 files at
+1+ GB" — smaller bulk uploads worked fine.
+
+### Files changed
+
+- `scripts/start.sh` — add `--h11-max-incomplete-event-size 67108864` to the uvicorn command, with a comment explaining the 16 KB default and why we bump it.
+- `app/main.py` — add `@app.exception_handler(StarletteHTTPException)` and `@app.exception_handler(Exception)` handlers that wrap errors in `JSONResponse`.
+- `app/templates/base.html` — add the global `safeJsonParse(resp)` helper.
+- `app/templates/dashboard.html` — bulk and single upload handlers use `safeJsonParse`. Course creation error path also uses it.
+- `app/templates/course.html` — bulk and single upload handlers use `safeJsonParse`.
+
+### Regression tests
+
+8 new tests in `tests/test_bulk_upload_error_handling.py`:
+
+1. `test_starlette_http_exception_handler_returns_json` —
+   hits an unknown route, verifies 404 is JSON with `detail`.
+2. `test_unhandled_exception_handler_is_registered` —
+   structural check that the global `Exception` handler is
+   on `app.exception_handlers`.
+3. `test_bulk_upload_route_returns_json_on_404` — bulk
+   endpoint returns JSON 404 for unknown section.
+4. `test_base_html_contains_safeJsonParse_helper` — base
+   template defines the helper.
+5. `test_dashboard_uses_safeJsonParse_for_bulk_upload` —
+   dashboard uses the helper, not raw `resp.json()`.
+6. `test_course_uses_safeJsonParse_for_bulk_upload` — course
+   page uses the helper.
+7. `test_start_sh_bumps_h11_max_incomplete_event_size` —
+   `start.sh` passes the flag with value ≥ 1 MB.
+8. `test_all_upload_handlers_use_safeJsonParse` — guards
+   against future regressions if someone adds a new upload
+   endpoint without using the helper.
+
+The most important regression test is
+`test_start_sh_bumps_h11_max_incomplete_event_size` — it's
+verified to fail when the flag is removed and pass when the
+flag is in place. So it's a real structural test, not a
+tautology.
+
+### Test count
+
+532 → 540 (+8 new tests, all passing; 0 regressions in the
+rest of the suite).
