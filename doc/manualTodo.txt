@@ -84,7 +84,7 @@ like beside ready - done in 09:08 means from generating to ready, it used 9 minu
     spread 30 seconds video/audio)
     2. the generating materials (calling Ollama, sometimes rate limited, sometimes glictches, no clear error handling)
     3. (MVP3.0) the OCR, with a full picture for a whole time range of this whole picture.
-8. the time beside each video should between begin to read, not queued to ready. (in future should be configurable)
+--[fixed, and pushed, in mvp2.0.4] 8. the time beside each video should between begin to read, not queued to ready. (in future should be configurable)
 9. not sure why but the number in front of the videos are added by one from the begining, so now the first video is always from 02-....
 10. [fixed, and pushed, in mvp2.0]where is the Chat session that have all transcript, material infomation and I can ask? where does this go? I remember we developed this
 11. if user ask a question, and asked things, then a link in the chat can direct user to the related part of sentences like 

@@ -692,3 +692,102 @@ After the fix, clicking any tab hides all the others. This
 matches the standard tab-bar behavior the user expected. The
 Discuss tab session is preserved (we don't re-create the
 session) — only its **panel visibility** changes.
+
+## 18. 2026-07-15 — Per-step transcribe/generate timing (MVP2.0.4)
+
+> User feedback (manualTodo [jul14] #8): "the time beside each
+> video should between begin to read, not queued to ready. (in
+> future should be configurable)". Commits `493da3d`, `4573812`.
+
+### The bug
+
+The course page badge showed `ready · 9:08` for every video,
+computed as `generated_at - created_at`. For videos that were
+uploaded individually, this was the real processing time. But
+for videos that were part of a **bulk upload**, `created_at` was
+the time the video was added to the queue — and the actual
+transcribe work didn't start until the previous N-1 videos in
+the batch had finished.
+
+**Concretely:** for video #34 of a 34-video batch, the badge
+showed `ready · 36:55` even though the video itself only took
+~55 seconds to transcribe. The other 36 minutes were queue wait
+behind the other 33 videos, which is not the transcribe's
+fault. Users reasonably thought the transcribe was broken.
+
+### Root cause
+
+The course page was using `created_at` as the transcribe-start
+proxy. `created_at` is set at upload time (which is correct for
+its other purpose: "when did this video get added to the
+library"), but it's the wrong anchor for "how long did the
+transcribe take" — that should be "when did the transcribe
+worker actually start working on this video".
+
+### Fix
+
+Add a new `transcribe_started_at` column to `videos` and stamp
+it at the **very top of `_run_transcribe_job`** — before
+`WhisperModel.transcribe()` is called, so the duration includes
+the model load time. Combine it with the existing
+`transcribed_at` (already stamped at the end of the worker) to
+get the real per-video transcribe duration.
+
+Show this on the course page as two separate numbers:
+`ready · T:0:55, G:0:44` — T for transcribe, G for generate.
+For videos uploaded before MVP2.0.4 (where
+`transcribe_started_at IS NULL`), fall back to the old
+`created_at` → `generated_at` duration so no rows are
+visually broken.
+
+### Files changed
+
+- `app/models/video.py` — add `transcribe_started_at` column
+  (nullable `DateTime`).
+- `app/database.py` — register the additive migration entry
+  in `_MIGRATIONS` (`ALTER TABLE videos ADD COLUMN
+  transcribe_started_at DATETIME`).
+- `app/routers/videos.py` — stamp `transcribe_started_at` at
+  the top of `_run_transcribe_job` (after video exists check,
+  before whisper loads). Re-stamped on every fresh transcribe
+  run, so the badge always reflects the most recent work.
+- `app/templates/course.html` — render `T:M:SS, G:M:SS` when
+  all three timestamps are present; fall back to the old
+  `M:SS` for legacy videos; hide the badge for non-ready
+  statuses.
+
+### UX impact
+
+After the fix, a 34-video batch shows:
+
+- Video #1:  `ready · T:0:50, G:0:40` (no queue wait)
+- Video #17: `ready · T:0:55, G:0:42` (waited ~10 min for #1-16)
+- Video #34: `ready · T:0:55, G:0:44` (waited ~36 min for #1-33)
+
+Previously all three showed ~36:55, which made the per-video
+transcribe time look broken. Now the queue wait is invisible
+(it was never the transcribe's fault), and the per-step times
+match what the worker actually did.
+
+The `(in future should be configurable)` part of the user's
+todo is not done in this fix — that's deferred to MVP3+ since
+it requires a UI control for "what should the badge anchor on"
+(begin-to-ready, transcribe-only, generate-only, etc.). For
+now the badge is a fixed `T:..., G:...` format, which is what
+the user actually needed.
+
+### Regression test
+
+`test_transcribe_worker_stamps_started_at_before_whisper_loads`
+in `tests/test_per_step_timing.py` mocks
+`faster_whisper.WhisperModel` (the leaf class that `get_model()`
+instantiates) and asserts the stamp happens **before** the
+fake model is called. Confirmed to fail when the stamp is
+removed and pass with the fix in place. Plus 5 more tests in
+the same file covering the schema, migration, template render,
+legacy fallback, and non-ready-status hiding.
+
+### Test count
+
+526 → 532 (+6 new tests, all passing; 0 regressions in the rest
+of the suite).

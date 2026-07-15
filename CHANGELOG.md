@@ -309,3 +309,69 @@ panels are mutually exclusive (commits `dc11d5f`, `d7c4ef6`).
     the fix.
 
 [2.0.3]: https://github.com/yuanfengli168/video-learning-app/compare/369b111...HEAD
+
+## [2.0.4] - 2026-07-15 — Per-step transcribe/generate timing
+
+⏱️ **Bug fix + feature.** The course page badge now shows the
+**actual transcribe time** and **actual generate time** as
+separate numbers (`T:0:55, G:0:44`) instead of the misleading
+`created_at` → `generated_at` wall-clock duration (which
+included the bulk-upload queue wait and made video #34 of a
+34-video batch show `36:55` instead of its real ~55s of
+transcribe time).
+
+**Proven result:** video #34 of a 34-video batch, which
+queued for ~36 min behind the other 33 videos, now shows
+`ready · T:0:55, G:0:44` — the real processing time, not the
+queue + process time.
+
+### ✨ Features
+
+- **`transcribe_started_at` timestamp** — new nullable
+  `DateTime` column on `videos` (additive migration; legacy
+  rows stay NULL). Stamped at the very top of
+  `_run_transcribe_job`, BEFORE `WhisperModel.transcribe()` is
+  called, so the duration includes the model load time.
+  Re-stamped on every fresh transcribe run (manual retry, etc.)
+  so the badge always reflects the most recent transcribe work.
+- **Per-step duration badge** — `app/templates/course.html`
+  now shows `ready · T:M:SS, G:M:SS` for videos that have all
+  three timestamps (`transcribe_started_at`, `transcribed_at`,
+  `generated_at`). Legacy videos with `transcribe_started_at
+  IS NULL` still fall back to the old `created_at` →
+  `generated_at` duration, so no rows are visually broken.
+
+### 🐛 Bug fixes
+
+- **Misleading `ready · 36:55` badge for batch uploads** —
+  previously, the course page computed the duration as
+  `generated_at - created_at`, which for batch-uploaded
+  videos included the queue wait behind earlier videos in the
+  batch. A 55s transcribe that queued for 36 min showed as
+  `36:55` — users thought the transcribe itself was broken.
+  Now the badge shows the real transcribe and generate times
+  separately, and the queue wait is invisible (it was never
+  the transcribe's fault to begin with).
+
+### 🧪 Tests
+
+- 532 passing, 12 pre-existing failures (no new regressions)
+- +6 new tests in `tests/test_per_step_timing.py`:
+  1. `test_video_model_has_transcribe_started_at_column` —
+     schema-level check that the new column exists and is
+     nullable.
+  2. `test_transcribe_started_at_migration_registered` —
+     verifies the additive migration entry is registered in
+     `app/database.py:_MIGRATIONS`.
+  3. `test_transcribe_worker_stamps_started_at_before_whisper_loads` —
+     the core regression test. Mocks `faster_whisper.WhisperModel`
+     and asserts the stamp happens BEFORE the model is called.
+     Confirmed to fail when the stamp is removed.
+  4. `test_course_page_renders_both_per_step_times` — verifies
+     the new `T:...,G:...` format is rendered.
+  5. `test_course_page_legacy_fallback` — verifies the legacy
+     `created_at` → `generated_at` fallback still works.
+  6. `test_course_page_hides_timing_for_non_ready_status` —
+     verifies the badge is hidden for non-ready statuses.
+
+[2.0.4]: https://github.com/yuanfengli168/video-learning-app/compare/4573812...HEAD
