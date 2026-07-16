@@ -90,7 +90,7 @@ def _get_session():
 def test_registry_has_five_choices():
     """The registry must have exactly 5 entries: 4 manual + 1 smart.
 
-    Updated 2026-07-15 (MVP2.0.6 / manualTodo 2.2): the 2
+    Updated 2026-07-15 (MVP2.0.7 / manualTodo 2.2): the 2
     distil-large-v3 smart picks are commented out. The only
     smart pick that remains is 'local-large-turbo' (MLX
     Whisper Large V3 Turbo).
@@ -105,8 +105,8 @@ def test_registry_has_five_choices():
 def test_registry_has_expected_keys():
     """Specific keys must exist (4 manual + 1 smart).
 
-    Updated 2026-07-15 (MVP2.0.6): the 2 distil smart picks
-    ('local-large-turbo', 'local-large-turbo')
+    Updated 2026-07-15 (MVP2.0.7): the 2 distil smart picks
+    ('local-best-and-fast', 'local-best-and-extremely-fast')
     are commented out per manualTodo 2.2. The only smart
     pick that remains is 'local-large-turbo'.
     """
@@ -148,7 +148,7 @@ def test_manual_group_has_four_choices():
 def test_smart_group_has_one_choice():
     """The 'smart' group has just 1 pick: 'local-large-turbo'.
 
-    Updated 2026-07-15 (MVP2.0.6): the 2 distil-large-v3 smart
+    Updated 2026-07-15 (MVP2.0.7): the 2 distil-large-v3 smart
     picks are commented out. Only 'local-large-turbo' remains.
     """
     from app.services.transcription import MODEL_REGISTRY
@@ -180,7 +180,7 @@ def test_available_models_legacy_list_unchanged():
 def test_smart_picks_exported_separately():
     """SMART_PICKS contains exactly the 1 smart pick key.
 
-    Updated 2026-07-15 (MVP2.0.6 / manualTodo 2.2): the 2
+    Updated 2026-07-15 (MVP2.0.7 / manualTodo 2.2): the 2
     distil-large-v3 smart picks are commented out. The only
     smart pick that remains is 'local-large-turbo'.
     """
@@ -294,7 +294,7 @@ def test_resolve_manual_choice_returns_same_entry():
         assert r["backend"] == "faster-whisper"
 
 
-# MVP2.0.6 (manualTodo 2.2): the two distil-large-v3 smart
+# MVP2.0.7 (manualTodo 2.2): the two distil-large-v3 smart
 # picks ('local-large-turbo' and 'local-best-and-extremely-
 # fast') are commented out in MODEL_REGISTRY. The
 # 'test_resolve_smart_fast_pick_returns_same_entry' and
@@ -347,7 +347,7 @@ def test_default_is_local_large_turbo_when_mlx_available(monkeypatch):
 def test_default_is_base_on_intel(monkeypatch):
     """On Intel/x86 (no MLX), default = 'base' (the recommended manual pick).
 
-    Updated 2026-07-15 (MVP2.0.6 / manualTodo 2.2): the
+    Updated 2026-07-15 (MVP2.0.7 / manualTodo 2.2): the
     distil-large-v3 smart pick is no longer the non-MLX
     fallback (it's commented out). The non-MLX default is
     now 'base' (the recommended manual pick).
@@ -360,7 +360,7 @@ def test_default_is_base_on_intel(monkeypatch):
 def test_default_is_base_on_arm64_without_mlx(monkeypatch):
     """On arm64 without mlx-whisper installed, default = 'base' (recommended manual).
 
-    Updated 2026-07-15 (MVP2.0.6): same as the Intel case —
+    Updated 2026-07-15 (MVP2.0.7): same as the Intel case —
     the distil-large-v3 smart pick is no longer the fallback.
     """
     import sys
@@ -418,7 +418,7 @@ def test_transcribe_with_backend_faster_whisper_success(client: TestClient, tmp_
     assert meta["fallback_reason"] is None
 
 
-# MVP2.0.6 (manualTodo 2.2): the
+# MVP2.0.7 (manualTodo 2.2): the
 # 'test_transcribe_with_backend_smart_fast_pick_uses_distil'
 # test was removed because the 'local-large-turbo' choice
 # is commented out in MODEL_REGISTRY. The remaining smart
@@ -476,7 +476,7 @@ def test_transcribe_with_backend_mlx_path_calls_mlx_whisper(monkeypatch, tmp_pat
     assert "segments" in result
     assert "language" in result
     # 2. Should have called mlx_whisper.transcribe with model_id
-    # MVP2.0.6: was 'distil-large-v3' (the local-best-and-extremely-
+    # MVP2.0.7: was 'distil-large-v3' (the local-best-and-extremely-
     # fast choice's model). Now 'mlx-community/whisper-large-v3-turbo'
     # (the local-large-turbo choice's model).
     assert called_kwargs.get("path_or_hf_repo") == "mlx-community/whisper-large-v3-turbo"
@@ -583,7 +583,7 @@ def test_transcribe_with_backend_mlx_path_falls_back_to_faster(monkeypatch, tmp_
         result = transcribe_with_backend(str(fake_file), "local-large-turbo")
 
     # No NotImplementedError; ran on the faster-whisper path
-    # MVP2.0.6: fallback for MLX unavailability is now "base" (not
+    # MVP2.0.7: fallback for MLX unavailability is now "base" (not
     # the distil-large-v3 smart pick), so we assert backend +
     # fallback_occurred but NOT the specific model_id (which is
     # "base" now, not "distil-large-v3").
@@ -618,7 +618,7 @@ def test_models_endpoint_returns_new_shape(client: TestClient):
     assert set(data["models"]) == {"tiny", "base", "small", "medium"}
 
     # 'choices' has 5 entries (4 manual + 1 smart) with the right shape
-    # MVP2.0.6: was 7 (4 manual + 3 smart). The 2 distil-large-v3
+    # MVP2.0.7: was 7 (4 manual + 3 smart). The 2 distil-large-v3
     # smart picks are commented out per manualTodo 2.2.
     assert len(data["choices"]) == 5
     for choice in data["choices"]:
@@ -639,7 +639,7 @@ def test_models_endpoint_default_reflects_platform(client: TestClient, monkeypat
 
     We mock to make MLX unavailable (x86) and assert the default
     is 'base' (the recommended manual pick on non-MLX Macs).
-    MVP2.0.6: was 'local-large-turbo' (the distil-large-v3
+    MVP2.0.7: was 'local-large-turbo' (the distil-large-v3
     smart pick) — that pick is now commented out per
     manualTodo 2.2. The opposite case (MLX available →
     local-large-turbo) is covered by get_default_model_choice
@@ -683,7 +683,7 @@ def test_transcribe_endpoint_accepts_smart_turbo_pick(client: TestClient):
     """The local-large-turbo smart pick is accepted and persisted with the
     mlx-community/whisper-large-v3-turbo model_id on Apple Silicon.
 
-    MVP2.0.6: this test was 'test_transcribe_endpoint_accepts_smart_fast_pick'
+    MVP2.0.7: this test was 'test_transcribe_endpoint_accepts_smart_fast_pick'
     and tested the now-removed 'local-best-and-fast' (distil-large-v3)
     choice. It now tests the remaining smart pick, which is
     'local-large-turbo' (mlx-community/whisper-large-v3-turbo).
@@ -715,7 +715,7 @@ def test_transcribe_endpoint_smart_turbo_falls_back_on_x86(
 ):
     """The local-large-turbo smart pick on x86 falls back to 'base'.
 
-    MVP2.0.6: this test was 'test_transcribe_endpoint_smart_extremely_fast_falls_back_on_x86'
+    MVP2.0.7: this test was 'test_transcribe_endpoint_smart_extremely_fast_falls_back_on_x86'
     and tested the now-removed 'local-best-and-extremely-fast'
     choice with a distil-large-v3 fallback. It now tests the
     remaining smart pick with a 'base' fallback (the recommended
@@ -737,7 +737,7 @@ def test_transcribe_endpoint_smart_turbo_falls_back_on_x86(
         assert v.whisper_model == "local-large-turbo"
         # Fallback happened: actually ran on faster-whisper
         assert v.whisper_backend == "faster-whisper"
-        # MVP2.0.6: the fallback is "base" now (not distil-large-v3).
+        # MVP2.0.7: the fallback is "base" now (not distil-large-v3).
         assert v.whisper_resolved_model == "base"
         # Fallback reason recorded
         assert v.whisper_fallback_reason is not None
@@ -749,7 +749,7 @@ def test_transcribe_endpoint_smart_turbo_no_fallback_on_m1(
 ):
     """The local-large-turbo smart pick on arm64+MLX does NOT fall back.
 
-    MVP2.0.6: this test was 'test_transcribe_endpoint_smart_extremely_fast_no_fallback_on_m1'
+    MVP2.0.7: this test was 'test_transcribe_endpoint_smart_extremely_fast_no_fallback_on_m1'
     and tested the distil-large-v3 model. It now tests the
     local-large-turbo choice (mlx-community/whisper-large-v3-turbo)
     on a properly-mocked arm64+MLX environment.
@@ -771,7 +771,7 @@ def test_transcribe_endpoint_smart_turbo_no_fallback_on_m1(
         v = db.get(Video, video_id)
         assert v.whisper_model == "local-large-turbo"
         assert v.whisper_backend == "mlx-whisper"
-        # MVP2.0.6: the resolved model is now mlx-community/whisper-large-v3-turbo
+        # MVP2.0.7: the resolved model is now mlx-community/whisper-large-v3-turbo
         assert v.whisper_resolved_model == "mlx-community/whisper-large-v3-turbo"
         assert v.whisper_fallback_reason is None
 
@@ -828,7 +828,7 @@ def test_video_page_optgroup_manual_contains_four_originals(client: TestClient):
 def test_video_page_optgroup_smart_contains_one_pick(client: TestClient):
     """The 'Smart picks' optgroup contains the 1 remaining option.
 
-    MVP2.0.6 (manualTodo 2.2): the 2 distil-large-v3 smart
+    MVP2.0.7 (manualTodo 2.2): the 2 distil-large-v3 smart
     picks are removed. The 'Smart picks' optgroup now has
     just 'local-large-turbo' (MLX Whisper Large V3 Turbo).
     """

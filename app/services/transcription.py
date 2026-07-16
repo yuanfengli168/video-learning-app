@@ -41,7 +41,7 @@ _model_cache: dict[str, Any] = {}
 #   - group: "manual" (the 4 original tiny/base/small/medium) or
 #     "smart" (the recommended pick — currently just
 #     `local-large-turbo`; the 2 distil-large-v3 smart picks
-#     are commented out below per manualTodo 2.2 / MVP2.0.6)
+#     are commented out below per manualTodo 2.2 / MVP2.0.7)
 #
 # Adding a new model = adding one row here. The dropdown, the
 # endpoint validator, and the worker all read from this single
@@ -77,7 +77,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "group": "manual",
     },
     # ── Smart picks (group="smart") — recommended defaults ──
-    # MVP2.0.6 (2026-07-15, manualTodo 2.2): the two distil-large-v3
+    # MVP2.0.7 (2026-07-15, manualTodo 2.2): the two distil-large-v3
     # smart picks are commented out because distil-large-v3 is
     # English-biased and ignores the `language="zh"` lock. The
     # only smart pick that survives is `local-large-turbo`
@@ -111,7 +111,7 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
     # ~1.5-2x slower than distil-large-v3 on M-series. Apple
     # Silicon only.
     "local-large-turbo": {
-        # MVP2.0.6: the user-facing label was given a proper
+        # MVP2.0.7: the user-facing label was given a proper
         # name (vs the previous "Local Large-v3 Turbo (MLX,
         # M-series, multilingual)" which was descriptive but
         # didn't name the model or signal "recommended"). The
@@ -562,10 +562,10 @@ def resolve_model_choice(
 def get_default_model_choice() -> str:
     """Return the recommended default choice for this Mac.
 
-    As of MVP2.0.6 (2026-07-15), the default is
+    As of MVP2.0.7 (2026-07-15), the default is
     "local-large-turbo" (mlx-community/whisper-large-v3-turbo
     via mlx-whisper) on Apple Silicon, and "base" on
-    x86 / arm64 without MLX. Before MVP2.0.6, the
+    x86 / arm64 without MLX. Before MVP2.0.7, the
     non-MLX fallback was "local-best-and-fast" (distil-
     large-v3 via faster-whisper), but those distil entries
     are now commented out per manualTodo 2.2 because
@@ -590,7 +590,7 @@ def get_default_model_choice() -> str:
     """
     if is_mlx_available() and "local-large-turbo" in MODEL_REGISTRY:
         return "local-large-turbo"
-    # MVP2.0.6: the distil-large-v3 smart pick is no longer the
+    # MVP2.0.7: the distil-large-v3 smart pick is no longer the
     # default fallback (it's commented out in MODEL_REGISTRY
     # per manualTodo 2.2). On non-MLX Macs, fall back to "base"
     # — the recommended manual pick.

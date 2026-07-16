@@ -60,7 +60,7 @@ async def list_whisper_models() -> dict[str, Any]:
     MVP3.0 #2: returns a richer shape than before — the UI now
     groups choices into a manual group (the 4 originals) and a
     smart-picks group (currently just `local-large-turbo` —
-    the distil-large-v3 smart picks were removed in MVP2.0.6
+    the distil-large-v3 smart picks were removed in MVP2.0.7
     per manualTodo 2.2 because they're English-biased), so it
     can render an optgroup dropdown with labels. The legacy
     `models` field is preserved for any caller that still wants
@@ -623,7 +623,7 @@ def _run_auto_pipeline(video_id: str, model_name: str | None = None) -> None:
          to avoid coupling at module load time).
 
     Runs in the same process (BackgroundTasks, no worker queue yet —
-    that's #11 / MVP2.0.3).
+    not yet started; tracked in doc/MVP3.0-Status.md item 4 (Background worker pool + status polling for batch uploads)).
 
     MVP3.0 #2: `model_name` is now a user *choice* key from
     MODEL_REGISTRY (e.g. "base", "local-best-and-fast"), not a raw
