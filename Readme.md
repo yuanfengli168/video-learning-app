@@ -1,10 +1,10 @@
 # Video Learning App
 
-![MVP2 Status](https://img.shields.io/badge/MVP2.0.1%20wave%202-shipped-brightgreen) ![Tests](https://img.shields.io/badge/tests-396%20passing-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-87%25-brightgreen) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Jinja2%20%7C%20SQLite%20%7C%20Ollama-blue) ![Branch](https://img.shields.io/badge/branch-MVP2.0-yellow)
+![MVP2 Status](https://img.shields.io/badge/MVP2.0-shipped-brightgreen) ![Tests](https://img.shields.io/badge/tests-552%20passing-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Jinja2%20%7C%20SQLite%20%7C%20Ollama-blue) ![Branch](https://img.shields.io/badge/branch-main-yellow)
 
 An open-source, AI-powered web application designed to help users learn from online video classes. The app transcribes local video files, generates interactive learning materials (summaries, mindmaps, quizzes, flashcards), and provides a ChatGPT-style interface to chat with an AI about real-world applications of the concepts.
 
-> **MVP1 is finished** ([scorecard](doc/MVP1.0-successfullyFinished.md)). **MVP2.0 is in progress** on branch `MVP2.0` (20 commits ahead of `main`, 396/396 tests passing, 87% coverage). MVP2.0.0 + 2.0.0a + 2.0.1 wave 1 + 2 are shipped. See [`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) for the full status.
+> **MVP1 is finished** ([scorecard](doc/MVP1.0-successfullyFinished.md)). **MVP2.0 is finished** ([scorecard](doc/MVP2.0-successfullyFinished.md)) on `main` — 9 versions shipped (2.0.0 → 2.0.8 + same-day 2.0.8 amendment), 552/552 tests passing, 92% coverage. See [`doc/MVP2.0-Status.md`](doc/MVP2.0-Status.md) for the full per-version history, and [`doc/MVP2.1-all.md`](doc/MVP2.1-all.md) for what's next.
 
 ## Quick Commands
 ```
@@ -55,15 +55,21 @@ uvicorn app.main:app --reload   # http://localhost:8000
 ```
 
 ### Prerequisites
-*   **Ollama** running at `http://localhost:11434` (`ollama pull glm-5.2:cloud`)
+*   **Ollama** running at `http://localhost:11434`. Install + start:
+    ```bash
+    brew install ollama
+    ollama serve &              # or let scripts/start.sh auto-start it
+    ollama pull glm-5.2:cloud   # the default LLM; ~2 GB download
+    ```
 *   **FFmpeg** for audio extraction (`brew install ffmpeg`)
-*   **Firebase project** with Google + Email/Password auth enabled (see `doc/handover.md` for setup)
+*   **Firebase project** with Google + Email/Password auth enabled (see `doc/handover.md` for setup). **Important:** add `localhost` to your Firebase project's **Authentication → Settings → Authorized Domains** before testing Google sign-in, otherwise the popup will fail with a domain-not-authorized error.
+*   **(Apple Silicon only, optional)** `pip install mlx-whisper` for the 5-10x faster MLX Whisper Large V3 Turbo backend. Without it, the app falls back to `faster-whisper` `base` (CPU, slower but still works). See `doc/MVP2.0-Status.md` §19 for the smart-pick details.
 
 ## Testing
 ```bash
 bash scripts/test.sh        # full test suite with coverage
-pytest                      # 218 unit tests (Whisper/Ollama mocked)
-pytest --cov=app            # 96% coverage report
+pytest                      # 552 unit tests (Whisper/Ollama mocked)
+pytest --cov=app            # 92% coverage report
 ```
 
 ## Project Structure
@@ -74,13 +80,16 @@ app/
 ├── database.py          # SQLAlchemy engine + session
 ├── models/              # ORM: Course, Section, Video, Asset, ChatSession, ChatMessage
 ├── routers/             # API routes: auth, session, courses, videos, generation, chat, frontend
-├── services/            # Business logic: transcription, llm, chat
+├── services/            # Business logic: transcription, llm, chat, retry, transcript_export
 ├── auth/                # Firebase Admin SDK + session cookie helpers
-└── templates/           # Jinja2 HTML templates (base, dashboard, course, video, login)
-scripts/                 # setup.sh, setup_firebase_key.sh, start.sh, test.sh
-tests/                   # 218 pytest tests (96% coverage)
-doc/                     # design.md, handover.md, deployment.md, MVP1.0-successfullyFinished.md
-CHANGELOG.md             # version history (Keep a Changelog format)
+├── middleware.py        # Security headers (CSP, HSTS, etc.)
+├── middleware_session.py # 3-state session-cookie semantics (MVP2.0.6 logout fix)
+├── jobs.py              # Job tracking (per-step timing, MVP2.0.4)
+└── templates/           # Jinja2 HTML templates (base, dashboard, course, video, login, chat_history)
+scripts/                 # setup.sh, setup_firebase_key.sh, start.sh, stop.sh, status.sh, test.sh, retry_failed_generate.py
+tests/                   # 552 pytest tests (92% coverage) — see tests/ for the per-feature test files
+doc/                     # design.md, handover.md, deployment.md, MVP1.0-successfullyFinished.md, MVP2.0-successfullyFinished.md, MVP2.0-Status.md, MVP2.0-first-designQuestions.md, MVP2.1-all.md, MVP3.0-Status.md
+CHANGELOG.md             # version history (Keep a Changelog format, 2.0.0 → 2.0.8 + amendment)
 SECURITY.md              # security policy + threat model + how to report vulns
 ```
 
