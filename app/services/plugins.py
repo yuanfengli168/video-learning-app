@@ -166,17 +166,29 @@ def transcode_webm_to_mp4(video: "Video", db: Session) -> PluginResult:
             ),
         )
 
-    # Resolve the source path. video.file_path is the
-    # absolute path on disk (set at upload time, e.g.
-    # /Users/.../uploads/abc123/lesson1.webm). We use it
-    # directly rather than reconstructing from upload_dir
-    # + relative path.
+    # Resolve the source path. The videos.file_path column
+    # is written at upload time as `settings.upload_path /
+    # saved_filename` (see app/routers/videos.py). If
+    # settings.upload_dir is the default "./uploads", the
+    # stored value is the relative path "uploads/<uuid>.<ext>"
+    # (e.g. "uploads/5b79e2c1-...mp4") because Path("./uploads")
+    # normalized to "uploads" and str(Path) gives "uploads/...".
+    # If settings.upload_dir is an absolute path, the stored
+    # value is absolute (e.g. /Users/foo/uploads/<uuid>.mp4).
+    #
+    # So:
+    #   - If absolute: use as-is
+    #   - If relative: resolve from the project root (CWD).
+    #     Do NOT prepend upload_dir — the relative path
+    #     already starts with "uploads/". This was the
+    #     2.1.0 double-prefix bug (fixed 2026-07-18 after
+    #     the user reported "/uploads/uploads/...").
     src = Path(video.file_path)
     if not src.is_absolute():
-        # Defensive: legacy rows might have a relative
-        # path. Fall back to upload_dir / file_path.
-        from app.config import settings  # local import to avoid cycle
-        src = (Path(settings.upload_dir) / video.file_path).resolve()
+        # Resolve from the project root (CWD when the
+        # server was started). The relative path
+        # "uploads/abc.mp4" is already relative to CWD.
+        src = src.resolve()
     if not src.exists():
         return PluginResult(
             ok=False,

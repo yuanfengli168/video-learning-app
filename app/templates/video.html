@@ -328,6 +328,50 @@
                             </p>
                             {% endif %}
                             <div id="result-{{ plugin.key }}" class="hidden mt-2 text-xs"></div>
+                            {# MVP2.1.0.1: "Last run" line — shows the most
+                               recent PluginRun for this video + plugin
+                               key. Persists across page reloads (read
+                               from the plugin_runs DB table on every
+                               page load). Shows success, error, or
+                               empty state. #}
+                            {% set last_run = plugin_last_runs.get(plugin.key) %}
+                            <div id="last-run-{{ plugin.key }}" class="mt-2 text-xs">
+                                {% if last_run %}
+                                    {% if last_run.ok and last_run.output_path %}
+                                    <div class="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800 rounded p-2">
+                                        <div class="flex items-start gap-2">
+                                            <span class="flex-shrink-0">✅</span>
+                                            <div class="flex-1 min-w-0">
+                                                <div class="font-medium">Last successful output:</div>
+                                                <div class="font-mono text-xs mt-1 break-all"
+                                                     data-output-path="{{ last_run.output_path }}">
+                                                    {{ last_run.output_path }}
+                                                </div>
+                                                <button type="button"
+                                                        onclick="revealInFinder('{{ last_run.output_path | e }}')"
+                                                        class="mt-1 text-indigo-600 dark:text-indigo-400 hover:underline">
+                                                    Open in Finder
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% else %}
+                                    <div class="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded p-2">
+                                        <div class="flex items-start gap-2">
+                                            <span class="flex-shrink-0">❌</span>
+                                            <div class="flex-1 min-w-0">
+                                                <div class="font-medium">Last run failed:</div>
+                                                <div class="text-xs mt-1 break-words">{{ last_run.message }}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+                                {% else %}
+                                    <p class="text-xs text-gray-400 italic">
+                                        No plugin runs yet — click Run to convert to MP4.
+                                    </p>
+                                {% endif %}
+                            </div>
                         </div>
                         {% endfor %}
                         {% if not available_plugins %}
@@ -2163,6 +2207,14 @@ async function runPlugin(key) {
             result.textContent = `❌ ${data.message}`;
             result.classList.remove('hidden');
         }
+        // MVP2.1.0.1: refresh the persistent "Last run"
+        // section so the user doesn't have to reload the
+        // page to see the new output path. We fetch the
+        // most recent run (the one we just made) and
+        // replace the last-run-{key} div contents. We
+        // do this on both success AND failure so the
+        // error message persists across tab switches.
+        await refreshLastRun(key);
     } catch (err) {
         result.className = result.className + ' bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded p-2 mt-2 text-xs';
         result.textContent = `❌ ${err.message}`;
@@ -2170,6 +2222,122 @@ async function runPlugin(key) {
     } finally {
         btn.disabled = false;
         btn.textContent = originalLabel;
+    }
+}
+
+// refreshLastRun (MVP2.1.0.1) — re-fetch the most
+// recent PluginRun for this video+plugin and replace
+// the #last-run-{key} div with the new contents. Called
+// after every runPlugin() to keep the "Last run" line
+// in sync without a page reload.
+async function refreshLastRun(key) {
+    const container = document.getElementById(`last-run-${key}`);
+    if (!container) return;
+    try {
+        const resp = await fetch(
+            `/api/plugins/runs/by-video/${encodeURIComponent(videoId)}`,
+            { credentials: 'same-origin' }
+        );
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const run = data.run;
+        // Only update if this run is for OUR plugin key
+        // (the by-video endpoint returns the most recent
+        // run for the video, regardless of plugin).
+        if (!run || run.plugin_key !== key) {
+            // The just-finished run wasn't the most
+            // recent (unlikely, but possible if a second
+            // run started). Leave the existing last-run
+            // as-is.
+            return;
+        }
+        // Build the new HTML for the last-run div.
+        // We construct it via template strings, matching
+        // the server-rendered structure in video.html.
+        // On a future refactor we could factor this out
+        // into a shared template; for now, duplication
+        // is fine (~10 lines per side).
+        let html;
+        if (run.ok && run.output_path) {
+            html = `
+                <div class="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800 rounded p-2">
+                    <div class="flex items-start gap-2">
+                        <span class="flex-shrink-0">✅</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-medium">Last successful output:</div>
+                            <div class="font-mono text-xs mt-1 break-all"
+                                 data-output-path="${escapeHtml(run.output_path)}">
+                                ${escapeHtml(run.output_path)}
+                            </div>
+                            <button type="button"
+                                    onclick="revealInFinder('${escapeJs(run.output_path)}')"
+                                    class="mt-1 text-indigo-600 dark:text-indigo-400 hover:underline">
+                                Open in Finder
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+        } else {
+            html = `
+                <div class="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded p-2">
+                    <div class="flex items-start gap-2">
+                        <span class="flex-shrink-0">❌</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-medium">Last run failed:</div>
+                            <div class="text-xs mt-1 break-words">${escapeHtml(run.message)}</div>
+                        </div>
+                    </div>
+                </div>`;
+        }
+        container.innerHTML = html;
+    } catch (err) {
+        // Non-fatal: the last-run section just won't
+        // update until the next page reload. We log to
+        // console for debugging.
+        console.warn('refreshLastRun failed:', err);
+    }
+}
+
+// escapeHtml / escapeJs (MVP2.1.0.1) — sanitize
+// run.output_path before injecting it into innerHTML
+// or an onclick attribute. The path comes from the
+// filesystem so it SHOULD be safe, but defense in
+// depth (the path is rendered client-side via
+// template strings, so escaping matters).
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+function escapeJs(s) {
+    // For inside a single-quoted JS string (onclick="...").
+    // Escape backslashes + single quotes.
+    return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+// revealInFinder (MVP2.1.0.1) — POSTs the absolute
+// path to /api/plugins/reveal which runs `open -R` on
+// macOS (or the platform equivalent) to highlight
+// the file in the system file manager. The backend
+// validates the path is inside upload_dir or
+// storage_dir (no arbitrary-file access).
+async function revealInFinder(path) {
+    try {
+        const resp = await fetch('/api/plugins/reveal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+            credentials: 'same-origin',
+        });
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            throw new Error(data.detail || `HTTP ${resp.status}`);
+        }
+    } catch (err) {
+        alert(`Could not reveal in Finder: ${err.message}`);
     }
 }
 

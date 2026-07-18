@@ -57,7 +57,7 @@ def _make_video(db: Session, tmp_path: Path, *, name: str = "lesson1.webm") -> V
         section_id="s1",
         title="Test video",
         filename="lesson1.webm",
-        file_path=str(tmp_path / "abc/lesson1.webm"),
+        file_path=str((tmp_path / "abc/lesson1.webm").resolve()),
         status="ready",
     )
     db.add(video)
@@ -115,6 +115,10 @@ def test_transcode_handles_ffmpeg_error_gracefully(db_session, tmp_path, monkeyp
     """If ffmpeg exits non-zero, return ok=False with stderr in the message."""
     from app.config import settings
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    # The test stores file_path as a relative path ("abc/lesson.webm")
+    # which the plugin resolves from CWD. chdir to tmp_path so the
+    # resolution finds the file we wrote at tmp_path/abc/lesson.webm.
+    monkeypatch.chdir(tmp_path)
 
     # Set up a video with a real source file
     course = Course(id="c1", user_id="u1", title="Test course")
@@ -150,6 +154,7 @@ def test_transcode_handles_timeout(db_session, tmp_path, monkeypatch):
     """If ffmpeg takes longer than 30 min, return ok=False with timeout msg."""
     from app.config import settings
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
 
     course = Course(id="c1", user_id="u1", title="Test course")
     section = Section(id="s1", course_id="c1", title="Test section")
@@ -192,6 +197,7 @@ def test_transcode_actually_runs_ffmpeg_on_real_file(db_session, tmp_path, monke
     """
     from app.config import settings
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
 
     course = Course(id="c1", user_id="u1", title="Test course")
     section = Section(id="s1", course_id="c1", title="Test section")
@@ -337,3 +343,80 @@ def test_run_plugin_swallows_exceptions_and_logs_them(db_session, tmp_path, monk
     assert "boom" in result.message.lower()
     assert db_session.query(PluginRun).count() == 1
     assert run_row.ok is False
+
+
+# ── Regression: relative path resolution (2.1.0 bug fix) ──────────────
+def test_relative_file_path_resolves_from_cwd_not_upload_dir(
+    db_session, tmp_path, monkeypatch
+):
+    """Regression test for the 2.1.0 double-prefix bug.
+
+    The videos.file_path column is written at upload time
+    as `settings.upload_path / saved_filename`. When
+    settings.upload_dir is the default "./uploads", the
+    stored value is the RELATIVE path "uploads/<uuid>.<ext>"
+    (NOT absolute, NOT prepended with another upload_dir).
+
+    The plugin must resolve this relative path from CWD
+    (the project root), NOT prepend upload_dir to it
+    (which would produce "uploads/uploads/<uuid>.<ext>"
+    and fail to find the file).
+
+    This test pins down the fix so a future refactor
+    can't reintroduce the bug.
+    """
+    from app.config import settings
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
+    # The relative file_path is "uploads/<uuid>.<ext>"
+    # (this is the exact format the upload router writes
+    # when settings.upload_dir is the default "./uploads").
+    # The file actually lives at tmp_path/uploads/<uuid>.<ext>.
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir(exist_ok=True)
+    real_file = upload_dir / "test.webm"
+    real_file.write_bytes(b"fake webm content")
+    # chdir to tmp_path so the plugin's "resolve the
+    # relative path from CWD" finds the file at
+    # tmp_path/uploads/test.webm (not the project root's
+    # uploads/ dir, which is empty in the test env).
+    monkeypatch.chdir(tmp_path)
+
+    course = Course(id="c1", user_id="u1", title="Test course")
+    section = Section(id="s1", course_id="c1", title="Test section")
+    video = Video(
+        id="v1",
+        section_id="s1",
+        title="Test video",
+        filename="test.webm",
+        file_path="uploads/test.webm",  # RELATIVE, with prefix
+        status="ready",
+    )
+    db_session.add_all([course, section, video])
+    db_session.commit()
+
+    # Mock ffmpeg so we can verify the absolute path ffmpeg
+    # was called with. We assert it's the resolved absolute
+    # path under tmp_path, NOT tmp_path/uploads/uploads/...
+    fake_proc = MagicMock()
+    fake_proc.returncode = 0
+    fake_proc.stderr = ""
+
+    with patch("app.services.plugins.subprocess.run", return_value=fake_proc) as mock_run:
+        result = transcode_webm_to_mp4(video, db_session)
+
+    # The result should be ok=True (ffmpeg returned 0)
+    assert result.ok is True, (
+        f"Expected success, got ok=False with: {result.message}"
+    )
+    # And the source path passed to ffmpeg must NOT have
+    # the double prefix. It should be tmp_path/uploads/test.webm
+    # (one 'uploads', not two).
+    call_args = mock_run.call_args[0][0]  # first positional arg = cmd list
+    src_passed_to_ffmpeg = call_args[call_args.index("-i") + 1]
+    assert "uploads/uploads" not in src_passed_to_ffmpeg, (
+        f"DOUBLE-PREFIX BUG REGRESSED! ffmpeg was called with: "
+        f"{src_passed_to_ffmpeg}. The plugin resolved the relative "
+        f"path as 'uploads/uploads/test.webm' instead of 'uploads/test.webm'."
+    )
+    # Verify the actual file would have been found
+    assert Path(src_passed_to_ffmpeg).resolve() == real_file.resolve()

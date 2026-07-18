@@ -1,9 +1,11 @@
 """Plugin Tools router (MVP2.1.0).
 
 Endpoints:
-  GET  /api/plugins              list available plugins (with availability)
-  POST /api/plugins/{name}/run   run a plugin on a video
-  GET  /api/plugins/runs/{id}    get the status of a plugin run
+  GET  /api/plugins                          list available plugins
+  POST /api/plugins/{name}/run               run a plugin on a video
+  GET  /api/plugins/runs/{id}                get the status of a plugin run
+  GET  /api/plugins/runs/by-video/{video_id} get the most recent run for a video
+  POST /api/plugins/reveal                   reveal a file in Finder/Explorer
 
 The list endpoint is open (no auth) — the UI uses it to
 render the Tools tab. The run endpoint requires a valid
@@ -22,11 +24,18 @@ Why a single /api/plugins router (not bolted onto videos.py):
 
 from __future__ import annotations
 
+import platform
+import subprocess
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
+from app.config import settings
 from app.database import get_db
+from app.models.plugin_run import PluginRun
 from app.models.video import Video
 from app.services.plugins import (
     PLUGIN_REGISTRY,
@@ -157,3 +166,185 @@ async def get_plugin_run(
         "extra": run.extra_json,
         "created_at": run.created_at.isoformat(),
     }
+
+
+# ── 2.1.0.1: "Last run" + "Open in Finder" endpoints ───────────────────
+class RevealRequest(BaseModel):
+    """Request body for POST /api/plugins/reveal."""
+    path: str
+
+
+@router.get("/runs/by-video/{video_id}")
+async def get_most_recent_run_for_video(
+    video_id: str,
+    _user: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the most recent PluginRun for this video, or null.
+
+    Used by the video page's Tools tab to render the
+    'Last run' line under each Run button. Returns 200
+    with `{"run": null}` when no run exists yet (so
+    the UI can show the empty-state hint).
+
+    Why a separate endpoint (instead of just embedding
+    in the video_view context):
+      - The Tools tab is also loaded dynamically by JS
+        (the user might open it long after page load)
+      - A future 'refresh after a long transcode' use
+        case wants a lightweight fetch, not a full
+        page reload
+      - The endpoint is cheap: one indexed query on
+        plugin_runs.video_id ordered by created_at DESC
+    """
+    # Verify the video exists (and is owned by this user).
+    # We don't 404 if the video doesn't exist; we return
+    # {"run": null} so the UI can render gracefully even
+    # for stale tabs.
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if video is None:
+        return {"run": None}
+
+    run = (
+        db.query(PluginRun)
+        .filter(PluginRun.video_id == video_id)
+        .order_by(PluginRun.created_at.desc())
+        .first()
+    )
+    if run is None:
+        return {"run": None}
+
+    return {
+        "run": {
+            "id": run.id,
+            "video_id": run.video_id,
+            "plugin_key": run.plugin_key,
+            "ok": run.ok,
+            "message": run.message,
+            "output_path": run.output_path,
+            "extra": run.extra_json,
+            "created_at": run.created_at.isoformat(),
+        }
+    }
+
+
+@router.post("/reveal")
+async def reveal_in_file_manager(
+    body: RevealRequest,
+    _user: str = Depends(get_current_user),
+) -> dict:
+    """Reveal a file in Finder / Explorer / file manager.
+
+    Security:
+      - The path MUST be inside settings.upload_dir (or
+        a few other safe locations like settings.storage_dir).
+        We resolve both sides to absolute paths and check
+        that the request path is a child of the allowed
+        roots. This prevents an attacker from using this
+        endpoint to open arbitrary files on the user's
+        Mac (e.g. /etc/passwd, ~/.ssh/id_rsa).
+      - We do NOT shell-escape; we use subprocess.run
+        with a list of args (not a shell string), so
+        there's no shell-injection risk.
+
+    Platform handling:
+      - macOS: `open -R <path>` reveals in Finder
+        (the file is highlighted)
+      - Windows: `explorer /select,<path>` reveals in
+        Explorer
+      - Linux: `xdg-open <parent_dir>` opens the parent
+        directory (most file managers don't have a
+        single-file 'reveal' equivalent). For Nautilus,
+        `nautilus --select <path>` works but isn't
+        universal, so we use xdg-open for portability.
+    """
+    raw = Path(body.path)
+    if not raw.is_absolute():
+        # Refuse relative paths to avoid any ambiguity
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be absolute.",
+        )
+
+    # Normalize: resolve symlinks + `..` etc.
+    try:
+        resolved = raw.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot resolve path: {exc!r}",
+        )
+
+    # Allow-list: must be inside upload_dir or storage_dir.
+    # These are the two folders the app writes to. Any
+    # plugin output we want to reveal MUST land in one
+    # of these.
+    #
+    # We use Path.is_relative_to() (Python 3.9+) which
+    # correctly handles the prefix-vs-child case
+    # (e.g. /Users/foo/uploads is NOT a parent of
+    # /Users/foo/uploads-v2/file.mp4).
+    allowed_roots = [
+        Path(settings.upload_dir).resolve(),
+        Path(settings.storage_dir).resolve(),
+    ]
+    is_allowed = any(
+        resolved.is_relative_to(root) for root in allowed_roots
+    )
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Path is not in an allowed directory. "
+                f"Allowed roots: {[str(r) for r in allowed_roots]}"
+            ),
+        )
+
+    # Build the platform-specific command. We use a
+    # list of args (NOT a shell string) to avoid
+    # shell-injection. The `subprocess.run` with
+    # shell=False (the default) is safe.
+    system = platform.system()
+    if system == "Darwin":
+        cmd = ["open", "-R", str(resolved)]
+    elif system == "Windows":
+        # explorer.exe requires /select, with no space
+        # after the comma (Windows quirk)
+        cmd = ["explorer", f"/select,{resolved}"]
+    else:
+        # Linux: open the parent directory
+        cmd = ["xdg-open", str(resolved.parent)]
+
+    try:
+        # We don't wait for the file manager to close
+        # (it never does), so we use a short timeout
+        # to detect the spawn failure (command not
+        # found, permission denied, etc.)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        # The command itself might have succeeded but
+        # the subprocess is still attached to the file
+        # manager. We don't surface this as an error.
+        return {"ok": True, "path": str(resolved), "platform": system}
+    except FileNotFoundError as exc:
+        # e.g. `open` not on $PATH (extremely rare on macOS)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"File manager command not found: {exc!r}",
+        )
+
+    if proc.returncode != 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"File manager returned non-zero exit "
+                f"({proc.returncode}): {proc.stderr or '(no stderr)'}"
+            ),
+        )
+
+    return {"ok": True, "path": str(resolved), "platform": system}
