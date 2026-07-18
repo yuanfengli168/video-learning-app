@@ -167,3 +167,11 @@ class Video(Base):
         back_populates="video",
         cascade="all, delete-orphan",
     )
+    # Plugin run audit log (MVP2.1.0). Every time the user
+    # runs a plugin (e.g. WebM -> MP4) on this video, a
+    # row is written here. Cascade-deleted with the video.
+    plugin_runs: Mapped[list["PluginRun"]] = relationship(
+        "PluginRun",
+        back_populates="video",
+        cascade="all, delete-orphan",
+    )

@@ -223,6 +223,31 @@ async def video_view(
     ).scalar_one_or_none()
     summary_content = summary_asset.content if summary_asset else None
 
+    # Available plugins for the Tools tab (MVP2.1.0). The
+    # list is a thin dict per plugin (label, description,
+    # available, missing deps) so the template can render
+    # the buttons without needing a back-reference into
+    # the service layer. The full PluginSpec object stays
+    # in the service layer.
+    from app.services.plugins import list_available_plugins
+    import shutil as _shutil
+
+    available_plugins = []
+    for spec in list_available_plugins():
+        missing = sorted(
+            req for req in spec.requires
+            if _shutil.which(req) is None
+        )
+        available_plugins.append(
+            {
+                "key": spec.key,
+                "label": spec.label,
+                "description": spec.description,
+                "available": len(missing) == 0,
+                "missing": missing,
+            }
+        )
+
     return templates.TemplateResponse(
         request,
         "video.html",
@@ -234,6 +259,7 @@ async def video_view(
             course=course,
             section=section,
             summary_content=summary_content,
+            available_plugins=available_plugins,
         ),
     )
 

@@ -44,7 +44,14 @@ def init_db() -> None:
     without help. `_apply_migrations` issues idempotent `ALTER TABLE ... ADD
     COLUMN` for any column listed in `_MIGRATIONS` that doesn't already exist.
     """
-    from app.models import asset, chat, course, section, video  # noqa: F401
+    from app.models import (  # noqa: F401
+        asset,
+        chat,
+        course,
+        plugin_run,
+        section,
+        video,
+    )
 
     Base.metadata.create_all(bind=engine)
     _apply_migrations()

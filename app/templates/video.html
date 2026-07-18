@@ -206,6 +206,7 @@
                 <button onclick="switchTab('quiz')" id="tab-quiz" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Quiz</button>
                 <button onclick="switchTab('mindmap')" id="tab-mindmap" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Mindmap</button>
                 <button onclick="switchTab('discuss')" id="tab-discuss" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">💬 Discuss</button>
+                <button onclick="switchTab('tools')" id="tab-tools" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">🛠️ Tools</button>
             </div>
 
             <!-- Tab content -->
@@ -281,6 +282,57 @@
                         <p class="text-xs text-gray-400 mt-2">
                             Sessions are saved in <a href="/chat-history" class="text-indigo-500 hover:underline">Chat History</a> with a "Video" badge.
                         </p>
+                    </div>
+                </div>
+
+                <!-- Tools (MVP2.1.0) — Plugin Tools tab.
+                     Lists the available plugins from PLUGIN_REGISTRY
+                     (currently just WebM -> MP4). Each plugin is
+                     a button that POSTs to /api/plugins/{key}/run.
+                     The result is shown inline below the button.
+                     The "ffmpeg not found" state is rendered when
+                     the plugin is unavailable. -->
+                <div id="content-tools" class="hidden">
+                    <div class="space-y-3">
+                        {% for plugin in available_plugins %}
+                        <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"
+                             data-plugin-key="{{ plugin.key }}">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="flex-1">
+                                    <h4 class="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                                        {{ plugin.label }}
+                                    </h4>
+                                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                        {{ plugin.description }}
+                                    </p>
+                                </div>
+                                <button
+                                    id="run-plugin-{{ plugin.key }}"
+                                    onclick="runPlugin('{{ plugin.key }}')"
+                                    {% if not plugin.available %}
+                                    disabled
+                                    title="Missing system dependency: {{ plugin.missing | join(', ') }}"
+                                    class="flex-shrink-0 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed disabled:text-gray-500"
+                                    {% else %}
+                                    class="flex-shrink-0 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700"
+                                    {% endif %}
+                                >
+                                    Run
+                                </button>
+                            </div>
+                            {% if not plugin.available %}
+                            <p class="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                                ⚠️ Missing system dependency: <code class="font-mono">{{ plugin.missing | join(', ') }}</code>.
+                                Install with <code class="font-mono">brew install {{ plugin.missing | join(' ') }}</code> (macOS) or
+                                <code class="font-mono">apt install {{ plugin.missing | join(' ') }}</code> (Linux), then reload this page.
+                            </p>
+                            {% endif %}
+                            <div id="result-{{ plugin.key }}" class="hidden mt-2 text-xs"></div>
+                        </div>
+                        {% endfor %}
+                        {% if not available_plugins %}
+                        <p class="text-sm text-gray-400">No plugins available.</p>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -2070,6 +2122,55 @@ function showDeleteModal() {
 function hideDeleteModal() {
     const modal = document.getElementById('delete-modal');
     if (modal) modal.classList.add('hidden');
+}
+
+// runPlugin (MVP2.1.0) — run a plugin from the Tools tab.
+// Called from the inline onclick on each plugin's Run
+// button. POSTs to /api/plugins/{key}/run?video_id=...,
+// shows the result inline below the button. Disables the
+// button while running so a double-click doesn't queue
+// two transcode jobs of the same file. The "Run" button
+// is re-enabled in finally{} so the user can retry on
+// failure.
+async function runPlugin(key) {
+    const btn = document.getElementById(`run-plugin-${key}`);
+    const result = document.getElementById(`result-${key}`);
+    if (!btn || !result) return;
+
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = '⏳ Running...';
+    result.classList.add('hidden');
+    result.className = result.className.replace(/bg-\S+/g, '').trim() + ' mt-2 text-xs';
+
+    try {
+        const resp = await fetch(
+            `/api/plugins/${key}/run?video_id=${encodeURIComponent(videoId)}`,
+            { method: 'POST' }
+        );
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw new Error(data.detail || `HTTP ${resp.status}`);
+        }
+        // Success or plugin-level failure — both come back
+        // as 200 with `ok: false` for plugin errors.
+        if (data.ok) {
+            result.className = result.className + ' bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800 rounded p-2 mt-2 text-xs';
+            result.textContent = `✅ ${data.message}`;
+            result.classList.remove('hidden');
+        } else {
+            result.className = result.className + ' bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded p-2 mt-2 text-xs';
+            result.textContent = `❌ ${data.message}`;
+            result.classList.remove('hidden');
+        }
+    } catch (err) {
+        result.className = result.className + ' bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded p-2 mt-2 text-xs';
+        result.textContent = `❌ ${err.message}`;
+        result.classList.remove('hidden');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+    }
 }
 
 async function confirmDelete() {
