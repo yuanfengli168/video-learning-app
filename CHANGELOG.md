@@ -688,3 +688,97 @@ no version bump.
   is removed (regression test).
 
 [2.0.8]: https://github.com/yuanfengli168/video-learning-app/compare/6eff8d7...HEAD
+
+## [2.1.0] - 2026-07-18 — Plugin Tools tab + WebM→MP4
+
+🎨 **UI feature.** A new "🛠️ Tools" tab on the video
+page, listing the available plugins from
+`PLUGIN_REGISTRY`. v1 ships with one plugin: **Convert to
+MP4 (H.264 + AAC)** — transcodes the current video via
+`ffmpeg` to a more browser-compatible format. The new
+file is written **side-by-side** with the original (the
+original WebM is never touched).
+
+**Key design:**
+- **Plugin registry** (`app/services/plugins.py`) — a
+  dict mapping plugin keys to `PluginSpec` dataclasses.
+  Adding a new plugin = adding one entry to the dict.
+  No install/upgrade flow, no security audit, no
+  path-traversal risk.
+- **Plugin Run audit log** (`plugin_runs` table) — every
+  invocation writes a row with `ok`, `message`,
+  `output_path`, `extra_json`, `created_at`. CASCADE-
+  deleted with the parent video. The UI can show "last
+  transcode: 2 hours ago, 1.2 GB MP4 written" from this
+  log (future enhancement, not in v1 UI).
+- **Side-by-side transcode** (not in-place) — the
+  original WebM is never modified, per the user's
+  explicit choice (safer default; user can delete the
+  original via the existing Delete Video button).
+- **ffmpeg detection** — `is_ffmpeg_available()` is
+  checked both at page load AND per-run. The Run
+  button is rendered disabled with a "Missing system
+  dependency" warning if ffmpeg isn't on `$PATH`. The
+  warning includes the exact install command for the
+  user's OS.
+
+**New endpoints:**
+- `GET  /api/plugins` — list available plugins (with
+  availability info for the UI)
+- `POST /api/plugins/{name}/run?video_id=<uuid>` — run a
+  plugin on a video (synchronous for v1; will be
+  BackgroundTasks'd in MVP2.1.1 alongside the worker pool)
+- `GET  /api/plugins/runs/{run_id}` — fetch a run's
+  status (used by the UI to poll long-running plugins;
+  not needed for v1's WebM→MP4 which is synchronous)
+
+**Stats:** 552 → 583 tests passing (+31), 92% coverage
+maintained, 0 regressions in the existing 552 tests.
+
+**Proven result:** the WebM→MP4 happy path is verified
+by `test_transcode_actually_runs_ffmpeg_on_real_file`
+which generates a 1-second test pattern WebM via
+ffmpeg, transcodes it, and asserts the output MP4
+exists and is non-empty (skipped when ffmpeg isn't
+installed, but passes when it is).
+
+### Files changed
+
+- `app/services/plugins.py` (new, 195 lines) — the
+  `PLUGIN_REGISTRY` + `PluginSpec` + `PluginResult` +
+  `transcode_webm_to_mp4()` + `is_ffmpeg_available()`
+- `app/models/plugin_run.py` (new, 60 lines) — the
+  `PluginRun` audit log model
+- `app/models/__init__.py` — register `PluginRun`
+- `app/models/video.py` — add `plugin_runs` relationship
+  to `Video` (cascade-delete)
+- `app/database.py` — import the new model so
+  `create_all()` picks it up
+- `app/routers/plugins.py` (new, 115 lines) — the
+  `GET/POST /api/plugins` router
+- `app/routers/frontend.py` — pass
+  `available_plugins` to the video page template
+- `app/main.py` — register the new router
+- `app/templates/video.html` — add the Tools tab button
+  + Tools tab content panel + `runPlugin()` JS function
+
+### Tests
+
+4 new test files, 31 new tests:
+- `tests/test_plugin_registry.py` (10 tests) —
+  registry shape, key uniqueness, URL-safety, ffmpeg
+  detection. The "registry has exactly the v1 plugins"
+  test is the contract test for future plugin additions.
+- `tests/test_webm_to_mp4_plugin.py` (8 tests) —
+  ffmpeg-missing, source-missing, ffmpeg-error,
+  timeout, real ffmpeg happy path, audit log row,
+  unknown-key audit, exception swallow.
+- `tests/test_tools_tab_rendering.py` (7 tests) —
+  Tools tab button, content panel, plugin card, Run
+  button, ffmpeg-missing disabled state, `runPlugin()`
+  JS function presence.
+- `tests/test_plugin_endpoints.py` (6 tests) — list
+  endpoint, run endpoint, 404s, audit log row, get
+  run by id.
+
+[2.1.0]: https://github.com/yuanfengli168/video-learning-app/compare/v2.0.8...HEAD
