@@ -53,10 +53,13 @@ def db_session() -> Generator[Session, None, None]:
     # name directly, so the patch on app.database doesn't reach them).
     import app.routers.videos as videos_module
     import app.routers.generation as generation_module
+    import app.workers.plugin_pool as plugin_pool_module
     original_videos_session = videos_module.SessionLocal
     original_generation_session = generation_module.SessionLocal
+    original_plugin_pool_session = plugin_pool_module.SessionLocal
     videos_module.SessionLocal = testing_local
     generation_module.SessionLocal = testing_local
+    plugin_pool_module.SessionLocal = testing_local
 
     def override_get_db():
         try:
@@ -75,6 +78,27 @@ def db_session() -> Generator[Session, None, None]:
         app_database.SessionLocal = original_session_local
         videos_module.SessionLocal = original_videos_session
         generation_module.SessionLocal = original_generation_session
+        plugin_pool_module.SessionLocal = original_plugin_pool_session
+        # MVP2.1.0.1: drain the plugin worker pool so
+        # the next test starts with a clean queue. The
+        # pool is a module-level singleton; its worker
+        # task is bound to the TestClient's anyio event
+        # loop, which closes when the TestClient exits.
+        # The worker task is therefore "dead" (the loop
+        # it was scheduled on is gone). Reset the
+        # singleton so the next test's lifespan can
+        # spawn a fresh worker on a fresh loop.
+        from app.workers.plugin_pool import plugin_pool as _pool
+        _pool._worker_task = None
+        # Drain any leftover queue items.
+        try:
+            while True:
+                _pool._queue.get_nowait()
+        except Exception:
+            pass
+        _pool.submitted_count = 0
+        _pool.completed_count = 0
+        _pool.failed_count = 0
         TestSessionLocal = None
         session.close()
         Base.metadata.drop_all(bind=engine)
@@ -107,11 +131,19 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
     only the firebase_admin namespace is not enough. A dummy
     cookie value like "test-token" is sufficient — the
     middleware will see it as "valid".
+
+    MVP2.1.0.1: also enable `plugin_pool.synchronous_mode`
+    so plugin-run tests don't have to poll for the worker
+    to finish (the worker is bound to a closed TestClient
+    event loop between tests, which makes cross-test
+    pooling unreliable). The pool is reset to async mode
+    in the fixture teardown so other tests aren't affected.
     """
     from app.auth.session import COOKIE_NAME
     from app.auth import firebase_admin as fa
     from app.auth import dependencies as auth_deps
     from app import middleware_session as ms
+    from app.workers.plugin_pool import plugin_pool
 
     fake = lambda token: {"uid": "test-uid", "email": "test@test.com"}
     original_fa = fa.verify_token
@@ -120,6 +152,11 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
     fa.verify_token = fake
     ms.verify_token = fake
     auth_deps.verify_token = fake
+    # MVP2.1.0.1: switch the plugin pool to sync mode
+    # for this test only. Production code never sees
+    # synchronous_mode = True.
+    original_sync = plugin_pool.synchronous_mode
+    plugin_pool.synchronous_mode = True
     try:
         with TestClient(app) as c:
             c.cookies.set(COOKIE_NAME, "test-token")
@@ -128,6 +165,7 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         fa.verify_token = original_fa
         ms.verify_token = original_ms
         auth_deps.verify_token = original_deps
+        plugin_pool.synchronous_mode = original_sync
 
 
 @pytest.fixture(autouse=True)

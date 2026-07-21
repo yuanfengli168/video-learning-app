@@ -782,3 +782,135 @@ installed, but passes when it is).
   run by id.
 
 [2.1.0]: https://github.com/yuanfengli168/video-learning-app/compare/v2.0.8...HEAD
+
+## [2.1.0.1] - 2026-07-19 — Tools tab UX fixes + background worker pool
+
+🎯 **3 UX fixes + 1 backend architectural change.** The
+Tools tab's "Re-Upload with MP4" button now appears
+**immediately** after a successful transcode (no page
+refresh needed), the swap action **doesn't reload the
+page** (it just swaps the video element's src), and
+plugin runs (WebM→MP4) now run in a **background
+worker pool** — closing the tab no longer kills the
+transcode.
+
+**Proven result:** the user's "0:02" bfcache bug is
+gone — after a swap, the player shows the new MP4's
+duration + controls in <100ms with no `Cmd+Shift+R`
+required. And a 30-min transcode that the user kicks
+off + closes the tab on now continues in the server
+process; the user can reopen the page and see the
+result.
+
+### ✨ Features
+
+- **Re-Upload button visible immediately after Run** — the JS
+  `refreshLastRun()` template now mirrors the server-rendered
+  version, including the "Re-Upload with MP4" button. Before
+  this fix, the button only appeared on the next page reload
+  (because the JS template was built without it). Extracted
+  as a `renderSwapButton()` helper so the two paths stay in
+  lockstep.
+- **`videoStatus` exposed to JS** — a new
+  `const videoStatus = '{{ video.status }}';` in the
+  video page's script context. The JS `renderSwapButton()`
+  helper uses this to enable the swap button only when
+  the video is in `'ready'` state (matching the server-side
+  conditional in the Jinja template).
+- **No page reload after Re-Upload** — `performSwap()` now
+  updates the `<video>` element's `src` in place with a
+  cache-bust query param (`?v=${Date.now()}`) and calls
+  `video.load()`. Replaces the old `setTimeout(location.reload,
+  800)` flow, which had two problems:
+  1. **Slow** — 800ms delay + page reload (typically
+     300-500ms).
+  2. **bfcache stale state** — the browser's
+     back/forward cache can restore the previous page
+     state (including the WebM video element with
+     `currentTime=0:02`), even after `location.reload()`.
+  The cache-bust query param forces a fresh fetch, and
+  `video.load()` re-reads the new file's metadata so the
+  duration + 3-dots menu render correctly.
+- **Plugin worker pool** — new `app/workers/plugin_pool.py`
+  with `asyncio.Queue` + `asyncio.Semaphore(3)`. The
+  `POST /api/plugins/{name}/run` endpoint now returns
+  **202 Accepted** with `{run_id, status: "queued"}`
+  in <50ms (was 200 + full result, blocked for 2-5
+  minutes for a typical 1-hour WebM transcode). The
+  worker pulls jobs off the queue, runs them in
+  parallel (up to 3 at once), and updates the
+  `plugin_runs.status` field (`queued` → `running` →
+  `done` / `failed`). The UI polls
+  `GET /api/plugins/runs/{id}` every 1.5s to show
+  progress; closing the tab no longer cancels the
+  job.
+- **Plugin run status field** — new `status` column on
+  `plugin_runs` (additive migration; legacy rows
+  backfilled to `'done'` since they were always
+  complete at insert time). Exposed in
+  `GET /api/plugins/runs/{id}` and
+  `GET /api/plugins/runs/by-video/{id}`.
+
+### 🐛 Bug fixes
+
+- **"Re-Upload with MP4" missing from JS-rendered last-run
+  box** — the green success box rendered by
+  `refreshLastRun()` after a Run only included the
+  "Open in Finder" button, not the swap button. The
+  server-rendered version (used on first page load)
+  had both buttons. So users had to do a hard refresh
+  to see the swap button after a successful transcode.
+  Now both paths render the same set of buttons.
+- **"0:02" stale WebM state after swap** — the player
+  showed the old WebM's `currentTime=0:02` even after
+  the swap. Root cause: `location.reload()` keeps the
+  bfcache'd page state, including the `<video>` element.
+  Fix: swap the `src` + call `load()` instead of
+  reloading. The new MP4's duration + controls render
+  immediately.
+
+### 📝 Design notes
+
+- **Worker pool, not background tasks** — the existing
+  FastAPI `BackgroundTasks` mechanism is in-process
+  but per-request: the request must stay open for the
+  background work to be tracked. For long-running
+  plugin runs (5+ min), the user closes the tab, the
+  request is cancelled, the background task is killed.
+  A dedicated `asyncio.Queue`-based pool with its own
+  worker task survives the request lifecycle.
+- **Limit = 3** — ffmpeg is CPU-bound; 3 parallel
+  runs can use 3 cores without thrashing. Configurable
+  via the `PluginPool(limit=...)` constructor argument.
+- **Synchronous test mode** — `PluginPool.synchronous_mode
+  = True` (set by the test `client` fixture) makes
+  `submit()` run the plugin inline and update the row
+  before returning. This lets tests assert on the
+  result without polling, and sidesteps the singleton
+  pool's worker task being bound to a closed event
+  loop between tests.
+- **Per-job DB session** — the worker opens its own
+  SQLAlchemy session per job (the request's session
+  is closed by the time the worker runs). This means
+  the worker's commit and the worker's queries don't
+  race the request's session.
+
+### 🧪 Tests
+
+- 614 passing (was 603, +11 new tests across 3 files)
+- `tests/test_plugin_worker.py` (NEW, 8 tests) —
+  status field transitions, 202 response shape, status
+  in by-video endpoint, tab-close survival, pool stats,
+  404 on unknown video, no duplicate rows in sync mode.
+- `tests/test_tools_tab_rendering.py` (+3 tests) —
+  `renderSwapButton()` helper defined, `videoStatus`
+  exposed to JS, `performSwap()` uses
+  `videoEl.src + videoEl.load()` instead of
+  `location.reload()`.
+- `tests/test_plugin_endpoints.py` (existing tests
+  updated) — `test_run_plugin_writes_audit_log_row` and
+  `test_get_run_returns_run_row` updated for the
+  202 + status field responses; the worker pool's
+  sync mode keeps these tests fast (no polling).
+
+[2.1.0.1]: https://github.com/yuanfengli168/video-learning-app/compare/2.1.0...HEAD

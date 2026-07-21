@@ -3,8 +3,10 @@
 > **TL;DR**: MVP2.0 is shipped on `main` (552 tests,
 > 92% coverage, tag v2.0.8). MVP2.1 is a **focused
 > 2-item release** on a **new branch `MVP2.1`**. MVP2.1.0
-> (Plugin Tools tab + WebM→MP4) is shipped in this
-> commit. MVP2.1.1 (worker pool) is the next item.
+> (Plugin Tools tab + WebM→MP4) is shipped. MVP2.1.0.1
+> (Tools tab UX fixes + Plugin worker pool) is the
+> current commit. MVP2.1.1 (general worker pool for
+> upload / transcribe / generate) is the next item.
 
 ---
 
@@ -12,8 +14,9 @@
 
 | Version | Status | What it shipped | Branch |
 |---|---|---|---|
-| **2.1.0** | ✅ **Shipped** (this commit) | Plugin Tools tab + WebM→MP4 | `MVP2.1` |
-| **2.1.1** | 🟡 Not started | Worker pool, throttle=3, configurable | `MVP2.1` (later) |
+| **2.1.0** | ✅ **Shipped** | Plugin Tools tab + WebM→MP4 | `MVP2.1` |
+| **2.1.0.1** | ✅ **Shipped** (this commit) | Tools tab UX fixes (Re-Upload button visible after Run; no page reload after swap) + Plugin worker pool (limit=3, tab-close survives) | `MVP2.1` |
+| **2.1.1** | 🟡 Not started | General worker pool for upload / transcribe / generate, throttle=3, configurable | `MVP2.1` (later) |
 | MVP2.2 (paid) | ⏸️ Deferred 2-3 weeks | Stripe, hosted version, MLX as a paid add-on | `MVP2.2-paidVersion` (new branch) |
 | MVP3.0 | 📋 Planned | OCR, cloud Whisper, soft-delete, etc. | `MVP3.0` (later) |
 
@@ -199,3 +202,81 @@ no-status-API version).
   plugin run history is per-video. A user with 100
   videos might want a global "all my plugin runs" view
   in the sidebar. Defer to 2.2.
+
+---
+
+## 6. 2026-07-19 — Tools tab UX fixes + Plugin worker pool (MVP2.1.0.1)
+
+**TL;DR**: Three user-reported UX bugs in the Tools tab
+("Re-Upload" button not visible after Run; player
+shows only "0:02" after swap; closing the tab kills the
+transcode) + a backend architectural change to fix the
+latter (plugin worker pool with bounded concurrency).
+
+### What changed
+
+| Area | Change | Files |
+|---|---|---|
+| **UX: Re-Upload button** | JS `refreshLastRun()` template now includes the "Re-Upload with MP4" button (was missing — only "Open in Finder" was in the JS version). Extracted as `renderSwapButton()` helper so the two paths (server-render + JS-update) stay in lockstep. | `app/templates/video.html` |
+| **UX: videoStatus exposed to JS** | New `const videoStatus = '{{ video.status }}';` so the JS template can mirror the server-side "disabled when video is not ready" condition. | `app/templates/video.html` |
+| **UX: no page reload after swap** | `performSwap()` now sets `videoEl.src = /api/videos/.../file?v=${Date.now()}; videoEl.load();` instead of `setTimeout(location.reload, 800)`. The cache-bust query param forces a fresh fetch (no bfcache stale state); `load()` re-reads metadata so duration + 3-dots menu render correctly. | `app/templates/video.html` |
+| **Backend: Plugin worker pool** | New `app/workers/plugin_pool.py` with `asyncio.Queue` + `asyncio.Semaphore(3)`. The `POST /api/plugins/{name}/run` endpoint now returns 202 + `{run_id, status: "queued"}` in <50ms. UI polls `GET /api/plugins/runs/{id}` every 1.5s. Closing the tab no longer cancels the job. | `app/workers/plugin_pool.py` (NEW), `app/routers/plugins.py`, `app/templates/video.html` (runPlugin JS) |
+| **DB: PluginRun.status** | New `status` column on `plugin_runs` (additive migration; legacy rows backfilled to `'done'`). Values: `queued` / `running` / `done` / `failed`. Exposed in `/api/plugins/runs/{id}` and `/api/plugins/runs/by-video/{id}`. | `app/models/plugin_run.py`, `app/database.py` (migration) |
+| **Service: split run_plugin** | Refactored `app/services/plugins.py:run_plugin()` into a thin public wrapper around `_run_plugin_and_create_row()` (the internal helper). The wrapper keeps backward compat; the helper is reused by the worker. | `app/services/plugins.py` |
+| **Lifecycle: start/stop pool** | `app/main.py` lifespan handler calls `plugin_pool.start()` on app startup and `plugin_pool.stop(timeout=30.0)` on shutdown. | `app/main.py` |
+| **Tests: conftest patching** | `tests/conftest.py` patches `app.workers.plugin_pool.SessionLocal` (in addition to the existing patches for videos / generation). Also enables `plugin_pool.synchronous_mode = True` for tests (so they don't have to poll for the worker). Resets pool state between tests. | `tests/conftest.py` |
+| **Tests: plugin worker tests** | NEW `tests/test_plugin_worker.py` (8 tests) covering status field transitions, 202 response, by-video endpoint, tab-close survival, pool stats, 404, no duplicate rows in sync mode. | `tests/test_plugin_worker.py` (NEW) |
+| **Tests: tools tab UI tests** | +3 tests in `tests/test_tools_tab_rendering.py` covering the new JS `renderSwapButton()` helper, `videoStatus` exposure, and `performSwap()` using `videoEl.src + videoEl.load()`. | `tests/test_tools_tab_rendering.py` |
+| **Tests: plugin endpoint updates** | 2 existing tests in `tests/test_plugin_endpoints.py` updated for the 202 + status response shape. | `tests/test_plugin_endpoints.py` |
+
+### Test count
+
+- **Before**: 603 passing, 1 pre-existing failure (whisper picker)
+- **After**: 614 passing, same 1 pre-existing failure
+- **+11 new tests, 0 regressions**
+
+### Why a worker pool (not BackgroundTasks)?
+
+The existing FastAPI `BackgroundTasks` mechanism is
+**per-request**: the request must stay open for the
+background work to be tracked. For a 5+ minute plugin
+run, the user closes the tab → the request is cancelled
+→ the background task is killed. A dedicated
+`asyncio.Queue`-based pool with its own worker task
+**survives the request lifecycle**.
+
+### Why limit=3?
+
+ffmpeg is CPU-bound; 3 parallel runs can use 3 cores
+without thrashing. Configurable via the
+`PluginPool(limit=...)` constructor argument. The user
+chose 3 after considering: serial (limit=1, safest but
+slowest wall-clock), 2, 3, or no limit (would thrash).
+3 is a good balance.
+
+### Why `synchronous_mode = True` for tests?
+
+The worker task is bound to the TestClient's anyio
+event loop, which closes when the TestClient exits.
+Between tests, the pool's worker task is on a closed
+loop, which makes cross-test polling unreliable.
+`PluginPool.synchronous_mode = True` (set by the
+`client` fixture in conftest.py) makes `submit()` run
+the plugin inline + update the row before returning.
+Tests assert on the result without polling, and
+cross-test pollution is impossible.
+
+### Open questions resolved
+
+- ✅ **Worker pool scope** — separate pool per category
+  (plugin only for v1, full pool in 2.1.1). The user
+  explicitly preferred separate pools with their own
+  limits.
+- ✅ **Plugin audit log UI** — the per-video "Last run"
+  line (in 2.1.0) is the user-facing view. A global
+  "all my plugin runs" view is deferred to 2.2.
+- ✅ **Why 2.1.0.1 instead of 2.1.1** — the UX fixes
+  + plugin pool are a focused ~500-line change. The
+  general worker pool (upload / transcribe / generate)
+  is a bigger refactor that doesn't ship user-visible
+  features on its own.

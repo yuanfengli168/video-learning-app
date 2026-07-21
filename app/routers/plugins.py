@@ -41,8 +41,12 @@ from app.services.plugins import (
     PLUGIN_REGISTRY,
     get_plugin,
     list_available_plugins,
-    run_plugin,
 )
+# `run_plugin` is no longer imported here — the
+# /{name}/run endpoint now goes through the
+# PluginPool (app/workers/plugin_pool.py) which
+# calls `_run_plugin_and_create_row` directly.
+# See MVP2.1.0.1 changelog.
 
 router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 
@@ -81,25 +85,43 @@ async def list_plugins(
     return {"plugins": plugins}
 
 
-@router.post("/{name}/run")
+@router.post("/{name}/run", status_code=status.HTTP_202_ACCEPTED)
 async def run_a_plugin(
     name: str,
     video_id: str,
-    _user: str = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Run a plugin on a video.
+    """Run a plugin on a video (NOW VIA WORKER POOL — MVP2.1.0.1).
 
     Request: POST /api/plugins/webm_to_mp4/run?video_id=<uuid>
-    Response: { run_id, ok, message, output_path }
+    Response: 202 Accepted with { run_id, status: "queued" }
 
-    The run is synchronous for v1 (the router blocks until
-    the plugin finishes). For long plugins (e.g. a future
-    "transcribe 4-hour video with subtitles" plugin), we'd
-    swap this for BackgroundTasks. For WebM -> MP4, the
-    typical 1-hour video transcode is 2-5 minutes on a
-    modern Mac, which is acceptable to block on.
+    Behavior change vs MVP2.1.0:
+      - The request now returns IMMEDIATELY (status 202)
+        with a `run_id` and `status="queued"`. The actual
+        plugin work happens in the background
+        (app/workers/plugin_pool.py).
+      - The UI polls `GET /api/plugins/runs/{run_id}` to
+        see progress (status: queued → running → done / failed).
+      - Closing the tab no longer cancels the job — it
+        continues in the server process. This is the
+        fix for the "I closed the tab and my 30-min
+        transcode was lost" bug.
+      - Bounded concurrency: the pool has a `limit`
+        (default 3). If 5 plugins are submitted at once,
+        the first 3 run in parallel; the other 2 sit in
+        the FIFO queue and start when a slot frees.
+
+    Auth:
+      - The submit endpoint requires a valid session
+        cookie (same as the other video routes).
+      - The user_id from the session is stored on the
+        queued run for future audit / authz (e.g. when
+        we add a "cancel my run" endpoint).
     """
+    from app.workers.plugin_pool import plugin_pool
+
     spec = get_plugin(name)
     if spec is None:
         raise HTTPException(
@@ -107,9 +129,11 @@ async def run_a_plugin(
             detail=f"Unknown plugin: {name!r}",
         )
 
-    # Load the video. If it doesn't exist or doesn't
-    # belong to this user, return 404 (not 403, to avoid
-    # leaking video IDs to other users).
+    # Verify the video exists (and is owned by this user)
+    # BEFORE we enqueue. We do this in the request session
+    # for immediate 404 — the worker re-checks in its own
+    # session, but a 404 here is friendlier (no run row
+    # to clean up).
     video = db.query(Video).filter(Video.id == video_id).first()
     if video is None:
         raise HTTPException(
@@ -117,22 +141,28 @@ async def run_a_plugin(
             detail="Video not found.",
         )
 
-    # Run the plugin. This writes a PluginRun row to the
-    # session but does NOT commit — we commit here so the
-    # whole run is one DB transaction.
-    result, run_row = run_plugin(name, video, db)
-    db.commit()
-    db.refresh(run_row)
+    # Enqueue. submit() opens its own DB session, creates
+    # the row in 'queued' state, and pushes onto the
+    # asyncio queue. Returns the run_id for polling.
+    try:
+        run_id = await plugin_pool.submit(
+            plugin_key=name,
+            video_id=video_id,
+            user_id=str(user.get("uid", "")),
+        )
+    except LookupError as exc:
+        # Race condition: the video existed when we checked
+        # above but was deleted before submit() re-checked.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
 
     return {
-        "run_id": run_row.id,
+        "run_id": run_id,
         "plugin": name,
-        "video_id": video.id,
-        "ok": result.ok,
-        "message": result.message,
-        "output_path": result.output_path,
-        "extra": result.extra,
-        "created_at": run_row.created_at.isoformat(),
+        "video_id": video_id,
+        "status": "queued",
     }
 
 
@@ -145,8 +175,11 @@ async def get_plugin_run(
     """Get the status of a single plugin run.
 
     Used by the UI to poll the result of a long-running
-    plugin (mostly for future plugins; WebM -> MP4 is
-    synchronous so the UI already has the result).
+    plugin. With the worker pool (MVP2.1.0.1), this is
+    the primary way the UI checks progress: the user
+    POSTs /{name}/run (returns 202 + run_id in <50ms),
+    then polls this endpoint every 1-2 seconds until
+    `status` is `done` or `failed`.
     """
     from app.models.plugin_run import PluginRun
 
@@ -161,6 +194,7 @@ async def get_plugin_run(
         "video_id": run.video_id,
         "plugin_key": run.plugin_key,
         "ok": run.ok,
+        "status": run.status,
         "message": run.message,
         "output_path": run.output_path,
         "extra": run.extra_json,
@@ -220,6 +254,7 @@ async def get_most_recent_run_for_video(
             "video_id": run.video_id,
             "plugin_key": run.plugin_key,
             "ok": run.ok,
+            "status": run.status,
             "message": run.message,
             "output_path": run.output_path,
             "extra": run.extra_json,
@@ -348,3 +383,78 @@ async def reveal_in_file_manager(
         )
 
     return {"ok": True, "path": str(resolved), "platform": system}
+
+
+# ── MVP2.1.0.1: POST /api/plugins/swap-to-mp4 ──────────────────────────
+class SwapToMp4Request(BaseModel):
+    """Request body for POST /api/plugins/swap-to-mp4."""
+    video_id: str
+    mp4_path: str
+
+
+@router.post("/swap-to-mp4")
+async def swap_to_mp4(
+    body: SwapToMp4Request,
+    _user: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Swap a video's file_path from WebM to MP4 (or any file).
+
+    Used by the 'Re-Upload with MP4' button in the Tools
+    tab. After a successful WebM->MP4 transcode, the user
+    can click this button to point the app at the new MP4
+    WITHOUT re-transcribing or re-generating materials
+    (the content is identical, the transcript is valid).
+
+    Preconditions (checked by the service layer):
+      - Video exists and belongs to the user
+      - video.status == 'ready' (not in the middle of
+        transcribing/generating)
+      - The MP4 file exists on disk
+
+    On success, the Video row is updated in place:
+      - file_path -> the new MP4 path
+      - filename -> the new filename
+      - transcribed_at, generated_at, etc. -> preserved
+      - status -> unchanged (still 'ready')
+
+    A PluginRun audit row is written with the OLD
+    file_path/filename in extra_json, so the user can
+    see the swap history (no undo button in v1, but the
+    data is there).
+    """
+    from app.services.plugins import swap_video_file_to
+
+    # 404 if video doesn't exist (avoid leaking IDs)
+    video = db.query(Video).filter(Video.id == body.video_id).first()
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found.",
+        )
+
+    result = swap_video_file_to(video, body.mp4_path, db)
+    db.commit()
+    db.refresh(video)
+
+    if not result.ok:
+        # Return 409 Conflict for precondition failures
+        # (the request is well-formed but the resource
+        # state doesn't allow it). 400 for malformed.
+        if "not found" in result.message.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=result.message,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=result.message,
+        )
+
+    return {
+        "ok": True,
+        "video_id": video.id,
+        "new_path": video.file_path,
+        "new_filename": video.filename,
+        "message": result.message,
+    }

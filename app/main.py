@@ -24,9 +24,24 @@ from app.auth.session import router as session_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup (MVP1)."""
+    """Create database tables + start the plugin worker pool on startup (MVP1/MVP2.1.0.1)."""
     init_db()
+    # MVP2.1.0.1 — start the plugin worker pool. The
+    # pool is a module-level singleton (app/workers/
+    # plugin_pool.py). Calling start() is idempotent.
+    # Without this, plugin runs would never execute
+    # (they'd just sit in the queue forever).
+    from app.workers.plugin_pool import plugin_pool
+    plugin_pool.start()
     yield
+    # MVP2.1.0.1 — graceful shutdown. Waits up to 30s
+    # for in-flight plugin jobs to finish before the
+    # process exits. Best-effort: on hard kill (SIGKILL)
+    # the loop is skipped and jobs are lost (acceptable
+    # for v1; the DB rows stay as 'running' until the
+    # next startup, when a future sweeper could mark
+    # them 'failed').
+    await plugin_pool.stop(timeout=30.0)
 
 
 app = FastAPI(

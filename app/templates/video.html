@@ -347,11 +347,35 @@
                                                      data-output-path="{{ last_run.output_path }}">
                                                     {{ last_run.output_path }}
                                                 </div>
-                                                <button type="button"
-                                                        onclick="revealInFinder('{{ last_run.output_path | e }}')"
-                                                        class="mt-1 text-indigo-600 dark:text-indigo-400 hover:underline">
-                                                    Open in Finder
-                                                </button>
+                                                <div class="mt-1 flex flex-wrap gap-3">
+                                                    <button type="button"
+                                                            onclick="revealInFinder('{{ last_run.output_path | e }}')"
+                                                            class="text-indigo-600 dark:text-indigo-400 hover:underline">
+                                                        Open in Finder
+                                                    </button>
+                                                    {# MVP2.1.0.1: "Re-Upload with MP4" button.
+                                                       Shown only on the webm_to_mp4 card (this
+                                                       loop body) AND when the video is
+                                                       fully processed. The button is
+                                                       enabled only when both preconditions
+                                                       are met; otherwise it's rendered
+                                                       as a disabled <span> with a tooltip
+                                                       explaining why. #}
+                                                    {% if plugin.key == 'webm_to_mp4' %}
+                                                    <button type="button"
+                                                            id="swap-btn-{{ plugin.key }}"
+                                                            onclick="confirmSwapToMp4('{{ plugin.key }}', '{{ last_run.output_path | e }}')"
+                                                            {% if video.status != 'ready' %}
+                                                            disabled
+                                                            title="Cannot swap while video status is '{{ video.status }}'. Wait for the video to finish processing."
+                                                            class="text-gray-400 dark:text-gray-500 cursor-not-allowed"
+                                                            {% else %}
+                                                            class="text-indigo-600 dark:text-indigo-400 hover:underline"
+                                                            {% endif %}>
+                                                        Re-Upload with MP4
+                                                    </button>
+                                                    {% endif %}
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -387,6 +411,12 @@
 <script src="/static/js/transcript-follow.js" defer></script>
 <script>
 const videoId = '{{ video.id }}';
+// MVP2.1.0.1: expose the video's status to JS so client-side templates
+// (e.g. the Re-Upload button rendered by refreshLastRun() after a
+// successful plugin run) can decide whether to enable the swap action.
+// The swap is only safe when the video is in 'ready' state — swapping
+// while a transcribe/generate is in flight would race the worker.
+const videoStatus = '{{ video.status }}';
 // courseId is exposed as a JS constant so confirmDelete() can redirect
 // to the right course page after deletion. See the comment on the
 // redirect inside confirmDelete() for the full rationale. course
@@ -2168,14 +2198,18 @@ function hideDeleteModal() {
     if (modal) modal.classList.add('hidden');
 }
 
-// runPlugin (MVP2.1.0) — run a plugin from the Tools tab.
-// Called from the inline onclick on each plugin's Run
-// button. POSTs to /api/plugins/{key}/run?video_id=...,
-// shows the result inline below the button. Disables the
-// button while running so a double-click doesn't queue
-// two transcode jobs of the same file. The "Run" button
-// is re-enabled in finally{} so the user can retry on
-// failure.
+// runPlugin (MVP2.1.0.1) — run a plugin from the Tools tab.
+// Calls the inline onclick on each plugin's Run button.
+// POSTs to /api/plugins/{key}/run?video_id=..., which
+// now returns 202 + {run_id, status: "queued"}
+// immediately. We then poll
+// GET /api/plugins/runs/{run_id} every 1.5s until
+// status is 'done' or 'failed'. The button is
+// disabled while the job is in flight so a double-
+// click doesn't queue two transcodes of the same file.
+// On done, we call refreshLastRun() so the user sees
+// the new "Open in Finder" + "Re-Upload" buttons
+// without a page reload.
 async function runPlugin(key) {
     const btn = document.getElementById(`run-plugin-${key}`);
     const result = document.getElementById(`result-${key}`);
@@ -2183,37 +2217,81 @@ async function runPlugin(key) {
 
     btn.disabled = true;
     const originalLabel = btn.textContent;
-    btn.textContent = '⏳ Running...';
+    const setBtn = (txt) => { btn.textContent = txt; };
+
     result.classList.add('hidden');
     result.className = result.className.replace(/bg-\S+/g, '').trim() + ' mt-2 text-xs';
 
     try {
-        const resp = await fetch(
+        // 1. Submit the job. Returns 202 + run_id in
+        // <50ms. The plugin work happens in the
+        // background (PluginPool worker).
+        setBtn('⏳ Queued...');
+        const submitResp = await fetch(
             `/api/plugins/${key}/run?video_id=${encodeURIComponent(videoId)}`,
             { method: 'POST' }
         );
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-            throw new Error(data.detail || `HTTP ${resp.status}`);
+        const submitData = await submitResp.json().catch(() => ({}));
+        if (!submitResp.ok) {
+            throw new Error(submitData.detail || `HTTP ${submitResp.status}`);
         }
-        // Success or plugin-level failure — both come back
-        // as 200 with `ok: false` for plugin errors.
-        if (data.ok) {
+        const runId = submitData.run_id;
+        if (!runId) {
+            throw new Error('Server did not return a run_id');
+        }
+
+        // 2. Poll the run endpoint until status is
+        // terminal (done / failed). 1.5s interval is
+        // a good balance: responsive enough that the
+        // user sees progress, but not so aggressive
+        // that we hammer the server during a 5-min
+        // transcode.
+        const POLL_INTERVAL_MS = 1500;
+        const POLL_TIMEOUT_MS = 30 * 60 * 1000;  // 30 min safety net
+        const startTime = Date.now();
+        let finalRun = null;
+        while (true) {
+            await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+            if (Date.now() - startTime > POLL_TIMEOUT_MS) {
+                throw new Error('Plugin run timed out after 30 minutes. Check the Plugin Runs log.');
+            }
+            const pollResp = await fetch(
+                `/api/plugins/runs/${encodeURIComponent(runId)}`,
+                { credentials: 'same-origin' }
+            );
+            const run = await pollResp.json().catch(() => ({}));
+            if (!pollResp.ok) {
+                // 404 = the run was deleted (video deleted
+                // mid-run). Treat as failure.
+                throw new Error(run.detail || `HTTP ${pollResp.status}`);
+            }
+            if (run.status === 'queued') {
+                setBtn('⏳ Queued...');
+            } else if (run.status === 'running') {
+                setBtn('⏳ Running...');
+            } else if (run.status === 'done' || run.status === 'failed') {
+                finalRun = run;
+                break;
+            } else {
+                // Unknown status — keep polling, but warn
+                console.warn('runPlugin: unknown status', run.status);
+            }
+        }
+
+        // 3. Show the final result in the inline box.
+        if (finalRun.ok) {
             result.className = result.className + ' bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800 rounded p-2 mt-2 text-xs';
-            result.textContent = `✅ ${data.message}`;
+            result.textContent = `✅ ${finalRun.message}`;
             result.classList.remove('hidden');
         } else {
             result.className = result.className + ' bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded p-2 mt-2 text-xs';
-            result.textContent = `❌ ${data.message}`;
+            result.textContent = `❌ ${finalRun.message}`;
             result.classList.remove('hidden');
         }
-        // MVP2.1.0.1: refresh the persistent "Last run"
-        // section so the user doesn't have to reload the
-        // page to see the new output path. We fetch the
-        // most recent run (the one we just made) and
-        // replace the last-run-{key} div contents. We
-        // do this on both success AND failure so the
-        // error message persists across tab switches.
+
+        // 4. Refresh the "Last run" section so the
+        // user sees the new output path + Re-Upload
+        // button (no page reload needed).
         await refreshLastRun(key);
     } catch (err) {
         result.className = result.className + ' bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded p-2 mt-2 text-xs';
@@ -2221,7 +2299,7 @@ async function runPlugin(key) {
         result.classList.remove('hidden');
     } finally {
         btn.disabled = false;
-        btn.textContent = originalLabel;
+        setBtn(originalLabel);
     }
 }
 
@@ -2269,11 +2347,14 @@ async function refreshLastRun(key) {
                                  data-output-path="${escapeHtml(run.output_path)}">
                                 ${escapeHtml(run.output_path)}
                             </div>
-                            <button type="button"
-                                    onclick="revealInFinder('${escapeJs(run.output_path)}')"
-                                    class="mt-1 text-indigo-600 dark:text-indigo-400 hover:underline">
-                                Open in Finder
-                            </button>
+                            <div class="mt-1 flex flex-wrap gap-3">
+                                <button type="button"
+                                        onclick="revealInFinder('${escapeJs(run.output_path)}')"
+                                        class="text-indigo-600 dark:text-indigo-400 hover:underline">
+                                    Open in Finder
+                                </button>
+                                ${run.plugin_key === 'webm_to_mp4' ? renderSwapButton(run.output_path) : ''}
+                            </div>
                         </div>
                     </div>
                 </div>`;
@@ -2338,6 +2419,115 @@ async function revealInFinder(path) {
         }
     } catch (err) {
         alert(`Could not reveal in Finder: ${err.message}`);
+    }
+}
+
+// renderSwapButton (MVP2.1.0.1) — returns the
+// "Re-Upload with MP4" button HTML for the green
+// last-run box. Mirrors the server-rendered version
+// in the Jinja template: only shown for the
+// webm_to_mp4 plugin AND only enabled when the
+// video is in 'ready' state. Extracted as a helper
+// so refreshLastRun() and the server-rendered
+// template stay in lockstep.
+function renderSwapButton(mp4Path) {
+    if (videoStatus === 'ready') {
+        return `<button type="button"
+                        onclick="confirmSwapToMp4('webm_to_mp4', '${escapeJs(mp4Path)}')"
+                        class="text-indigo-600 dark:text-indigo-400 hover:underline">
+                    Re-Upload with MP4
+                </button>`;
+    }
+    return `<span class="text-gray-400 dark:text-gray-500 cursor-not-allowed"
+                  title="Cannot swap while video status is '${videoStatus}'. Wait for the video to finish processing.">
+                Re-Upload with MP4
+            </span>`;
+}
+
+// Module-level state for the swap modal. We need
+// to remember which MP4 path the user clicked
+// 'Swap' on so performSwap() can use it. Set in
+// confirmSwapToMp4(), read in performSwap().
+let _swapMp4Path = null;
+
+// confirmSwapToMp4 (MVP2.1.0.1) — opens the swap
+// confirmation modal with the MP4 path filled in.
+// Called from the "Re-Upload with MP4" button next
+// to "Open in Finder".
+function confirmSwapToMp4(pluginKey, mp4Path) {
+    _swapMp4Path = mp4Path;
+    const pathEl = document.getElementById('swap-mp4-path');
+    if (pathEl) pathEl.textContent = mp4Path;
+    const modal = document.getElementById('swap-modal');
+    if (modal) modal.classList.remove('hidden');
+}
+
+// hideSwapModal (MVP2.1.0.1) — close the modal and
+// clear the stored MP4 path. Called by the Cancel
+// button and on successful swap.
+function hideSwapModal() {
+    _swapMp4Path = null;
+    const modal = document.getElementById('swap-modal');
+    if (modal) modal.classList.add('hidden');
+    // Re-enable the confirm button in case it was
+    // disabled by a previous failed attempt
+    const confirmBtn = document.getElementById('swap-confirm-btn');
+    if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Swap to MP4';
+    }
+}
+
+// performSwap (MVP2.1.0.1) — actually do the swap.
+// Called from the "Swap to MP4" button in the modal.
+// POSTs to /api/plugins/swap-to-mp4 with video_id
+// and mp4_path. On success, reloads the page (so
+// the new filename is reflected everywhere). On
+// failure, shows the error inline.
+async function performSwap() {
+    if (!_swapMp4Path) {
+        hideSwapModal();
+        return;
+    }
+    const confirmBtn = document.getElementById('swap-confirm-btn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = '⏳ Swapping...';
+    }
+    try {
+        const resp = await fetch('/api/plugins/swap-to-mp4', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                video_id: videoId,
+                mp4_path: _swapMp4Path,
+            }),
+            credentials: 'same-origin',
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw new Error(data.detail || `HTTP ${resp.status}`);
+        }
+        // Success — swap the video element's src in
+        // place (no page reload). The cache-buster
+        // (?v=Date.now()) prevents bfcache and HTTP
+        // cache from serving the old WebM file.
+        // video.load() re-reads metadata so duration
+        // + controls re-render correctly.
+        hideSwapModal();
+        showToast(data.message || 'Swapped to MP4', 'success');
+        const videoEl = document.querySelector('video');
+        if (videoEl) {
+            videoEl.src = `/api/videos/${videoId}/file?v=${Date.now()}`;
+            videoEl.load();
+        }
+    } catch (err) {
+        // Show the error inline (don't reload)
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Swap to MP4';
+        }
+        alert(`Swap failed: ${err.message}`);
     }
 }
 
@@ -2495,6 +2685,48 @@ window.addEventListener('resize', () => {
                 class="px-4 py-2 text-sm bg-red-600 text-white hover:bg-red-700 rounded-lg"
             >
                 Delete permanently
+            </button>
+        </div>
+    </div>
+</div>
+
+{# MVP2.1.0.1: Swap to MP4 confirmation modal. Mirrors
+   the delete-modal style. Opened by confirmSwapToMp4();
+   closed by hideSwapModal(). The confirm button calls
+   performSwap(). The MP4 path is passed in via the
+   #swap-mp4-path hidden text element (set when the
+   modal is shown). #}
+<div id="swap-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h2 class="text-lg font-semibold mb-2">🔁 Re-Upload with MP4?</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            The app will point at the new MP4 file instead of the
+            original WebM. The transcript and learning materials
+            are preserved (no re-processing needed — the content
+            is the same video).
+        </p>
+        <div class="bg-gray-50 dark:bg-gray-900/30 rounded p-2 mb-4 text-xs">
+            <div class="font-medium text-gray-700 dark:text-gray-300">New file:</div>
+            <div id="swap-mp4-path" class="font-mono text-gray-600 dark:text-gray-400 mt-1 break-all"></div>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            The original WebM is NOT deleted — it's still on disk
+            in case you want to revert manually.
+        </p>
+        <div class="flex justify-end gap-2">
+            <button
+                onclick="hideSwapModal()"
+                id="swap-cancel-btn"
+                class="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="performSwap()"
+                id="swap-confirm-btn"
+                class="px-4 py-2 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg"
+            >
+                Swap to MP4
             </button>
         </div>
     </div>

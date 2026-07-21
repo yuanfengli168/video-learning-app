@@ -146,6 +146,21 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "transcribe_started_at",
         "ALTER TABLE videos ADD COLUMN transcribe_started_at DATETIME",
     ),
+    # MVP2.1.0.1 — plugin_runs.status. The PluginPool worker
+    # (app/workers/plugin_pool.py) writes this as
+    #   queued  → created by submit() before the job is picked up
+    #   running → the worker starts the plugin function
+    #   done    → plugin returned ok=True
+    #   failed  → plugin returned ok=False OR the worker crashed
+    # so the UI can poll and show progress without holding the
+    # HTTP request open. Default 'done' backfills legacy rows
+    # (which were created by the synchronous-in-request code
+    # path) as already-finished runs.
+    (
+        "plugin_runs",
+        "status",
+        "ALTER TABLE plugin_runs ADD COLUMN status VARCHAR(20) DEFAULT 'done'",
+    ),
 ]
 
 

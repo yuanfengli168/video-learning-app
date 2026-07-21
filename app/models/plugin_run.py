@@ -79,3 +79,20 @@ class PluginRun(Base):
     video: Mapped["Video"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "Video", back_populates="plugin_runs"
     )
+    # MVP2.1.0.1 — job-queue status. One of:
+    #   "queued"  — created by PluginPool.submit(), waiting for
+    #               a worker slot
+    #   "running" — worker picked it up, plugin function is
+    #               executing (ffmpeg subprocess or similar)
+    #   "done"    — plugin returned ok=True
+    #   "failed"  — plugin returned ok=False, or the worker
+    #               crashed, or preconditions (missing video,
+    #               missing ffmpeg) failed
+    # The UI polls this so the user sees "⏳ 30% / ⏳ Queued /
+    # ✅ Done" without holding the HTTP request open.
+    # Default "done" backfills legacy rows that were written
+    # by the synchronous-in-request code path before the pool
+    # existed (they were always complete at insert time).
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="done", server_default="done"
+    )

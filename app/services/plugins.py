@@ -317,25 +317,30 @@ def get_plugin(name: str) -> PluginSpec | None:
     return PLUGIN_REGISTRY.get(name)
 
 
-def run_plugin(
+def _run_plugin_and_create_row(
     name: str, video: "Video", db: Session
 ) -> tuple["PluginResult", "PluginRun"]:
-    """Run a plugin on a video and write a PluginRun audit row.
+    """Run a plugin on a video and CREATE a new PluginRun audit row.
+
+    Internal helper (MVP2.1.0.1). Used by:
+      - `run_plugin` (this module) — the public wrapper
+        that the router calls for the synchronous code path
+      - `PluginPool._execute` (app/workers/plugin_pool.py) —
+        the background worker, which copies this row's
+        data into a pre-existing row to keep the run_id
+        stable across the queued/running/done state
+        transitions
 
     The flow is:
-      1. Look up the plugin by name (404 if not found)
-      2. Call the plugin's function
-      3. Write a PluginRun row with the result
-      4. Return both the result and the audit row
+      1. Look up the plugin by name
+      2. Call the plugin's function (catches all exceptions)
+      3. Build a fresh PluginRun row (NOT committed — the
+         caller decides the transaction boundary)
+      4. Return both the result and the new audit row
 
-    The PluginRun row is committed by the caller (the
-    router), not here. We use add() and let the router
-    commit so the whole thing is one DB transaction.
-
-    For v1, the plugin runs in the request-handling
-    process (synchronous). For long-running plugins, the
-    router can swap in BackgroundTasks without changing
-    this function's signature.
+    For v1, the plugin runs in the caller's process
+    (synchronous in the router, or in a thread inside
+    the worker's run_in_executor).
     """
     from app.models.plugin_run import PluginRun  # local import
 
@@ -374,6 +379,150 @@ def run_plugin(
         created_at=datetime.now(timezone.utc),
     )
     db.add(run_row)
-    # The router commits; we don't commit here so the
-    # router controls the transaction boundary.
     return result, run_row
+
+
+def run_plugin(
+    name: str, video: "Video", db: Session
+) -> tuple["PluginResult", "PluginRun"]:
+    """Run a plugin on a video and write a PluginRun audit row.
+
+    Public API (MVP2.1.0). Kept for backward compatibility
+    with the synchronous code path (tests, swap endpoint,
+    any future caller that wants to run a plugin inline).
+
+    For new code, prefer `PluginPool.submit()` (see
+    app/workers/plugin_pool.py) — the worker handles
+    status transitions and survives tab close.
+
+    This wrapper just delegates to `_run_plugin_and_create_row`.
+    The caller (router) is still responsible for committing
+    the transaction.
+    """
+    return _run_plugin_and_create_row(name, video, db)
+
+
+# ── Built-in plugin: Swap to MP4 (MVP2.1.0.1 — actually an endpoint) ───
+# Not really a "plugin" in the sidecar-file sense — it
+# mutates the Video row (file_path + filename). But it
+# uses the same dispatch + audit-log pattern as the
+# other plugins, so it lives in this module for
+# consistency. Called by POST /api/plugins/swap-to-mp4
+# (NOT by /api/plugins/{name}/run, since it doesn't
+# produce a sidecar file).
+def swap_video_file_to(
+    video: "Video", new_path: str, db: Session
+) -> "PluginResult":
+    """Swap a video's file_path to a new file (e.g. WebM -> MP4).
+
+    The new file must:
+      - Exist on disk
+      - Be a real file (not a directory)
+      - Be in a location the app can serve (anywhere
+        for now; the FastAPI FileResponse handles it
+        as long as the path is readable by the server
+        process)
+
+    The Video row is updated in place:
+      - file_path: new absolute (or relative) path
+      - filename: derived from the new path
+      - status: unchanged (we don't re-trigger
+        transcribe or generate)
+      - transcribed_at, generated_at, etc.: preserved
+        (no re-processing)
+
+    Returns PluginResult with:
+      - ok=True on success
+      - ok=False if the new file doesn't exist, the
+        video's status isn't 'ready', etc.
+
+    Note: this is NOT registered in PLUGIN_REGISTRY
+    because it doesn't fit the sidecar-file pattern.
+    The router calls it directly.
+    """
+    from app.models.plugin_run import PluginRun
+
+    # Precondition 1: video must be fully processed
+    # (status == 'ready'). If the video is still
+    # transcribing or generating, swapping the file
+    # would break the in-flight job (it would try to
+    # read the old path).
+    if video.status != "ready":
+        return PluginResult(
+            ok=False,
+            message=(
+                f"Cannot swap: video is in status {video.status!r}. "
+                f"Wait for the video to finish processing, then try again."
+            ),
+        )
+
+    # Precondition 2: the new file must exist on disk
+    new_path_obj = Path(new_path)
+    if not new_path_obj.is_absolute():
+        # Same logic as transcode: relative paths are
+        # resolved from CWD (the project root).
+        new_path_obj = new_path_obj.resolve()
+    if not new_path_obj.exists():
+        return PluginResult(
+            ok=False,
+            message=(
+                f"Cannot swap: file not found at {new_path_obj}. "
+                f"It may have been deleted."
+            ),
+        )
+    if not new_path_obj.is_file():
+        return PluginResult(
+            ok=False,
+            message=(
+                f"Cannot swap: {new_path_obj} is not a regular file."
+            ),
+        )
+
+    # Save the old values for the audit log
+    old_path = video.file_path
+    old_filename = video.filename
+
+    # Mutate the video in place. SQLAlchemy will detect
+    # the change and emit UPDATE on the next commit.
+    video.file_path = str(new_path_obj)
+    video.filename = new_path_obj.name
+    # status, transcribed_at, generated_at, etc. are
+    # intentionally untouched — the transcript is
+    # valid for the new file (it's the same content)
+
+    # Build the audit log row. We don't use the
+    # standard run_plugin() flow because this isn't a
+    # sidecar plugin; we write the row directly.
+    run_row = PluginRun(
+        id=str(uuid.uuid4()),
+        video_id=video.id,
+        plugin_key="swap_to_mp4",
+        ok=True,
+        message=(
+            f"Swapped from {old_filename} to {new_path_obj.name}. "
+            f"Transcript and materials preserved."
+        ),
+        output_path=str(new_path_obj),
+        extra_json=str({
+            "old_path": old_path,
+            "old_filename": old_filename,
+            "new_path": str(new_path_obj),
+            "new_filename": new_path_obj.name,
+        }),
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(run_row)
+
+    return PluginResult(
+        ok=True,
+        message=(
+            f"Video now points to {new_path_obj.name}. "
+            f"Transcript and materials preserved (no re-processing)."
+        ),
+        output_path=str(new_path_obj),
+        extra={
+            "old_path": old_path,
+            "old_filename": old_filename,
+            "new_filename": new_path_obj.name,
+        },
+    )
