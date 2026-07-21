@@ -2,11 +2,12 @@
 
 > **TL;DR**: MVP2.0 is shipped on `main` (552 tests,
 > 92% coverage, tag v2.0.8). MVP2.1 is a **focused
-> 2-item release** on a **new branch `MVP2.1`**. MVP2.1.0
-> (Plugin Tools tab + WebM→MP4) is shipped. MVP2.1.0.1
-> (Tools tab UX fixes + Plugin worker pool) is the
-> current commit. MVP2.1.1 (general worker pool for
-> upload / transcribe / generate) is the next item.
+> release** on a **new branch `MVP2.1`**.
+> - **2.1.0** shipped (Plugin Tools tab + WebM→MP4)
+> - **2.1.0.1** shipped (Tools tab UX fixes + Plugin worker pool, limit=3)
+> - **2.1.0.2** is shipped (backlog bugs: `Video.duration` schema, `file_size` not updated on swap, hardcoded `Content-Type: video/mp4`)
+> - **2.1.1** is the **next** item (general worker pool for upload / transcribe / generate — not started; not a blocker; see §3 + design notes appended)
+> - MVP2.2 (paid) is deferred 2-3 weeks.
 
 ---
 
@@ -15,8 +16,9 @@
 | Version | Status | What it shipped | Branch |
 |---|---|---|---|
 | **2.1.0** | ✅ **Shipped** | Plugin Tools tab + WebM→MP4 | `MVP2.1` |
-| **2.1.0.1** | ✅ **Shipped** (this commit) | Tools tab UX fixes (Re-Upload button visible after Run; no page reload after swap) + Plugin worker pool (limit=3, tab-close survives) | `MVP2.1` |
-| **2.1.1** | 🟡 Not started | General worker pool for upload / transcribe / generate, throttle=3, configurable | `MVP2.1` (later) |
+| **2.1.0.1** | ✅ **Shipped** | Tools tab UX fixes (Re-Upload button visible after Run; no page reload after swap) + Plugin worker pool (limit=3, tab-close survives) | `MVP2.1` |
+| **2.1.0.2** | ✅ **Shipped** | Backlog bugs: `Video.duration` column Integer-vs-Float schema fix; `file_size` not updated on swap; hardcoded `Content-Type: video/mp4`. See `doc/v2.1.0.2-release-notes.md`. | `MVP2.1` |
+| **2.1.1** | ⏸️ Not started (deferred) | General worker pool for upload / transcribe / generate, throttle=3, configurable. **Not a blocker** — pick up when bulk-upload with 10+ videos becomes a real UX problem. See §3 for design notes. | `MVP2.1` (later) |
 | MVP2.2 (paid) | ⏸️ Deferred 2-3 weeks | Stripe, hosted version, MLX as a paid add-on | `MVP2.2-paidVersion` (new branch) |
 | MVP3.0 | 📋 Planned | OCR, cloud Whisper, soft-delete, etc. | `MVP3.0` (later) |
 
@@ -162,19 +164,97 @@ on first startup). No data needs to be backfilled.
 
 ---
 
-## 3. Next up: MVP2.1.1 — Worker pool
+## 3. Next up: MVP2.1.1 — General worker pool (upload / transcribe / generate)
 
-[Tracked in `doc/MVP2.1-all.md` §3.]
+> **Important distinction (post-2.1.0.1):** the
+> **plugin** worker pool already shipped in 2.1.0.1
+> (see §6). MVP2.1.1 is the **general** pool for
+> upload / transcribe / generate, using the same
+> `PluginPool` pattern as a foundation.
+
+[Tracked in `doc/MVP2.1-all.md` §3 + the design
+notes appended to this section.]
 
 `concurrent.futures.ThreadPoolExecutor` with
 `max_workers=3` (configurable via `WORKER_POOL_SIZE`
 env var). Replaces `BackgroundTasks` in
 `app/routers/videos.py` and `app/routers/generation.py`.
-The Plugins router (just shipped in 2.1.0) will be
-refactored to use the pool instead of sync runs.
+
+**Why:** today, bulk-upload + transcribe + generate
+all run in `BackgroundTasks` (per-request, in-process,
+no concurrency control). A user uploading 10 videos
+and walking away has to wait for each to transcribe
+sequentially. The general pool lets us cap concurrency
+(1-3 for transcribe, 1-2 for upload, 1 for generate)
+so a slow transcribe doesn't block a quick upload.
+
+**Status:** not a blocker. The current
+`BackgroundTasks` path works fine for ≤10 videos. We
+pick this up when bulk-upload with 10+ videos
+becomes a real UX problem, or when we add a
+"retry all failed" button that needs bounded
+concurrency.
 
 **Estimated:** 1-2 weeks (option A: 1-2 days for the
 no-status-API version).
+
+### Design notes (for when we pick this up)
+
+The 2.1.0.1 plugin pool is the foundation. The
+general pool reuses the same `asyncio.Queue` +
+`asyncio.Semaphore(N)` pattern, with one **separate
+pool per category** (per the user's preference
+documented in 2.1.0.1 §6 — separate pools with their
+own limits, not one shared pool):
+
+| Pool | Limit | Why this limit |
+|---|---|---|
+| `upload_pool` | 1-2 | Disk I/O bound; SSD can handle 2 parallel writes; more than 2 thrashes |
+| `transcribe_pool` | 1 | Whisper (CPU or MLX) is single-stream; 2 in parallel = contention = both slower than serial |
+| `generate_pool` | 1 | Ollama LLM is single-GPU; same contention problem |
+| `plugin_pool` (already shipped) | 3 | ffmpeg is CPU-bound; 3 parallel runs can use 3 cores without thrashing |
+
+Each pool has its own `asyncio.Semaphore(limit)`.
+`start()` and `stop()` are called from the FastAPI
+lifespan. The existing `app/jobs.py` status tracker
+is reused (each transcribe/generate job already has a
+job dict with `status`, `progress`, `pct`, etc.).
+
+**The migration is mostly mechanical:**
+1. New `app/workers/upload_pool.py`,
+   `app/workers/transcribe_pool.py`,
+   `app/workers/generate_pool.py` (each ~80-120 lines,
+   mirrors `plugin_pool.py`).
+2. Replace `background_tasks.add_task(_run_transcribe_job, ...)`
+   in `app/routers/videos.py` and
+   `app/routers/courses.py` with
+   `await transcribe_pool.submit(...)`.
+3. Tests: `tests/test_upload_pool.py`,
+   `tests/test_transcribe_pool.py`,
+   `tests/test_generate_pool.py` (each ~150-200 lines,
+   mirrors `test_plugin_worker.py`).
+4. Add `synchronous_mode = True` to the conftest's
+   client fixture for the new pools (same pattern as
+   plugin pool).
+
+**No breaking changes to the public API:**
+- The HTTP endpoints stay the same (POST /transcribe
+  still returns 202, etc.)
+- The `Job` dict format stays the same (so
+  `Video.last_transcribe_job` still works)
+- Only the **internal dispatch** changes from
+  FastAPI BackgroundTask → pool.submit
+
+### Out of scope for 2.1.1 (deferred to MVP2.2)
+
+- **Persistent queue (Redis)** — for MVP1.1 the queue
+  is in-memory; if the server crashes, queued + running
+  jobs are lost. The DB still has the row, so the
+  user sees "running" forever, and a future startup
+  can sweep stale `status='running'` rows to `failed`.
+- **Cross-process pools (multi-worker uvicorn)** —
+  v1 is single-process. For MVP2.2 + multi-worker
+  we'll need Redis or RabbitMQ.
 
 ---
 
@@ -190,18 +270,34 @@ no-status-API version).
 
 ---
 
-## 5. Open questions (to resolve before 2.1.1 starts)
+## 5. Open questions (status as of 2026-07-21)
 
-- [ ] **Worker pool scope** — full status-polling API
-  or just the "swap BackgroundTasks for ThreadPoolExecutor"
-  version? User's call.
-- [ ] **Plugin audit log UI** — show it on the video
-  page in 2.1.1, or defer to 2.2 alongside the paid
-  features?
+### Resolved (in MVP2.1.0.1)
+
+- [x] **Worker pool scope** — user chose **separate
+  pools per category**, each with its own limit
+  (1-2 for upload, 1 for transcribe/generate,
+  3 for plugin). The plugin pool shipped in 2.1.0.1
+  as a proof-of-concept; the general pool is the
+  2.1.1 work item. See §3 for the design.
+- [x] **Plugin audit log UI** — the per-video "Last
+  run" line (rendered on the video page Tools tab,
+  both server-side and via JS `refreshLastRun()`)
+  IS the user-facing v1 of the plugin audit log.
+  A global "all my plugin runs" view is the
+  remaining piece, deferred to 2.2.
+
+### Still open
+
 - [ ] **Plugins folder in sidebar** — currently the
   plugin run history is per-video. A user with 100
-  videos might want a global "all my plugin runs" view
-  in the sidebar. Defer to 2.2.
+  videos might want a global "all my plugin runs"
+  view in the sidebar. Defer to 2.2.
+- [ ] **Cancellation** — once a plugin run starts,
+  it can't be cancelled. ffmpeg doesn't have a clean
+  signal-based cancellation, and we'd need a
+  `threading.Event` + subprocess kill. Tracked for
+  2.1.0.2 or later.
 
 ---
 

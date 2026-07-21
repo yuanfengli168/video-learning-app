@@ -74,7 +74,15 @@ class Video(Base):
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
-    duration: Mapped[float] = mapped_column(Integer, default=0)  # seconds
+    # MVP2.1.0.2 — `duration` was declared as Integer but stores floats
+    # like 336.44 (Whisper's segment-end timestamps are floats with
+    # sub-second precision; rounding to int loses the millisecond
+    # accuracy in the course-page badge). Changed to Float. The DB
+    # column is now REAL (SQLite) / DOUBLE PRECISION (Postgres), and
+    # `Base.metadata.create_all()` will use the new type for new
+    # tables. Existing rows keep their integer values (SQLite will
+    # happily cast int → float on read).
+    duration: Mapped[float] = mapped_column(Float, default=0.0)  # seconds
     order_index: Mapped[int] = mapped_column(Integer, default=0)
     section_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sections.id", ondelete="CASCADE"), nullable=False

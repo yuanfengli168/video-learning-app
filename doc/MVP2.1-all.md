@@ -1,11 +1,12 @@
-# MVP2.1-all — 2026-07-16 (updated 2026-07-18: 2.1.0 shipped)
+# MVP2.1-all — 2026-07-16 (updated 2026-07-21: 2.1.0 + 2.1.0.1 shipped; 2.1.0.2 in progress)
 
 > **TL;DR**: MVP2.0 is closed on `main` (583/583 tests,
-> 92% coverage, tag v2.0.8). MVP2.1 is a **focused
-> 2-item release** on a **new branch `MVP2.1`**.
-> **MVP2.1.0 (Plugin Tools + WebM→MP4) is SHIPPED** in
-> this commit-cycle. MVP2.1.1 (Worker pool) is the next
-> item.
+> 92% coverage, tag v2.0.8). MVP2.1 is on a **new branch
+> `MVP2.1`**. Status as of 2026-07-21:
+> - ✅ **2.1.0** shipped (Plugin Tools tab + WebM→MP4)
+> - ✅ **2.1.0.1** shipped (Tools tab UX fixes + Plugin worker pool, limit=3, tab-close survives)
+> - 🟡 **2.1.0.2** in progress (3 backlog bugs: `Video.duration` schema, `file_size` not updated on swap, hardcoded `Content-Type: video/mp4`)
+> - ⏸️ **2.1.1** deferred (general worker pool for upload / transcribe / generate — not a blocker; pick up when bulk-upload with 10+ videos becomes a real UX problem)
 >
 > 1. ✅ **Item 4 — Plugin Tools tab + WebM→MP4**
 >    *(shipped as 2.1.0)*: an extensible tab where users
@@ -16,18 +17,33 @@
 >    modified. See `doc/MVP2.1-Status.md` for the full
 >    per-design-decision rationale.
 >
-> 2. 🟡 **Worker pool, throttle=3, configurable**
->    *(next, 2.1.1)*: a background worker pool that lets the user
->    queue 100 videos and walk away, instead of
+> 2. ✅ **Plugin worker pool** *(shipped as 2.1.0.1)*:
+>    the **plugin-only** worker pool — bounded
+>    concurrency (limit=3) for ffmpeg-based plugins.
+>    Closing the tab no longer kills the transcode. UI
+>    polls `GET /api/plugins/runs/{id}` every 1.5s. See
+>    `app/workers/plugin_pool.py` + `doc/MVP2.1-Status.md`
+>    §6 for the design.
+>
+> 3. ⏸️ **General worker pool** *(deferred to 2.1.1)*:
+>    a background worker pool that lets the user queue
+>    100 videos and walk away, instead of
 >    `BackgroundTasks` running them serially in the
 >    request-handling process. `throttle=3` is the default
 >    concurrency; configurable via env var so power users
->    can crank it to 6-8 on an M-series Mac.
+>    can crank it to 6-8 on an M-series Mac. The
+>    plugin pool (2.1.0.1) is the foundation; we
+>    replicate the same `asyncio.Queue` +
+>    `asyncio.Semaphore(N)` pattern for upload /
+>    transcribe / generate. **Not a blocker** —
+>    `BackgroundTasks` works fine for ≤10 videos.
 >
-> **Branch:** `MVP2.1` (new branch off `main` after MVP2.0
-> merges, or off `MVP2.0` if MVP2.0 hasn't merged yet).
-> **Versions:** `2.1.0` (Plugin Tools) → `2.1.1` (Worker
-> pool).
+> **Branch:** `MVP2.1` (5 commits ahead of `main`,
+> tagged v2.1.0.1 — **not yet merged to `main`** per
+> the user's preference. The merge will happen as
+> part of the MVP2.1 → main PR, when the user is
+> ready).
+> **Versions:** `2.1.0` → `2.1.0.1` → `2.1.0.2` → `2.1.1`.
 
 ---
 
@@ -37,7 +53,10 @@
 |---|---|---|
 | MVP1.0 | ✅ Shipped | Transcribe + LLM materials (mindmap, summary, quiz, chat) |
 | MVP2.0 | ✅ Shipped (`MVP2.0` branch, 67 commits, 552 tests) | Bulk upload 10 GB, language policy, Discuss citations, tab switching, per-step timing, logout fix, distil cleanup, section-videos panel |
-| **MVP2.1** | 🟡 **THIS DOC** | Plugin Tools + Worker pool (2 items) |
+| **MVP2.1.0** | ✅ **Shipped** | Plugin Tools tab + WebM→MP4 (the v1 of the MVP2.1 track) |
+| **MVP2.1.0.1** | ✅ **Shipped** | Tools tab UX fixes + Plugin worker pool (limit=3, tab-close survives) |
+| **MVP2.1.0.2** | ✅ **Shipped** | 3 backlog bugs: `Video.duration` schema (Integer → Float), `file_size` not updated on swap, hardcoded `Content-Type: video/mp4` (now extension-based). See `doc/v2.1.0.2-release-notes.md`. |
+| **MVP2.1.1** | ⏸️ **Deferred** (not a blocker) | General worker pool for upload / transcribe / generate, throttle=3, configurable |
 | MVP3.0 | 📋 Planned (`doc/MVP3.0-Status.md`) | OCR, cloud Whisper, soft-delete, etc. (deferred) |
 
 ---
@@ -160,6 +179,60 @@ the MVP2.0 closure discussion.
 ---
 
 ## 3. Worker pool, throttle=3, configurable (MVP2.1.1)
+
+### What already shipped in 2.1.0.1 (the plugin pool)
+
+The 2.1.0.1 release shipped the **plugin** worker
+pool — bounded concurrency (limit=3) for ffmpeg-based
+plugins, with the same `asyncio.Queue` +
+`asyncio.Semaphore(N)` pattern described below. This
+is the foundation that 2.1.1 builds on. The plugin
+pool differs from the 2.1.1 plan in one key way:
+**scope = plugins only**. The general pool (upload /
+transcribe / generate) is still MVP2.1.1.
+
+Files:
+- `app/workers/__init__.py` — package init
+- `app/workers/plugin_pool.py` — `PluginPool` class
+  (~530 lines, with `synchronous_mode = True` for
+  tests)
+- `app/workers/plugin_pool.py:plugin_pool` — module-
+  level singleton (`PluginPool(limit=3)`)
+- `tests/test_plugin_worker.py` — 8 new tests
+
+**Design pattern (the foundation 2.1.1 reuses):**
+- `submit()` enqueues a `_QueuedRun` onto
+  `asyncio.Queue` and returns immediately
+- A background worker task pulls jobs off the queue
+  and spawns a child task per job
+- The child task acquires `asyncio.Semaphore(limit)`
+  (blocks when at limit) and runs
+- Plugin functions are blocking (ffmpeg / Whisper /
+  etc. all release the GIL via subprocess), so we run
+  them in `loop.run_in_executor(None, ...)` which
+  uses the default `ThreadPoolExecutor`
+- A per-job DB session is opened in the worker
+  coroutine, used, and closed
+- `synchronous_mode = True` (set by the test client
+  fixture) makes `submit()` run the plugin inline
+  and update the row before returning — tests assert
+  on the result without polling
+
+This is the same pattern that 2.1.1 will replicate
+for upload / transcribe / generate, with one **separate
+pool per category** (per the user's preference
+documented in `doc/MVP2.1-Status.md` §6 — separate
+pools with their own limits, not one shared pool).
+
+### MVP2.1.1 — general pool (still TODO)
+
+A background worker pool that lets the user queue
+100 videos and walk away, instead of `BackgroundTasks`
+running them serially in the request-handling process.
+`throttle=3` is the default concurrency; configurable
+via env var so power users can crank it to 6-8 on an
+M-series Mac. Replaces `BackgroundTasks` in
+`app/routers/videos.py` and `app/routers/generation.py`.
 
 ### What
 

@@ -914,3 +914,87 @@ result.
   sync mode keeps these tests fast (no polling).
 
 [2.1.0.1]: https://github.com/yuanfengli168/video-learning-app/compare/2.1.0...HEAD
+
+## [2.1.0.2] - 2026-07-21 — Backlog bug fixes (3 small ones)
+
+🐛 **Three user-discovered bugs, all fixed.** None
+are user-visible until the conditions are right, but
+all three were sitting in the code as latent
+foot-guns. ~30 lines of code + 9 new tests.
+
+### 🐛 Bug fixes
+
+- **`Video.duration` column was declared as `Integer`
+  but stored floats** — Whisper's segment-end timestamps
+  are floats with sub-second precision (e.g. 336.44
+  seconds for a 5:36 video). Storing 336.44 in an
+  Integer column silently truncated to 336, losing
+  440ms of accuracy in the course-page badge. The
+  schema now declares `duration` as `Float` (REAL in
+  SQLite, DOUBLE PRECISION in Postgres). Existing
+  rows with integer values stay valid (SQLite
+  happily casts int → float on read).
+- **`Video.file_size` was NOT updated on swap** —
+  after a WebM→MP4 swap, the DB still showed the
+  original WebM's byte count (e.g. 54 MB) instead of
+  the new MP4's (11 MB). Two user-visible consequences:
+  the course-page size column lied, and the
+  "are you sure?" delete prompt over-counted. The
+  swap now `stat()`s the new file and stamps
+  `video.file_size` before commit.
+- **`get_video_file` hardcoded `Content-Type:
+  video/mp4`** regardless of the actual file
+  extension — .webm / .avi / .mov / .mkv / .m4v
+  files were all served with the wrong MIME type.
+  The fix maps extension → MIME type, with
+  `application/octet-stream` as the fallback for
+  unknown extensions (browser offers to download
+  rather than play).
+
+### 📝 Bonus fix (not a bug, but spotted while testing)
+
+- **`extra_json` was stored as Python `str({...})`
+  (single-quoted repr) instead of `json.dumps(...)`
+  (double-quoted JSON)**. The audit log was technically
+  valid Python but not valid JSON, which broke any
+  external consumer that tried to parse it. Fixed in
+  both places: `app/services/plugins.py:run_plugin`
+  and `swap_video_file_to`.
+
+### 🧪 Tests
+
+- 623 passing (was 614, +9 new tests in
+  `tests/test_backlog_bugs_2_1_0_2.py`):
+  1. `test_video_duration_column_is_float` — verifies
+     the model declares the column as Float
+  2. `test_video_duration_stores_float_value` —
+     verifies 336.44 round-trips correctly through
+     the DB
+  3. `test_swap_updates_file_size` — verifies
+     `Video.file_size` matches the new file on disk
+  4. `test_swap_audit_log_includes_size_info` —
+     verifies the audit log's `extra_json` is valid
+     JSON with both old + new sizes
+  5-8. `test_get_video_file_returns_correct_mime_for_*`
+     — verifies Content-Type for .mp4 / .webm / .mov
+     / .mkv files
+  9. `test_get_video_file_unknown_extension_falls_back`
+     — verifies the application/octet-stream fallback
+
+### Migration notes
+
+- The `Video.duration` Integer → Float change is a
+  SQLAlchemy type change but the underlying column
+  type in SQLite is `NUMERIC` (or whatever it
+  implicitly was — SQLite is dynamically typed).
+  No `ALTER TABLE` is needed; `Base.metadata.create_all()`
+  is a no-op for existing tables. New code that
+  reads `video.duration` gets a float; old code
+  that did integer arithmetic on it would now
+  produce floats (e.g. `int(video.duration)` still
+  works for "rounded seconds").
+- `Video.file_size` and the MIME type don't need
+  any migration — they're updated at runtime by
+  the fix code.
+
+[2.1.0.2]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.1...HEAD

@@ -48,6 +48,7 @@ Adding a new plugin (for the future):
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import uuid
@@ -375,7 +376,7 @@ def _run_plugin_and_create_row(
         ok=result.ok,
         message=result.message,
         output_path=result.output_path,
-        extra_json=str(result.extra) if result.extra else None,
+        extra_json=json.dumps(result.extra) if result.extra else None,
         created_at=datetime.now(timezone.utc),
     )
     db.add(run_row)
@@ -481,11 +482,24 @@ def swap_video_file_to(
     # Save the old values for the audit log
     old_path = video.file_path
     old_filename = video.filename
+    old_size = video.file_size
 
     # Mutate the video in place. SQLAlchemy will detect
     # the change and emit UPDATE on the next commit.
     video.file_path = str(new_path_obj)
     video.filename = new_path_obj.name
+    # MVP2.1.0.2 — refresh `file_size` from the new file
+    # on disk. Without this, the DB keeps the original
+    # WebM's byte count (e.g. 54 MB) even after the
+    # swap, which makes the course-page "size" column
+    # and the "are you sure?" delete prompt both lie
+    # to the user. Stat the new file (we just verified
+    # it exists) and stamp. Falls back to 0 on OSError
+    # (unlikely — we just confirmed is_file()).
+    try:
+        video.file_size = new_path_obj.stat().st_size
+    except OSError:
+        video.file_size = 0
     # status, transcribed_at, generated_at, etc. are
     # intentionally untouched — the transcript is
     # valid for the new file (it's the same content)
@@ -493,21 +507,26 @@ def swap_video_file_to(
     # Build the audit log row. We don't use the
     # standard run_plugin() flow because this isn't a
     # sidecar plugin; we write the row directly.
+    old_size_mb = old_size / 1_000_000 if old_size else 0
+    new_size_mb = video.file_size / 1_000_000 if video.file_size else 0
     run_row = PluginRun(
         id=str(uuid.uuid4()),
         video_id=video.id,
         plugin_key="swap_to_mp4",
         ok=True,
         message=(
-            f"Swapped from {old_filename} to {new_path_obj.name}. "
+            f"Swapped from {old_filename} ({old_size_mb:.1f} MB) "
+            f"to {new_path_obj.name} ({new_size_mb:.1f} MB). "
             f"Transcript and materials preserved."
         ),
         output_path=str(new_path_obj),
-        extra_json=str({
+        extra_json=json.dumps({
             "old_path": old_path,
             "old_filename": old_filename,
+            "old_size_bytes": old_size,
             "new_path": str(new_path_obj),
             "new_filename": new_path_obj.name,
+            "new_size_bytes": video.file_size,
         }),
         created_at=datetime.now(timezone.utc),
     )
