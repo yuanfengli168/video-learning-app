@@ -998,3 +998,121 @@ foot-guns. ~30 lines of code + 9 new tests.
   the fix code.
 
 [2.1.0.2]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.1...HEAD
+
+## [2.1.0.3] - 2026-07-21 — Tools tab: in-progress run visual + multi-tab fix
+
+🛠 **Two more UX bugs caught right after 2.1.0.2.** Both are
+small and visual, but they erode trust in the plugin
+system if left unfixed: an in-progress run looked
+*failed*, and the Tools tab stuck on top of other tabs
+when you switched away. ~80 lines of code + 10 new tests
+(no template strings were added, just three branches in
+an existing if/else).
+
+### 🐛 Bug fixes
+
+- **"Last run failed: Running…" was the wrong message for
+  in-progress runs.** The Tools tab's "Last run" line
+  branched only on `ok=True` (green) vs `ok=False` (red).
+  While a plugin run was in the `queued` or `running`
+  state, `ok` was still `False` (the worker hadn't
+  finished yet) and the worker-set `message` was
+  literally `"Running..."` — so the user saw a big red
+  "❌ Last run failed: Running…" box. The user couldn't
+  tell whether the system was actually working or had
+  silently broken.
+
+  The template now branches on **status** first:
+  - `status in ('queued', 'running')` → indigo
+    "⏳ Queued, waiting for a worker slot…" /
+    "⏳ Currently running…" box (with a hint that the
+    page auto-refreshes every 1.5s — see below)
+  - `status='done' AND ok=True` → green
+    "✅ Last successful output" (existing)
+  - `status='done' AND ok=False` or `status='failed'` →
+    red "❌ Last run failed" (existing)
+
+  Same logic is mirrored in the JS `refreshLastRun()`
+  template so the page doesn't visually "jump" when
+  the auto-poll fetches a new state.
+
+- **Tools tab stuck on top of other tabs.** `switchTab()`'s
+  forEach loop iterated over
+  `['summary', 'flashcards', 'quiz', 'mindmap', 'discuss']`
+  but **not `'tools'`** (added in 2.1.0 without updating
+  the list). When you opened Tools, then clicked Summary,
+  the Tools panel stayed visible underneath. Same class
+  of bug that hit `discuss` in MVP2.0.2 — every new tab
+  must be added to the iteration list. Fixed by adding
+  `'tools'` to the array. The
+  `test_video_page_switchTab_hides_all_six_panels` test
+  now requires all six tabs to prevent a future
+  regression (renamed from
+  `..._hides_all_five_panels`).
+
+### ✨ Polish
+
+- **Auto-poll in-progress runs on page load.**
+  `startAutoPollIfNeeded()` runs in the page Init block
+  and scans every `#last-run-{key}` div for
+  `data-run-status in ('queued', 'running')`. If any are
+  found, it starts a 1.5s `setInterval` that calls
+  `refreshLastRun()` for each in-progress plugin. When
+  a run reaches a terminal state, the box silently
+  flips to ✅/❌ without a manual reload — same UX as
+  if you'd been on the page the whole time.
+
+  The interval is keyed off the page's
+  `data-run-status` attribute, which `refreshLastRun()`
+  updates on every fetch. When all in-progress runs
+  reach a terminal state, the interval self-stops
+  (so a 5-minute transcode that finishes doesn't
+  leave a 1.5s poll running forever in the background).
+
+### 🧪 Tests
+
+- 633 passing (was 623, +10 new tests in
+  `tests/test_tools_tab_in_progress_2_1_0_3.py`):
+  1. `test_last_run_queued_renders_indigo_box` —
+     server-render for queued status shows the
+     indigo box, not the red "Last run failed" box
+  2. `test_last_run_running_renders_indigo_box` —
+     same for `running` status
+  3. `test_last_run_done_ok_renders_green_box` —
+     regression guard: a successful run still
+     renders green, not the new indigo box
+  4. `test_last_run_done_failed_renders_red_box` —
+     regression guard: a `status='done', ok=False`
+     run still renders red, not the new indigo box
+  5. `test_last_run_explicit_failed_status_renders_red_box` —
+     covers the `status='failed'` terminal state
+     (different code path than `ok=False`)
+  6. `test_page_registers_auto_poll_on_load` —
+     the page must define and call
+     `startAutoPollIfNeeded()` so the auto-poll
+     kicks in on page load
+  7. `test_refreshLastRun_updates_data_run_status` —
+     `refreshLastRun()` must update
+     `container.dataset.runStatus` so the
+     auto-poll loop can see when a run is
+     terminal and stop polling
+  8. `test_refreshLastRun_has_three_state_template` —
+     the JS template has all three branches
+     (indigo / green / red) matching the
+     server-render
+  9. `test_in_progress_box_carries_run_id_and_status_for_poll` —
+     the indigo box carries `data-run-id` and
+     `data-run-status` so the auto-poll loop
+     can find in-progress runs by scanning
+     the DOM
+  10. `test_switchTab_includes_tools_in_forEach` —
+      regression guard for the multi-tab
+      "Tools sticks on top" bug
+
+- Renamed `test_video_page_switchTab_hides_all_five_panels`
+  → `test_video_page_switchTab_hides_all_six_panels`
+  and added `'tools'` to the required set. The test
+  would have caught the 2.1.0 regression; it didn't
+  because the test was written for 5 tabs.
+
+[2.1.0.3]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.2..HEAD

@@ -328,16 +328,63 @@
                             </p>
                             {% endif %}
                             <div id="result-{{ plugin.key }}" class="hidden mt-2 text-xs"></div>
-                            {# MVP2.1.0.1: "Last run" line — shows the most
-                               recent PluginRun for this video + plugin
-                               key. Persists across page reloads (read
-                               from the plugin_runs DB table on every
-                               page load). Shows success, error, or
-                               empty state. #}
+                            {# MVP2.1.0.1 + MVP2.1.0.3: "Last run" line.
+                               Shows the most recent PluginRun for
+                               this video + plugin key. Persists
+                               across page reloads (read from the
+                               plugin_runs DB table on every
+                               page load). Three visual states:
+
+                               1. ✅ done + ok=True
+                                  → green "Last successful output"
+                               2. ⏳ status in ('queued', 'running')
+                                  → indigo "Currently running…"
+                                  (with auto-poll on page load —
+                                  the page silently polls every
+                                  1.5s and refreshes the box to
+                                  "✅ Done" without a reload)
+                               3. ❌ status='failed' OR (status='done'
+                                  AND ok=False)
+                                  → red "Last run failed"
+
+                               MVP2.1.0.3 fixed a regression where
+                               in-progress runs (status='running')
+                               rendered as "Last run failed:
+                               Running..." — because the old
+                               template only branched on
+                               ok=True/False. #}
                             {% set last_run = plugin_last_runs.get(plugin.key) %}
-                            <div id="last-run-{{ plugin.key }}" class="mt-2 text-xs">
+                            {% set last_run_id = last_run.id if last_run else None %}
+                            {% set last_run_status = last_run.status if last_run else None %}
+                            {% set is_in_progress = last_run_status in ('queued', 'running') if last_run_status else False %}
+                            <div id="last-run-{{ plugin.key }}"
+                                 data-run-id="{{ last_run_id }}"
+                                 data-run-status="{{ last_run_status }}"
+                                 class="mt-2 text-xs">
                                 {% if last_run %}
-                                    {% if last_run.ok and last_run.output_path %}
+                                    {% if is_in_progress %}
+                                    <div class="bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded p-2">
+                                        <div class="flex items-start gap-2">
+                                            <span class="flex-shrink-0">
+                                                <span id="last-run-spinner-{{ plugin.key }}">⏳</span>
+                                            </span>
+                                            <div class="flex-1 min-w-0">
+                                                <div class="font-medium">
+                                                    <span id="last-run-status-{{ plugin.key }}">
+                                                        {{ 'Queued, waiting for a worker slot…' if last_run_status == 'queued' else 'Currently running…' }}
+                                                    </span>
+                                                </div>
+                                                <div class="text-xs mt-1 break-words"
+                                                     id="last-run-message-{{ plugin.key }}">
+                                                    {{ last_run.message }}
+                                                </div>
+                                                <div class="text-xs mt-1 text-indigo-600 dark:text-indigo-400 italic">
+                                                    This page auto-refreshes every 1.5&nbsp;seconds until the run finishes. Don't close this tab.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% elif last_run.ok and last_run.output_path %}
                                     <div class="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800 rounded p-2">
                                         <div class="flex items-start gap-2">
                                             <span class="flex-shrink-0">✅</span>
@@ -456,16 +503,18 @@ if (document.getElementById('content-summary').querySelector('.prose')) {
 }
 
 function switchTab(tab) {
-    // Hide all five tab panels and reset their tab-button styles.
-    // NB: 'discuss' MUST be in this list, otherwise clicking another
-    // tab while Discuss is open leaves the Discuss panel visible
-    // underneath the new tab's content (multi-panel rendering bug,
-    // fixed in MVP2.0.2 hotfix — see doc/MVP2.0-Status.md §16+§17).
-    // MVP2.0.7: this was actually a latent regression in commit
-    // dc11d5f — the commit added the "all five" comment but
-    // forgot to add 'discuss' to the forEach. Caught by
-    // test_video_page_switchTab_hides_all_five_panels.
-    ['summary', 'flashcards', 'quiz', 'mindmap', 'discuss'].forEach(t => {
+    // Hide all SIX tab panels and reset their tab-button styles.
+    // NB: every tab key MUST be in this list, otherwise clicking
+    // another tab leaves the old panel visible underneath the new
+    // tab's content (multi-panel rendering bug, first hit in
+    // MVP2.0.2 — see doc/MVP2.0-Status.md §16+§17).
+    // MVP2.0.7 (2.0.3 hotfix): 'discuss' was missing from the
+    // forEach — a latent regression from commit dc11d5f. Caught
+    // by test_video_page_switchTab_hides_all_five_panels.
+    // MVP2.1.0.3: 'tools' was missing from the forEach — same
+    // regression shape as the 2.0.7 fix. The test now asserts
+    // 'all six' (regression-test for future tab additions).
+    ['summary', 'flashcards', 'quiz', 'mindmap', 'discuss', 'tools'].forEach(t => {
         document.getElementById('content-' + t).classList.add('hidden');
         const btn = document.getElementById('tab-' + t);
         btn.classList.remove('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
@@ -1950,7 +1999,14 @@ async function sendChatMessage() {
 }
 
 // ── Init ──
+// MVP2.1.0.3 — also kick off the auto-poll for any plugin
+// run that's still in-progress (queued / running). See
+// startAutoPollIfNeeded() above for the full rationale.
+// We use a try/catch because the page-init code in this
+// block is intentionally fire-and-forget (we don't want
+// a poll failure to break the page).
 loadTranscript();
+try { startAutoPollIfNeeded(); } catch (e) { console.warn('auto-poll init failed:', e); }
 
 // ── Discuss (whole-video chat, MVP2.0) ──
 // Lazily creates a chat session the first time the user opens the
@@ -2335,8 +2391,31 @@ async function refreshLastRun(key) {
         // On a future refactor we could factor this out
         // into a shared template; for now, duplication
         // is fine (~10 lines per side).
+        // MVP2.1.0.3: added a 3rd state for in-progress
+        // runs (status in 'queued' / 'running'). This
+        // matches the server-render template above —
+        // keeping the two in sync is important so the
+        // page doesn't visually "jump" when the auto-
+        // poll fetches a new state.
         let html;
-        if (run.ok && run.output_path) {
+        if (run.status && (run.status === 'queued' || run.status === 'running')) {
+            const statusLabel = run.status === 'queued'
+                ? 'Queued, waiting for a worker slot…'
+                : 'Currently running…';
+            html = `
+                <div class="bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded p-2">
+                    <div class="flex items-start gap-2">
+                        <span class="flex-shrink-0">⏳</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-medium">${statusLabel}</div>
+                            <div class="text-xs mt-1 break-words">${escapeHtml(run.message)}</div>
+                            <div class="text-xs mt-1 text-indigo-600 dark:text-indigo-400 italic">
+                                This page auto-refreshes every 1.5&nbsp;seconds until the run finishes. Don't close this tab.
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+        } else if (run.ok && run.output_path) {
             html = `
                 <div class="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800 rounded p-2">
                     <div class="flex items-start gap-2">
@@ -2371,6 +2450,15 @@ async function refreshLastRun(key) {
                 </div>`;
         }
         container.innerHTML = html;
+        // MVP2.1.0.3 — update the data-run-* attributes
+        // so the auto-poll loop (startAutoPollIfNeeded)
+        // sees the latest run id + status without
+        // re-reading the DOM. Without this, the poll
+        // would either keep polling a now-terminal
+        // run (waste of bandwidth) or miss a
+        // newly-running one.
+        container.dataset.runId = run.id;
+        container.dataset.runStatus = run.status || (run.ok ? 'done' : 'failed');
     } catch (err) {
         // Non-fatal: the last-run section just won't
         // update until the next page reload. We log to
@@ -2397,6 +2485,79 @@ function escapeJs(s) {
     // For inside a single-quoted JS string (onclick="...").
     // Escape backslashes + single quotes.
     return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+// startAutoPollIfNeeded (MVP2.1.0.3) — if any plugin's
+// "Last run" line is currently in-progress
+// (status in 'queued' / 'running'), start a 1.5s poll
+// loop that calls refreshLastRun() for each in-progress
+// plugin. The poll self-stops when all in-progress
+// runs reach a terminal state.
+//
+// Why this exists: when the user navigates AWAY from
+// the page (e.g. opens the Course page) and comes BACK,
+// the page is re-rendered server-side. If a plugin run
+// is in-flight, the server renders the blue
+// "Currently running…" box. Without auto-poll, the
+// box would stay blue forever (until the user
+// manually reloaded). With auto-poll, the user sees
+// the result appear in real time — same UX as if
+// they'd been on the page the whole time.
+//
+// Called once on page load. Idempotent (safe to call
+// multiple times — the second call is a no-op).
+function startAutoPollIfNeeded() {
+    if (window.__autoPollStarted) return;
+    window.__autoPollStarted = true;
+    // Find every last-run-{key} div on the page and
+    // check its data-run-status attribute. The
+    // server-render sets this for every plugin that
+    // has a last-run (green, blue, or red).
+    const containers = document.querySelectorAll('[id^="last-run-"]');
+    const inProgress = [];
+    containers.forEach((c) => {
+        const status = c.dataset.runStatus;
+        const key = c.id.replace(/^last-run-/, '');
+        if (status === 'queued' || status === 'running') {
+            inProgress.push({ key, container: c });
+        }
+    });
+    if (inProgress.length === 0) return;
+    // 1.5s matches runPlugin()'s poll interval — keeps
+    // the server load consistent regardless of which
+    // path kicked off the polling.
+    const POLL_INTERVAL_MS = 1500;
+    const intervalId = setInterval(async () => {
+        let stillInProgress = 0;
+        for (const { key, container } of inProgress) {
+            // Re-read the data-run-status each tick so
+            // we naturally drop runs that just finished
+            // (refreshLastRun updates data-run-status
+            // to a terminal value when it fetches a
+            // terminal run).
+            if (!container.isConnected) {
+                // Plugin card was removed from DOM
+                // (e.g. plugin un-installed). Skip.
+                continue;
+            }
+            const status = container.dataset.runStatus;
+            if (status === 'queued' || status === 'running') {
+                stillInProgress++;
+                await refreshLastRun(key);
+            }
+        }
+        if (stillInProgress === 0) {
+            clearInterval(intervalId);
+            // Allow the auto-poll to be re-armed if a
+            // new run is started in the same session
+            // (the runPlugin() flow already calls
+            // refreshLastRun on completion, but the
+            // arm flag should reset so a future
+            // re-render with an in-progress run can
+            // poll again).
+            window.__autoPollStarted = false;
+        }
+    }, POLL_INTERVAL_MS);
 }
 
 // revealInFinder (MVP2.1.0.1) — POSTs the absolute

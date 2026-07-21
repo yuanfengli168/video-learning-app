@@ -273,6 +273,17 @@ async def video_view(
         last_runs_by_plugin[run.plugin_key] = {
             "id": run.id,
             "ok": run.ok,
+            # MVP2.1.0.3 — include the new `status` field
+            # (queued / running / done / failed) so the
+            # template can distinguish in-progress runs
+            # from terminal-failed runs. Without this,
+            # a run in 'running' state would render as
+            # "Last run failed: Running..." (because
+            # ok=False + the worker-set message "Running..."
+            # would be the displayed text) — confusing
+            # for the user. The template now branches
+            # on status first, then on ok.
+            "status": run.status,
             "message": run.message,
             "output_path": run.output_path,
             "extra": run.extra_json,
