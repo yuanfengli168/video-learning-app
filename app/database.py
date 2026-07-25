@@ -14,9 +14,41 @@ connect_args = (
     else {}
 )
 
-engine = create_engine(
-    settings.database_url, connect_args=connect_args, echo=settings.debug
-)
+# Pool sizing (MVP2.1.0.1+ hotfix for the 2026-07-24 4.3 GB WebM bug).
+#
+# The default SQLAlchemy QueuePool is size=5, overflow=10
+# (15 connections total). That was fine for the original
+# MVP1 design where the worker held a connection for the
+# full 5-10 min ffmpeg transcode — but with concurrent UI
+# polling, every poll and page view competes for one of
+# the remaining 14 slots, and the pool exhausts in seconds,
+# throwing QueuePoolTimeoutError on /video/<id>.
+#
+# Bumping to size=10, overflow=20 (30 total) gives enough
+# headroom for:
+#   - 3 concurrent plugin workers (the PluginPool limit)
+#   - ~10 in-flight FastAPI requests (UI polls, page loads)
+#   - a few bursts from background jobs
+# plus headroom for transcribe workers etc. SQLite is
+# single-writer anyway, so the practical limit is GIL/
+# disk contention, not pool exhaustion.
+#
+# These kwargs only apply to QueuePool (file-backed SQLite
+# and non-SQLite backends). The :memory: SQLite used by
+# tests gets a SingletonThreadPool that doesn't accept
+# these args — we skip them in that case to keep the test
+# suite happy.
+engine_kwargs: dict = dict(connect_args=connect_args, echo=settings.debug)
+if not (
+    settings.database_url.startswith("sqlite")
+    and ":memory:" in settings.database_url
+):
+    engine_kwargs.update(
+        pool_size=10,
+        max_overflow=20,
+        pool_timeout=30,
+    )
+engine = create_engine(settings.database_url, **engine_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

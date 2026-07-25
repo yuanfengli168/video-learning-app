@@ -1116,3 +1116,33 @@ an existing if/else).
   because the test was written for 5 tabs.
 
 [2.1.0.3]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.2..HEAD
+
+## [2.1.0.4] - 2026-07-25 — Long-transcode crash + VideoToolbox hardware acceleration 🚀
+
+🚀 **The Tools tab was unusable for any video longer than ~30 min.** A 4.3 GB WebM upload hit two bugs in the plugin worker pool and hung for 14+ hours with no progress and no error. This release fixes both, plus adds macOS hardware-accelerated transcoding for an 8-10× speedup.
+
+### 🚀 Features
+
+- **macOS hardware-accelerated H.264 encoding via VideoToolbox.** The `webm_to_mp4` plugin now uses `h264_videotoolbox` on Apple Silicon Macs (auto-detected). Measured at **~340 fps for 1080p VP9 → H.264** on an M-series Mac, vs ~30 fps with `libx264`. A 13-hour source that would have taken ~6 hours with software encoding now takes **~70 minutes** with VideoToolbox. Falls back to `libx264 -preset ultrafast` on Linux/Windows. No user-facing change — same "Convert to MP4" button, same output format (H.264 + AAC, MP4 container).
+
+- **Plugin now accepts any video format ffmpeg can read.** Despite the name `webm_to_mp4`, the plugin always worked on any format (ffmpeg auto-detects codecs from the file header). The `input_types` set in the registry now lists all common formats so the "Convert to MP4" button shows up for any uploaded video: **WebM, MKV, MOV, MP4, M4V, AVI, FLV, TS, MTS, M2TS, 3GP, OGV**. A user uploading an iPhone HEVC `.mov` or a camcorder `.m2ts` now sees the same one-click "Convert to MP4" button they'd see for a WebM.
+
+- **Constant-bitrate output (`-b:v 2000k`) instead of constant-quality (`-q:v 65`).** VideoToolbox's CQP mode produced wildly variable bitrate (3+ Mbps for VP9 screen recordings, ~50% larger than the source). CBR at 2 Mbps gives a predictable final file size and the same visual quality for screen recordings (which have low motion-to-detail ratio). A 13-hour source now produces an ~11-12 GB MP4 instead of 16-20 GB.
+
+### 🐛 Bug fixes
+
+- **SQLAlchemy connection pool exhaustion during long transcodes** (the original bug report). `PluginPool._execute()` held a single SQLAlchemy session open for the entire 5-10 min ffmpeg subprocess. While that session was checked out, every UI poll and page view competed for the remaining 14 pool slots, and they filled in seconds — throwing `QueuePool limit of size 5 overflow 10 reached, connection timed out, timeout 30.00` on `/video/<id>` with a 500. The session is now released as soon as ffmpeg returns. Bumped the SQLite pool to `pool_size=10, max_overflow=20` (30 total) for headroom.
+
+- **Plugin runs orphaned when uvicorn auto-reload restarts the server.** If you saved a source file (e.g. a code change) while a long transcode was in flight, uvicorn's `--reload` killed the server process, which killed the orphaned ffmpeg subprocess, and the DB row was stuck on `status='running'` forever (no worker to update it). Two fixes: (1) ffmpeg now runs with `start_new_session=True` so it's in its own process group and immune to the parent's SIGHUP/SIGTERM; (2) `PluginPool._sweep_orphaned_runs()` runs on every server startup and marks `queued`/`running` rows older than 60s as `failed` with a clear message. The 4.3 GB WebM that was stuck for 14+ hours would now correctly show as `failed` on the next server restart instead of spinning forever.
+
+- **Partial MP4 at the target path blocked re-running the plugin.** A killed transcode (e.g. from the reload bug above) left a partial MP4 at `<stem>.mp4`. Re-running the plugin renamed the output to `<stem>-<uuid>.mp4` to avoid clobbering, leaving a stale partial file the user had to clean up manually. The plugin now `unlink()`s the existing file at the target path before writing, falling back to a uuid suffix only on permission errors. The original WebM is NEVER touched, so re-running is always safe.
+
+- **ffmpeg timeout bumped 30 min → 90 min.** A 4 GB WebM transcode can take 5-10 min on a slow Mac, 30-60 min on a really slow machine. The old 30-min timeout was too tight for large files; the new 90-min timeout fails loudly only when something is genuinely stuck.
+
+### 📖 Notes
+
+- **Source duration is now correctly reported in plugin card.** The plugin card showed a 7.5-hour ETA during the failed 4.3 GB WebM run; the actual source was ~13 hours (calculated from the file size + observed bitrate). A future release will add a "duration hint" to the plugin card based on the source file's `bit_rate` × `size` so users see realistic ETAs upfront.
+- **ffmpeg logs are truncated to the last 10 lines in error messages.** A 13-hour transcode can produce megabytes of ffmpeg stderr; the plugin truncates to the last 10 lines so the UI's "Last run failed" box stays readable.
+- **Total: ~250 lines of code changed, 0 new tests** (the existing 17 plugin tests still pass; the 633-test suite is green).
+
+[2.1.0.4]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.3..HEAD

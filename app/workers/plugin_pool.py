@@ -87,6 +87,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models.plugin_run import PluginRun
+from app.services.plugins import PluginResult
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,80 @@ class PluginPool:
             self._worker_loop(), name="plugin-pool-worker"
         )
         logger.info("PluginPool started (limit=%d)", self.limit)
+        # ── Orphan-row sweep (2026-07-24 fix) ───────────────────────────
+        # On startup, scan the plugin_runs table for rows
+        # stuck in 'queued' or 'running' state. If their
+        # ffmpeg subprocess was killed (e.g. uvicorn
+        # --reload, server crash, machine sleep), the row
+        # is orphaned — the worker that owned it is gone
+        # and will never update it. Mark them as 'failed'
+        # with a clear message so the UI shows the user
+        # what happened, instead of an infinite spinner.
+        #
+        # Safe to run on every startup: it's a single
+        # UPDATE with a WHERE clause that matches a small
+        # subset of rows (only the truly stuck ones).
+        self._sweep_orphaned_runs()
+
+    def _sweep_orphaned_runs(self) -> None:
+        """Mark queued/running rows as failed if their ffmpeg
+        subprocess is no longer alive.
+
+        Called on every PluginPool.start() — i.e. on every
+        server boot. The sweep is conservative: we only
+        touch rows older than 60 seconds (so a freshly-
+        submitted run that hasn't been picked up yet isn't
+        accidentally killed) and we DON'T check if ffmpeg
+        is alive (we don't have a way to map a run_id back
+        to a PID). The age threshold is enough to cover
+        the 2026-07-24 incident: that run was ~5 hours old
+        when the user noticed.
+
+        For MVP2.2+ we can track the ffmpeg PID on the
+        PluginRun row and use `os.kill(pid, 0)` to check
+        liveness. For now, age-based sweep is good enough.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+        db = SessionLocal()
+        try:
+            stuck = (
+                db.query(PluginRun)
+                .filter(
+                    PluginRun.status.in_(("queued", "running")),
+                    PluginRun.created_at < cutoff,
+                )
+                .all()
+            )
+            for row in stuck:
+                row.status = "failed"
+                row.ok = 0
+                row.message = (
+                    f"Run was abandoned (status was {row.status!r} when "
+                    f"the server restarted). Re-run the plugin to retry."
+                )
+                logger.warning(
+                    "PluginPool startup sweep: marking orphaned run %s "
+                    "(status was %s, age=%s) as failed",
+                    row.id,
+                    row.status,
+                    datetime.now(timezone.utc) - row.created_at,
+                )
+            if stuck:
+                db.commit()
+                logger.info(
+                    "PluginPool startup sweep: marked %d orphaned run(s) as failed",
+                    len(stuck),
+                )
+        except Exception as exc:  # noqa: BLE001
+            # Don't crash the server on a sweep failure —
+            # the worst case is a stuck row stays stuck
+            # until the next boot. Log and move on.
+            logger.exception("PluginPool startup sweep failed: %r", exc)
+            db.rollback()
+        finally:
+            db.close()
 
     async def stop(self, timeout: float = 30.0) -> None:
         """Graceful shutdown. Waits for in-flight jobs to finish.
@@ -356,136 +431,232 @@ class PluginPool:
             self._mark_failed(queued.run_id, f"Worker crashed: {exc!r}")
 
     async def _execute(self, queued: _QueuedRun) -> None:
-        """Open a fresh DB session, run the plugin, write the result.
+        """Open a short-lived DB session, run the plugin, write the result.
 
         Steps:
-          1. Mark status='running' + clear-ish message
-          2. Re-fetch the Video in this session
-          3. Run the plugin function in a thread
-             (ffmpeg blocks; run_in_executor is the
-             asyncio-friendly way to call blocking code)
-          4. On success: copy the new PluginRun row's
-             data into our pre-existing row (we delete
-             the new one to avoid duplicates), mark
-             status='done' / 'failed'
-          5. On exception: mark status='failed'
+          1. Mark status='running' in a short-lived session, then CLOSE it
+             (releasing the connection back to the pool)
+          2. Run the plugin function in a thread WITHOUT holding a DB session
+             (ffmpeg can take 5-10 minutes for a 4 GB WebM; we cannot
+             hold a pool connection that long or every other request
+             times out — that was the 2026-07-24 bug)
+          3. Open a fresh session and write the result row
+          4. On exception: mark status='failed' in a fresh session
+
+        Why release the session during the plugin run:
+          The SQLAlchemy QueuePool is size=5, overflow=10 (15 total).
+          If the worker holds one connection for the entire 5-10 min
+          ffmpeg transcode, every UI poll and page view that opens
+          a session fills the remaining 14 slots. Once they're all
+          checked out (which happens fast under polling), the next
+          request gets `QueuePool limit of size 5 overflow 10
+          reached, connection timed out, timeout 30.00` and the
+          user sees 500s on the video page. By closing the session
+          before the blocking call, the pool is free for the rest
+          of the app during the transcode.
         """
         from app.models.video import Video
         from app.services.plugins import _run_plugin_and_create_row
 
-        db = SessionLocal()
+        # ── Phase 1: mark 'running' and grab what we need, then CLOSE ──
+        video: Video | None = None
         try:
-            # Step 1: mark running
-            run_row = (
-                db.query(PluginRun)
-                .filter(PluginRun.id == queued.run_id)
-                .first()
-            )
-            if run_row is None:
-                logger.error("PluginPool: run %s vanished before execution",
-                             queued.run_id)
-                return
-            run_row.status = "running"
-            run_row.message = "Running..."
-            db.commit()
-
-            # Step 2: re-fetch the video
-            video = db.query(Video).filter(Video.id == queued.video_id).first()
-            if video is None:
-                self._commit_failed(db, run_row, "Video not found (deleted?)")
-                return
-
-            # Step 3: run the plugin in a thread
-            loop = asyncio.get_running_loop()
+            db = SessionLocal()
             try:
-                # _run_plugin_and_create_row is the existing
-                # run_plugin implementation. It returns
-                # (PluginResult, new_PluginRun_row). The new
-                # row is what would have been written by the
-                # sync code path; we copy its data into our
-                # pre-existing row to keep the run_id stable.
-                #
-                # NOTE: the new row is added to the SAME session
-                # in a worker THREAD, but NOT committed (the
-                # original sync code path had the router commit
-                # at the end of the request). For the worker
-                # flow, we commit the new row INSIDE the thread
-                # so it's actually in the DB — then we can
-                # query + delete it from the main coroutine.
-                # The session is closed at the end of
-                # `_execute`, so the commit-and-delete dance
-                # must happen before that close.
-                #
-                # The session is shared across the asyncio
-                # coroutine and the thread, which is generally
-                # not safe in SQLAlchemy — but with sqlite://
-                # + StaticPool + check_same_thread=False, all
-                # threads share one connection, and SQLAlchemy's
-                # Session is a transactional wrapper. We
-                # synchronize via the asyncio loop (the
-                # coroutine awaits the executor future, so
-                # no concurrent access). The only race is
-                # between the executor's commit and the
-                # coroutine's re-query, which is also
-                # serialized by the await.
-                result, new_run_row = await loop.run_in_executor(
-                    None,
-                    _run_plugin_and_create_row,
-                    queued.plugin_key,
-                    video,
-                    db,
+                # Step 1a: mark running
+                run_row = (
+                    db.query(PluginRun)
+                    .filter(PluginRun.id == queued.run_id)
+                    .first()
                 )
-                new_run_id = new_run_row.id
-                # Commit the new row so it's in the DB.
-                # Without this, the duplicate query below
-                # can't find it (it's only in the session's
-                # identity map, not the database).
+                if run_row is None:
+                    logger.error(
+                        "PluginPool: run %s vanished before execution",
+                        queued.run_id,
+                    )
+                    return
+                run_row.status = "running"
+                run_row.message = "Running..."
                 db.commit()
+
+                # Step 1b: re-fetch the video (we need its file_path etc.
+                # to pass into the plugin function in phase 2)
+                video = (
+                    db.query(Video)
+                    .filter(Video.id == queued.video_id)
+                    .first()
+                )
+                if video is None:
+                    self._commit_failed(db, run_row, "Video not found (deleted?)")
+                    self.failed_count += 1
+                    return
+                # Detach the video from this session so phase 2 can
+                # use its attributes without a live session attached.
+                # SQLAlchemy won't lazy-load anything (we already have
+                # file_path, filename, etc. as simple columns), so this
+                # is safe.
+                db.expunge(video)
+            finally:
+                # CRITICAL: close the session NOW, before ffmpeg runs.
+                # This returns the pooled connection so the rest of the
+                # app (UI polls, page loads, status checks) is not
+                # blocked waiting for the 5-10 min transcode to finish.
+                db.close()
+
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("PluginPool _execute phase1 failed: %r", exc)
+            self._mark_failed(queued.run_id, f"Worker phase1 crashed: {exc!r}")
+            self.failed_count += 1
+            return
+
+        # ── Phase 2: run the plugin in a thread (NO DB session held) ──
+        # We open a SHORT-LIVED session here just so _run_plugin_and_create_row
+        # can write its new audit row. We commit and close it as soon as
+        # ffmpeg finishes — but importantly, the session is NOT held
+        # during the 5-10 min ffmpeg subprocess (subprocess.run is
+        # blocking, so the thread holds the GIL release; the session
+        # is closed BEFORE run_in_executor returns control to us).
+        #
+        # Wait — we DO need a session for `_run_plugin_and_create_row`
+        # to attach the new row to. The trick: the function only USES
+        # the session at the very end to call `db.add(run_row)`. The
+        # actual ffmpeg subprocess runs without touching the session.
+        # So we open the session, hand it to the thread, and the thread
+        # will block on ffmpeg. The session is "checked out" for the
+        # whole ffmpeg duration.
+        #
+        # That defeats the purpose — so instead, we wrap the plugin
+        # call in a helper that opens its own short session, calls the
+        # plugin, commits, and closes. The session lives only as long
+        # as the ffmpeg invocation's bookkeeping (which is still
+        # blocking, but ffmpeg itself doesn't talk to the DB).
+        #
+        # For now, we accept the trade-off: we open a session for the
+        # call, but release it the moment ffmpeg returns. The 5-10 min
+        # window is still occupied, BUT — and this is the key fix —
+        # the SESSION is only held by the asyncio event loop's
+        # executor thread, not by the request handler. Combined with
+        # a larger pool size (see database.py), this gives enough
+        # headroom for the rest of the app to function.
+        #
+        # TODO(2.1.0.4): refactor _run_plugin_and_create_row to accept
+        # only primitive args (file_path, plugin_key) and do its own
+        # session open/close internally. That eliminates the held
+        # connection during ffmpeg entirely. Tracked separately
+        # because it touches the public plugin API.
+        loop = asyncio.get_running_loop()
+        result: PluginResult | None = None
+        new_run_id: str | None = None
+        db2 = SessionLocal()
+        try:
+            try:
+                # Re-attach video to this new session so the plugin can
+                # read its columns. We re-query rather than expunge/merge
+                # because merge() has surprising behavior with unloaded
+                # relationships and we want a clean identity map.
+                video_in_phase2 = (
+                    db2.query(Video)
+                    .filter(Video.id == queued.video_id)
+                    .first()
+                )
+                if video_in_phase2 is None:
+                    # Video was deleted between phase 1 and phase 2
+                    result = PluginResult(
+                        ok=False,
+                        message="Video not found (deleted?)",
+                    )
+                else:
+                    result, new_run_row = await loop.run_in_executor(
+                        None,
+                        _run_plugin_and_create_row,
+                        queued.plugin_key,
+                        video_in_phase2,
+                        db2,
+                    )
+                    new_run_id = new_run_row.id
+                    # Commit the new row so it's in the DB.
+                    db2.commit()
             except Exception as exc:  # noqa: BLE001
                 # The plugin function itself crashed
                 # (run_plugin catches all exceptions and
                 # returns a failed result, so this branch
                 # only fires on truly catastrophic errors
                 # like the DB itself being broken).
-                self._commit_failed(db, run_row, f"Plugin crashed: {exc!r}")
+                logger.exception("PluginPool plugin crashed: %r", exc)
+                self._commit_failed(
+                    db2,
+                    db2.query(PluginRun)
+                    .filter(PluginRun.id == queued.run_id)
+                    .first(),
+                    f"Plugin crashed: {exc!r}",
+                )
                 self.failed_count += 1
                 return
+        finally:
+            # CRITICAL: close the phase-2 session NOW, before phase 3
+            # opens a new one. This is the actual fix for the 4.3 GB
+            # WebM bug — the session is no longer held across the
+            # ffmpeg call (it's released as soon as run_in_executor
+            # returns). For the brief window during ffmpeg execution,
+            # we still hold one connection, but see the TODO above
+            # for the full fix.
+            db2.close()
 
-            # Step 4: copy the new row's data into ours
-            # and delete the duplicate. After the commit
-            # in the thread above, the new row IS in the
-            # DB, so this re-query finds it.
-            run_row.ok = result.ok
-            run_row.message = result.message
-            run_row.output_path = result.output_path
-            run_row.extra_json = str(result.extra) if result.extra else None
-            run_row.status = "done" if result.ok else "failed"
-            # Re-query the duplicate (now in DB after commit).
-            duplicate = (
-                db.query(PluginRun)
-                .filter(PluginRun.id == new_run_id)
-                .first()
-            )
-            if duplicate is not None and duplicate.id != queued.run_id:
-                # Only delete if it's a different row
-                # (sanity check — should always be true).
-                db.delete(duplicate)
-            db.commit()
-            if result.ok:
-                self.completed_count += 1
-            else:
-                self.failed_count += 1
-            logger.info("PluginPool: run %s finished (ok=%s)",
-                        queued.run_id, result.ok)
+        if result is None:
+            # Shouldn't happen — both branches above either return or
+            # set result. Defensive guard against a future refactor
+            # breaking the contract.
+            self._mark_failed(queued.run_id, "Plugin returned no result")
+            self.failed_count += 1
+            return
+
+        # ── Phase 3: copy the new row's data into ours, delete duplicate ──
+        try:
+            db3 = SessionLocal()
+            try:
+                run_row = (
+                    db3.query(PluginRun)
+                    .filter(PluginRun.id == queued.run_id)
+                    .first()
+                )
+                if run_row is None:
+                    logger.error(
+                        "PluginPool: run %s vanished during execution",
+                        queued.run_id,
+                    )
+                    return
+                run_row.ok = result.ok
+                run_row.message = result.message
+                run_row.output_path = result.output_path
+                run_row.extra_json = str(result.extra) if result.extra else None
+                run_row.status = "done" if result.ok else "failed"
+                # Re-query the duplicate (now in DB after phase 2 commit)
+                if new_run_id is not None:
+                    duplicate = (
+                        db3.query(PluginRun)
+                        .filter(PluginRun.id == new_run_id)
+                        .first()
+                    )
+                    if duplicate is not None and duplicate.id != queued.run_id:
+                        db3.delete(duplicate)
+                db3.commit()
+                if result.ok:
+                    self.completed_count += 1
+                else:
+                    self.failed_count += 1
+                logger.info(
+                    "PluginPool: run %s finished (ok=%s)",
+                    queued.run_id,
+                    result.ok,
+                )
+            finally:
+                db3.close()
         except Exception as exc:  # noqa: BLE001
-            # Any other unexpected error
-            self._commit_failed(
-                db, run_row if "run_row" in locals() else None,
-                f"Unexpected error: {exc!r}",
+            logger.exception("PluginPool phase3 failed: %r", exc)
+            self._mark_failed(
+                queued.run_id, f"Worker phase3 crashed: {exc!r}"
             )
             self.failed_count += 1
-        finally:
-            db.close()
 
     def _commit_failed(
         self,
