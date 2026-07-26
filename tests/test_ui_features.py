@@ -1136,20 +1136,30 @@ def test_video_page_video_system_prompt_documents_citation_format(client: TestCl
     assert "honestly" in VIDEO_CHAT_SYSTEM_PROMPT.lower()
 
 
-def test_video_page_switchTab_hides_all_five_panels(client: TestClient):
-    """REGRESSION (MVP2.0.2 hotfix, see doc/MVP2.0-Status.md §17):
-    switchTab() must hide ALL FIVE tab panels (summary, flashcards,
-    quiz, mindmap, discuss) before showing the selected one. The
-    original bug: the forEach iterated over only the first four
-    panels, so clicking any tab while Discuss was open left the
-    Discuss panel visible underneath the new tab's content. Users
-    saw two panels at once — classic single-select tab violation.
+def test_video_page_switchTab_hides_all_six_panels(client: TestClient):
+    """REGRESSION (MVP2.0.2 hotfix, see doc/MVP2.0-Status.md §17,
+    then re-fixed in MVP2.1.0.3 for the new 'tools' tab):
+    switchTab() must hide ALL SIX tab panels (summary, flashcards,
+    quiz, mindmap, discuss, tools) before showing the selected one.
+
+    History of the bug:
+      - MVP2.0.2: the forEach iterated over only the first four
+        panels, so clicking any tab while Discuss was open left
+        the Discuss panel visible underneath the new tab's content.
+        Users saw two panels at once — classic single-select tab
+        violation.
+      - MVP2.1.0.3: the same regression happened when the new
+        'tools' tab was added in MVP2.1.0 — the forEach was
+        updated to add 'discuss' (5 tabs total) but 'tools' was
+        never added. As a result, opening Tools then switching
+        to e.g. Summary left the Tools panel visible underneath.
 
     This test reads the source of the page and asserts the
-    forEach loop includes 'discuss'. A more thorough test would
-    run the JS in a headless browser, but reading the source is
-    enough to catch the off-by-one mistake that introduced the
-    bug. The fix is to add 'discuss' to the iteration list.
+    forEach loop includes ALL SIX tab keys. A more thorough test
+    would run the JS in a headless browser, but reading the
+    source is enough to catch the off-by-one mistake that
+    introduced the bug. The fix is to add the missing tab to
+    the iteration list.
     """
     import io
     with _mock_auth():
@@ -1184,8 +1194,9 @@ def test_video_page_switchTab_hides_all_five_panels(client: TestClient):
     )
     assert m, "switchTab function not found in video.html"
     body = m.group(1)
-    # The forEach must iterate over all five tabs, including 'discuss'.
-    # Match the array literal in the forEach call.
+    # The forEach must iterate over all six tabs, including
+    # 'discuss' AND 'tools'. Match the array literal in the
+    # forEach call.
     for_each = re.search(
         r"\[\s*['\"]([a-z]+)['\"]([^]]*)\]\s*\.forEach",
         body,
@@ -1194,9 +1205,16 @@ def test_video_page_switchTab_hides_all_five_panels(client: TestClient):
     items_str = for_each.group(0)
     # Collect every 'tab' or "tab" string in the forEach literal
     items = re.findall(r"['\"]([a-z]+)['\"]", for_each.group(1) + for_each.group(0))
-    expected = {"summary", "flashcards", "quiz", "mindmap", "discuss"}
+    # MVP2.1.0.3: include 'tools' in the required set. The MVP2.0.2
+    # hotfix only required 'discuss'; when 'tools' was added in
+    # MVP2.1.0 the forEach was updated to 5 tabs but 'tools' was
+    # missed, causing the same multi-panel bug to reappear. This
+    # test now requires all six to prevent a future regression.
+    expected = {"summary", "flashcards", "quiz", "mindmap", "discuss", "tools"}
     assert expected.issubset(set(items)), (
         f"switchTab's forEach is missing one or more tabs. "
         f"Found: {sorted(set(items))}, expected subset: {sorted(expected)}. "
-        "Adding 'discuss' fixes the multi-panel rendering bug."
+        "Adding the missing tab to the iteration list fixes the "
+        "multi-panel rendering bug. See MVP2.0.2 and MVP2.1.0.3 "
+        "release notes for prior occurrences."
     )

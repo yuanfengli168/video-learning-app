@@ -1006,7 +1006,18 @@ async def get_video_file(
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user),
 ) -> FileResponse:
-    """Serve the video file for playback."""
+    """Serve the video file for playback.
+
+    MVP2.1.0.2 — the media type is now derived from the
+    file extension instead of hardcoded to "video/mp4".
+    The hardcoded value was wrong for .webm / .avi /
+    .mov / .mkv / .m4v files (the browser still plays
+    them, but the wrong Content-Type breaks some
+    third-party tools that rely on the MIME type to
+    decide how to handle the response — e.g. download
+    managers, video editors, and `<video>` elements
+    that sniff the type).
+    """
     video = db.get(Video, video_id)
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -1021,4 +1032,20 @@ async def get_video_file(
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found on disk")
 
-    return FileResponse(str(file_path), media_type="video/mp4")
+    # Map file extension → MIME type. The list mirrors the
+    # ALLOWED_EXTENSIONS set at the top of this file, so every
+    # upload-eligible format has a Content-Type. Falls back to
+    # `application/octet-stream` for unknown extensions (the
+    # browser will offer to download rather than play).
+    MEDIA_TYPES: dict[str, str] = {
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".avi": "video/x-msvideo",
+        ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska",
+        ".m4v": "video/x-m4v",
+    }
+    ext = file_path.suffix.lower()
+    media_type = MEDIA_TYPES.get(ext, "application/octet-stream")
+
+    return FileResponse(str(file_path), media_type=media_type)

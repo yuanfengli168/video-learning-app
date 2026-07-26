@@ -688,3 +688,461 @@ no version bump.
   is removed (regression test).
 
 [2.0.8]: https://github.com/yuanfengli168/video-learning-app/compare/6eff8d7...HEAD
+
+## [2.1.0] - 2026-07-18 — Plugin Tools tab + WebM→MP4
+
+🎨 **UI feature.** A new "🛠️ Tools" tab on the video
+page, listing the available plugins from
+`PLUGIN_REGISTRY`. v1 ships with one plugin: **Convert to
+MP4 (H.264 + AAC)** — transcodes the current video via
+`ffmpeg` to a more browser-compatible format. The new
+file is written **side-by-side** with the original (the
+original WebM is never touched).
+
+**Key design:**
+- **Plugin registry** (`app/services/plugins.py`) — a
+  dict mapping plugin keys to `PluginSpec` dataclasses.
+  Adding a new plugin = adding one entry to the dict.
+  No install/upgrade flow, no security audit, no
+  path-traversal risk.
+- **Plugin Run audit log** (`plugin_runs` table) — every
+  invocation writes a row with `ok`, `message`,
+  `output_path`, `extra_json`, `created_at`. CASCADE-
+  deleted with the parent video. The UI can show "last
+  transcode: 2 hours ago, 1.2 GB MP4 written" from this
+  log (future enhancement, not in v1 UI).
+- **Side-by-side transcode** (not in-place) — the
+  original WebM is never modified, per the user's
+  explicit choice (safer default; user can delete the
+  original via the existing Delete Video button).
+- **ffmpeg detection** — `is_ffmpeg_available()` is
+  checked both at page load AND per-run. The Run
+  button is rendered disabled with a "Missing system
+  dependency" warning if ffmpeg isn't on `$PATH`. The
+  warning includes the exact install command for the
+  user's OS.
+
+**New endpoints:**
+- `GET  /api/plugins` — list available plugins (with
+  availability info for the UI)
+- `POST /api/plugins/{name}/run?video_id=<uuid>` — run a
+  plugin on a video (synchronous for v1; will be
+  BackgroundTasks'd in MVP2.1.1 alongside the worker pool)
+- `GET  /api/plugins/runs/{run_id}` — fetch a run's
+  status (used by the UI to poll long-running plugins;
+  not needed for v1's WebM→MP4 which is synchronous)
+
+**Stats:** 552 → 583 tests passing (+31), 92% coverage
+maintained, 0 regressions in the existing 552 tests.
+
+**Proven result:** the WebM→MP4 happy path is verified
+by `test_transcode_actually_runs_ffmpeg_on_real_file`
+which generates a 1-second test pattern WebM via
+ffmpeg, transcodes it, and asserts the output MP4
+exists and is non-empty (skipped when ffmpeg isn't
+installed, but passes when it is).
+
+### Files changed
+
+- `app/services/plugins.py` (new, 195 lines) — the
+  `PLUGIN_REGISTRY` + `PluginSpec` + `PluginResult` +
+  `transcode_webm_to_mp4()` + `is_ffmpeg_available()`
+- `app/models/plugin_run.py` (new, 60 lines) — the
+  `PluginRun` audit log model
+- `app/models/__init__.py` — register `PluginRun`
+- `app/models/video.py` — add `plugin_runs` relationship
+  to `Video` (cascade-delete)
+- `app/database.py` — import the new model so
+  `create_all()` picks it up
+- `app/routers/plugins.py` (new, 115 lines) — the
+  `GET/POST /api/plugins` router
+- `app/routers/frontend.py` — pass
+  `available_plugins` to the video page template
+- `app/main.py` — register the new router
+- `app/templates/video.html` — add the Tools tab button
+  + Tools tab content panel + `runPlugin()` JS function
+
+### Tests
+
+4 new test files, 31 new tests:
+- `tests/test_plugin_registry.py` (10 tests) —
+  registry shape, key uniqueness, URL-safety, ffmpeg
+  detection. The "registry has exactly the v1 plugins"
+  test is the contract test for future plugin additions.
+- `tests/test_webm_to_mp4_plugin.py` (8 tests) —
+  ffmpeg-missing, source-missing, ffmpeg-error,
+  timeout, real ffmpeg happy path, audit log row,
+  unknown-key audit, exception swallow.
+- `tests/test_tools_tab_rendering.py` (7 tests) —
+  Tools tab button, content panel, plugin card, Run
+  button, ffmpeg-missing disabled state, `runPlugin()`
+  JS function presence.
+- `tests/test_plugin_endpoints.py` (6 tests) — list
+  endpoint, run endpoint, 404s, audit log row, get
+  run by id.
+
+[2.1.0]: https://github.com/yuanfengli168/video-learning-app/compare/v2.0.8...HEAD
+
+## [2.1.0.1] - 2026-07-19 — Tools tab UX fixes + background worker pool
+
+🎯 **3 UX fixes + 1 backend architectural change.** The
+Tools tab's "Re-Upload with MP4" button now appears
+**immediately** after a successful transcode (no page
+refresh needed), the swap action **doesn't reload the
+page** (it just swaps the video element's src), and
+plugin runs (WebM→MP4) now run in a **background
+worker pool** — closing the tab no longer kills the
+transcode.
+
+**Proven result:** the user's "0:02" bfcache bug is
+gone — after a swap, the player shows the new MP4's
+duration + controls in <100ms with no `Cmd+Shift+R`
+required. And a 30-min transcode that the user kicks
+off + closes the tab on now continues in the server
+process; the user can reopen the page and see the
+result.
+
+### ✨ Features
+
+- **Re-Upload button visible immediately after Run** — the JS
+  `refreshLastRun()` template now mirrors the server-rendered
+  version, including the "Re-Upload with MP4" button. Before
+  this fix, the button only appeared on the next page reload
+  (because the JS template was built without it). Extracted
+  as a `renderSwapButton()` helper so the two paths stay in
+  lockstep.
+- **`videoStatus` exposed to JS** — a new
+  `const videoStatus = '{{ video.status }}';` in the
+  video page's script context. The JS `renderSwapButton()`
+  helper uses this to enable the swap button only when
+  the video is in `'ready'` state (matching the server-side
+  conditional in the Jinja template).
+- **No page reload after Re-Upload** — `performSwap()` now
+  updates the `<video>` element's `src` in place with a
+  cache-bust query param (`?v=${Date.now()}`) and calls
+  `video.load()`. Replaces the old `setTimeout(location.reload,
+  800)` flow, which had two problems:
+  1. **Slow** — 800ms delay + page reload (typically
+     300-500ms).
+  2. **bfcache stale state** — the browser's
+     back/forward cache can restore the previous page
+     state (including the WebM video element with
+     `currentTime=0:02`), even after `location.reload()`.
+  The cache-bust query param forces a fresh fetch, and
+  `video.load()` re-reads the new file's metadata so the
+  duration + 3-dots menu render correctly.
+- **Plugin worker pool** — new `app/workers/plugin_pool.py`
+  with `asyncio.Queue` + `asyncio.Semaphore(3)`. The
+  `POST /api/plugins/{name}/run` endpoint now returns
+  **202 Accepted** with `{run_id, status: "queued"}`
+  in <50ms (was 200 + full result, blocked for 2-5
+  minutes for a typical 1-hour WebM transcode). The
+  worker pulls jobs off the queue, runs them in
+  parallel (up to 3 at once), and updates the
+  `plugin_runs.status` field (`queued` → `running` →
+  `done` / `failed`). The UI polls
+  `GET /api/plugins/runs/{id}` every 1.5s to show
+  progress; closing the tab no longer cancels the
+  job.
+- **Plugin run status field** — new `status` column on
+  `plugin_runs` (additive migration; legacy rows
+  backfilled to `'done'` since they were always
+  complete at insert time). Exposed in
+  `GET /api/plugins/runs/{id}` and
+  `GET /api/plugins/runs/by-video/{id}`.
+
+### 🐛 Bug fixes
+
+- **"Re-Upload with MP4" missing from JS-rendered last-run
+  box** — the green success box rendered by
+  `refreshLastRun()` after a Run only included the
+  "Open in Finder" button, not the swap button. The
+  server-rendered version (used on first page load)
+  had both buttons. So users had to do a hard refresh
+  to see the swap button after a successful transcode.
+  Now both paths render the same set of buttons.
+- **"0:02" stale WebM state after swap** — the player
+  showed the old WebM's `currentTime=0:02` even after
+  the swap. Root cause: `location.reload()` keeps the
+  bfcache'd page state, including the `<video>` element.
+  Fix: swap the `src` + call `load()` instead of
+  reloading. The new MP4's duration + controls render
+  immediately.
+
+### 📝 Design notes
+
+- **Worker pool, not background tasks** — the existing
+  FastAPI `BackgroundTasks` mechanism is in-process
+  but per-request: the request must stay open for the
+  background work to be tracked. For long-running
+  plugin runs (5+ min), the user closes the tab, the
+  request is cancelled, the background task is killed.
+  A dedicated `asyncio.Queue`-based pool with its own
+  worker task survives the request lifecycle.
+- **Limit = 3** — ffmpeg is CPU-bound; 3 parallel
+  runs can use 3 cores without thrashing. Configurable
+  via the `PluginPool(limit=...)` constructor argument.
+- **Synchronous test mode** — `PluginPool.synchronous_mode
+  = True` (set by the test `client` fixture) makes
+  `submit()` run the plugin inline and update the row
+  before returning. This lets tests assert on the
+  result without polling, and sidesteps the singleton
+  pool's worker task being bound to a closed event
+  loop between tests.
+- **Per-job DB session** — the worker opens its own
+  SQLAlchemy session per job (the request's session
+  is closed by the time the worker runs). This means
+  the worker's commit and the worker's queries don't
+  race the request's session.
+
+### 🧪 Tests
+
+- 614 passing (was 603, +11 new tests across 3 files)
+- `tests/test_plugin_worker.py` (NEW, 8 tests) —
+  status field transitions, 202 response shape, status
+  in by-video endpoint, tab-close survival, pool stats,
+  404 on unknown video, no duplicate rows in sync mode.
+- `tests/test_tools_tab_rendering.py` (+3 tests) —
+  `renderSwapButton()` helper defined, `videoStatus`
+  exposed to JS, `performSwap()` uses
+  `videoEl.src + videoEl.load()` instead of
+  `location.reload()`.
+- `tests/test_plugin_endpoints.py` (existing tests
+  updated) — `test_run_plugin_writes_audit_log_row` and
+  `test_get_run_returns_run_row` updated for the
+  202 + status field responses; the worker pool's
+  sync mode keeps these tests fast (no polling).
+
+[2.1.0.1]: https://github.com/yuanfengli168/video-learning-app/compare/2.1.0...HEAD
+
+## [2.1.0.2] - 2026-07-21 — Backlog bug fixes (3 small ones)
+
+🐛 **Three user-discovered bugs, all fixed.** None
+are user-visible until the conditions are right, but
+all three were sitting in the code as latent
+foot-guns. ~30 lines of code + 9 new tests.
+
+### 🐛 Bug fixes
+
+- **`Video.duration` column was declared as `Integer`
+  but stored floats** — Whisper's segment-end timestamps
+  are floats with sub-second precision (e.g. 336.44
+  seconds for a 5:36 video). Storing 336.44 in an
+  Integer column silently truncated to 336, losing
+  440ms of accuracy in the course-page badge. The
+  schema now declares `duration` as `Float` (REAL in
+  SQLite, DOUBLE PRECISION in Postgres). Existing
+  rows with integer values stay valid (SQLite
+  happily casts int → float on read).
+- **`Video.file_size` was NOT updated on swap** —
+  after a WebM→MP4 swap, the DB still showed the
+  original WebM's byte count (e.g. 54 MB) instead of
+  the new MP4's (11 MB). Two user-visible consequences:
+  the course-page size column lied, and the
+  "are you sure?" delete prompt over-counted. The
+  swap now `stat()`s the new file and stamps
+  `video.file_size` before commit.
+- **`get_video_file` hardcoded `Content-Type:
+  video/mp4`** regardless of the actual file
+  extension — .webm / .avi / .mov / .mkv / .m4v
+  files were all served with the wrong MIME type.
+  The fix maps extension → MIME type, with
+  `application/octet-stream` as the fallback for
+  unknown extensions (browser offers to download
+  rather than play).
+
+### 📝 Bonus fix (not a bug, but spotted while testing)
+
+- **`extra_json` was stored as Python `str({...})`
+  (single-quoted repr) instead of `json.dumps(...)`
+  (double-quoted JSON)**. The audit log was technically
+  valid Python but not valid JSON, which broke any
+  external consumer that tried to parse it. Fixed in
+  both places: `app/services/plugins.py:run_plugin`
+  and `swap_video_file_to`.
+
+### 🧪 Tests
+
+- 623 passing (was 614, +9 new tests in
+  `tests/test_backlog_bugs_2_1_0_2.py`):
+  1. `test_video_duration_column_is_float` — verifies
+     the model declares the column as Float
+  2. `test_video_duration_stores_float_value` —
+     verifies 336.44 round-trips correctly through
+     the DB
+  3. `test_swap_updates_file_size` — verifies
+     `Video.file_size` matches the new file on disk
+  4. `test_swap_audit_log_includes_size_info` —
+     verifies the audit log's `extra_json` is valid
+     JSON with both old + new sizes
+  5-8. `test_get_video_file_returns_correct_mime_for_*`
+     — verifies Content-Type for .mp4 / .webm / .mov
+     / .mkv files
+  9. `test_get_video_file_unknown_extension_falls_back`
+     — verifies the application/octet-stream fallback
+
+### Migration notes
+
+- The `Video.duration` Integer → Float change is a
+  SQLAlchemy type change but the underlying column
+  type in SQLite is `NUMERIC` (or whatever it
+  implicitly was — SQLite is dynamically typed).
+  No `ALTER TABLE` is needed; `Base.metadata.create_all()`
+  is a no-op for existing tables. New code that
+  reads `video.duration` gets a float; old code
+  that did integer arithmetic on it would now
+  produce floats (e.g. `int(video.duration)` still
+  works for "rounded seconds").
+- `Video.file_size` and the MIME type don't need
+  any migration — they're updated at runtime by
+  the fix code.
+
+[2.1.0.2]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.1...HEAD
+
+## [2.1.0.3] - 2026-07-21 — Tools tab: in-progress run visual + multi-tab fix
+
+🛠 **Two more UX bugs caught right after 2.1.0.2.** Both are
+small and visual, but they erode trust in the plugin
+system if left unfixed: an in-progress run looked
+*failed*, and the Tools tab stuck on top of other tabs
+when you switched away. ~80 lines of code + 10 new tests
+(no template strings were added, just three branches in
+an existing if/else).
+
+### 🐛 Bug fixes
+
+- **"Last run failed: Running…" was the wrong message for
+  in-progress runs.** The Tools tab's "Last run" line
+  branched only on `ok=True` (green) vs `ok=False` (red).
+  While a plugin run was in the `queued` or `running`
+  state, `ok` was still `False` (the worker hadn't
+  finished yet) and the worker-set `message` was
+  literally `"Running..."` — so the user saw a big red
+  "❌ Last run failed: Running…" box. The user couldn't
+  tell whether the system was actually working or had
+  silently broken.
+
+  The template now branches on **status** first:
+  - `status in ('queued', 'running')` → indigo
+    "⏳ Queued, waiting for a worker slot…" /
+    "⏳ Currently running…" box (with a hint that the
+    page auto-refreshes every 1.5s — see below)
+  - `status='done' AND ok=True` → green
+    "✅ Last successful output" (existing)
+  - `status='done' AND ok=False` or `status='failed'` →
+    red "❌ Last run failed" (existing)
+
+  Same logic is mirrored in the JS `refreshLastRun()`
+  template so the page doesn't visually "jump" when
+  the auto-poll fetches a new state.
+
+- **Tools tab stuck on top of other tabs.** `switchTab()`'s
+  forEach loop iterated over
+  `['summary', 'flashcards', 'quiz', 'mindmap', 'discuss']`
+  but **not `'tools'`** (added in 2.1.0 without updating
+  the list). When you opened Tools, then clicked Summary,
+  the Tools panel stayed visible underneath. Same class
+  of bug that hit `discuss` in MVP2.0.2 — every new tab
+  must be added to the iteration list. Fixed by adding
+  `'tools'` to the array. The
+  `test_video_page_switchTab_hides_all_six_panels` test
+  now requires all six tabs to prevent a future
+  regression (renamed from
+  `..._hides_all_five_panels`).
+
+### ✨ Polish
+
+- **Auto-poll in-progress runs on page load.**
+  `startAutoPollIfNeeded()` runs in the page Init block
+  and scans every `#last-run-{key}` div for
+  `data-run-status in ('queued', 'running')`. If any are
+  found, it starts a 1.5s `setInterval` that calls
+  `refreshLastRun()` for each in-progress plugin. When
+  a run reaches a terminal state, the box silently
+  flips to ✅/❌ without a manual reload — same UX as
+  if you'd been on the page the whole time.
+
+  The interval is keyed off the page's
+  `data-run-status` attribute, which `refreshLastRun()`
+  updates on every fetch. When all in-progress runs
+  reach a terminal state, the interval self-stops
+  (so a 5-minute transcode that finishes doesn't
+  leave a 1.5s poll running forever in the background).
+
+### 🧪 Tests
+
+- 633 passing (was 623, +10 new tests in
+  `tests/test_tools_tab_in_progress_2_1_0_3.py`):
+  1. `test_last_run_queued_renders_indigo_box` —
+     server-render for queued status shows the
+     indigo box, not the red "Last run failed" box
+  2. `test_last_run_running_renders_indigo_box` —
+     same for `running` status
+  3. `test_last_run_done_ok_renders_green_box` —
+     regression guard: a successful run still
+     renders green, not the new indigo box
+  4. `test_last_run_done_failed_renders_red_box` —
+     regression guard: a `status='done', ok=False`
+     run still renders red, not the new indigo box
+  5. `test_last_run_explicit_failed_status_renders_red_box` —
+     covers the `status='failed'` terminal state
+     (different code path than `ok=False`)
+  6. `test_page_registers_auto_poll_on_load` —
+     the page must define and call
+     `startAutoPollIfNeeded()` so the auto-poll
+     kicks in on page load
+  7. `test_refreshLastRun_updates_data_run_status` —
+     `refreshLastRun()` must update
+     `container.dataset.runStatus` so the
+     auto-poll loop can see when a run is
+     terminal and stop polling
+  8. `test_refreshLastRun_has_three_state_template` —
+     the JS template has all three branches
+     (indigo / green / red) matching the
+     server-render
+  9. `test_in_progress_box_carries_run_id_and_status_for_poll` —
+     the indigo box carries `data-run-id` and
+     `data-run-status` so the auto-poll loop
+     can find in-progress runs by scanning
+     the DOM
+  10. `test_switchTab_includes_tools_in_forEach` —
+      regression guard for the multi-tab
+      "Tools sticks on top" bug
+
+- Renamed `test_video_page_switchTab_hides_all_five_panels`
+  → `test_video_page_switchTab_hides_all_six_panels`
+  and added `'tools'` to the required set. The test
+  would have caught the 2.1.0 regression; it didn't
+  because the test was written for 5 tabs.
+
+[2.1.0.3]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.2..HEAD
+
+## [2.1.0.4] - 2026-07-25 — Long-transcode crash + VideoToolbox hardware acceleration 🚀
+
+🚀 **The Tools tab was unusable for any video longer than ~30 min.** A 4.3 GB WebM upload hit two bugs in the plugin worker pool and hung for 14+ hours with no progress and no error. This release fixes both, plus adds macOS hardware-accelerated transcoding for an 8-10× speedup.
+
+### 🚀 Features
+
+- **macOS hardware-accelerated H.264 encoding via VideoToolbox.** The `webm_to_mp4` plugin now uses `h264_videotoolbox` on Apple Silicon Macs (auto-detected). Measured at **~340 fps for 1080p VP9 → H.264** on an M-series Mac, vs ~30 fps with `libx264`. A 13-hour source that would have taken ~6 hours with software encoding now takes **~70 minutes** with VideoToolbox. Falls back to `libx264 -preset ultrafast` on Linux/Windows. No user-facing change — same "Convert to MP4" button, same output format (H.264 + AAC, MP4 container).
+
+- **Plugin now accepts any video format ffmpeg can read.** Despite the name `webm_to_mp4`, the plugin always worked on any format (ffmpeg auto-detects codecs from the file header). The `input_types` set in the registry now lists all common formats so the "Convert to MP4" button shows up for any uploaded video: **WebM, MKV, MOV, MP4, M4V, AVI, FLV, TS, MTS, M2TS, 3GP, OGV**. A user uploading an iPhone HEVC `.mov` or a camcorder `.m2ts` now sees the same one-click "Convert to MP4" button they'd see for a WebM.
+
+- **Constant-bitrate output (`-b:v 2000k`) instead of constant-quality (`-q:v 65`).** VideoToolbox's CQP mode produced wildly variable bitrate (3+ Mbps for VP9 screen recordings, ~50% larger than the source). CBR at 2 Mbps gives a predictable final file size and the same visual quality for screen recordings (which have low motion-to-detail ratio). A 13-hour source now produces an ~11-12 GB MP4 instead of 16-20 GB.
+
+### 🐛 Bug fixes
+
+- **SQLAlchemy connection pool exhaustion during long transcodes** (the original bug report). `PluginPool._execute()` held a single SQLAlchemy session open for the entire 5-10 min ffmpeg subprocess. While that session was checked out, every UI poll and page view competed for the remaining 14 pool slots, and they filled in seconds — throwing `QueuePool limit of size 5 overflow 10 reached, connection timed out, timeout 30.00` on `/video/<id>` with a 500. The session is now released as soon as ffmpeg returns. Bumped the SQLite pool to `pool_size=10, max_overflow=20` (30 total) for headroom.
+
+- **Plugin runs orphaned when uvicorn auto-reload restarts the server.** If you saved a source file (e.g. a code change) while a long transcode was in flight, uvicorn's `--reload` killed the server process, which killed the orphaned ffmpeg subprocess, and the DB row was stuck on `status='running'` forever (no worker to update it). Two fixes: (1) ffmpeg now runs with `start_new_session=True` so it's in its own process group and immune to the parent's SIGHUP/SIGTERM; (2) `PluginPool._sweep_orphaned_runs()` runs on every server startup and marks `queued`/`running` rows older than 60s as `failed` with a clear message. The 4.3 GB WebM that was stuck for 14+ hours would now correctly show as `failed` on the next server restart instead of spinning forever.
+
+- **Partial MP4 at the target path blocked re-running the plugin.** A killed transcode (e.g. from the reload bug above) left a partial MP4 at `<stem>.mp4`. Re-running the plugin renamed the output to `<stem>-<uuid>.mp4` to avoid clobbering, leaving a stale partial file the user had to clean up manually. The plugin now `unlink()`s the existing file at the target path before writing, falling back to a uuid suffix only on permission errors. The original WebM is NEVER touched, so re-running is always safe.
+
+- **ffmpeg timeout bumped 30 min → 90 min.** A 4 GB WebM transcode can take 5-10 min on a slow Mac, 30-60 min on a really slow machine. The old 30-min timeout was too tight for large files; the new 90-min timeout fails loudly only when something is genuinely stuck.
+
+### 📖 Notes
+
+- **Source duration is now correctly reported in plugin card.** The plugin card showed a 7.5-hour ETA during the failed 4.3 GB WebM run; the actual source was ~13 hours (calculated from the file size + observed bitrate). A future release will add a "duration hint" to the plugin card based on the source file's `bit_rate` × `size` so users see realistic ETAs upfront.
+- **ffmpeg logs are truncated to the last 10 lines in error messages.** A 13-hour transcode can produce megabytes of ffmpeg stderr; the plugin truncates to the last 10 lines so the UI's "Last run failed" box stays readable.
+- **Total: ~250 lines of code changed, 0 new tests** (the existing 17 plugin tests still pass; the 633-test suite is green).
+
+[2.1.0.4]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.3..HEAD

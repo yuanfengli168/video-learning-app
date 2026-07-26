@@ -223,6 +223,73 @@ async def video_view(
     ).scalar_one_or_none()
     summary_content = summary_asset.content if summary_asset else None
 
+    # Available plugins for the Tools tab (MVP2.1.0). The
+    # list is a thin dict per plugin (label, description,
+    # available, missing deps) so the template can render
+    # the buttons without needing a back-reference into
+    # the service layer. The full PluginSpec object stays
+    # in the service layer.
+    from app.services.plugins import list_available_plugins
+    import shutil as _shutil
+
+    available_plugins = []
+    for spec in list_available_plugins():
+        missing = sorted(
+            req for req in spec.requires
+            if _shutil.which(req) is None
+        )
+        available_plugins.append(
+            {
+                "key": spec.key,
+                "label": spec.label,
+                "description": spec.description,
+                "available": len(missing) == 0,
+                "missing": missing,
+            }
+        )
+
+    # Most recent plugin run per plugin_key, for the
+    # "Last run" line under each Run button (MVP2.1.0.1).
+    # We query once and group in Python — much cheaper
+    # than N queries (one per plugin). The result is a
+    # dict like {"webm_to_mp4": {id, ok, message,
+    # output_path, ...}, ...} so the template can look
+    # up by plugin.key. The "last_run" can be None
+    # (first-time user, no runs yet).
+    from app.models.plugin_run import PluginRun
+    last_runs_by_plugin: dict[str, dict] = {}
+    for run in (
+        db.query(PluginRun)
+        .filter(PluginRun.video_id == video.id)
+        .order_by(PluginRun.created_at.desc())
+        .all()
+    ):
+        # .all() returns rows in desc order, so the
+        # first one we see per plugin_key is the most
+        # recent. Skip if we've already recorded one
+        # for this plugin (dedup).
+        if run.plugin_key in last_runs_by_plugin:
+            continue
+        last_runs_by_plugin[run.plugin_key] = {
+            "id": run.id,
+            "ok": run.ok,
+            # MVP2.1.0.3 — include the new `status` field
+            # (queued / running / done / failed) so the
+            # template can distinguish in-progress runs
+            # from terminal-failed runs. Without this,
+            # a run in 'running' state would render as
+            # "Last run failed: Running..." (because
+            # ok=False + the worker-set message "Running..."
+            # would be the displayed text) — confusing
+            # for the user. The template now branches
+            # on status first, then on ok.
+            "status": run.status,
+            "message": run.message,
+            "output_path": run.output_path,
+            "extra": run.extra_json,
+            "created_at": run.created_at.isoformat(),
+        }
+
     return templates.TemplateResponse(
         request,
         "video.html",
@@ -234,6 +301,8 @@ async def video_view(
             course=course,
             section=section,
             summary_content=summary_content,
+            available_plugins=available_plugins,
+            plugin_last_runs=last_runs_by_plugin,
         ),
     )
 

@@ -14,9 +14,41 @@ connect_args = (
     else {}
 )
 
-engine = create_engine(
-    settings.database_url, connect_args=connect_args, echo=settings.debug
-)
+# Pool sizing (MVP2.1.0.1+ hotfix for the 2026-07-24 4.3 GB WebM bug).
+#
+# The default SQLAlchemy QueuePool is size=5, overflow=10
+# (15 connections total). That was fine for the original
+# MVP1 design where the worker held a connection for the
+# full 5-10 min ffmpeg transcode — but with concurrent UI
+# polling, every poll and page view competes for one of
+# the remaining 14 slots, and the pool exhausts in seconds,
+# throwing QueuePoolTimeoutError on /video/<id>.
+#
+# Bumping to size=10, overflow=20 (30 total) gives enough
+# headroom for:
+#   - 3 concurrent plugin workers (the PluginPool limit)
+#   - ~10 in-flight FastAPI requests (UI polls, page loads)
+#   - a few bursts from background jobs
+# plus headroom for transcribe workers etc. SQLite is
+# single-writer anyway, so the practical limit is GIL/
+# disk contention, not pool exhaustion.
+#
+# These kwargs only apply to QueuePool (file-backed SQLite
+# and non-SQLite backends). The :memory: SQLite used by
+# tests gets a SingletonThreadPool that doesn't accept
+# these args — we skip them in that case to keep the test
+# suite happy.
+engine_kwargs: dict = dict(connect_args=connect_args, echo=settings.debug)
+if not (
+    settings.database_url.startswith("sqlite")
+    and ":memory:" in settings.database_url
+):
+    engine_kwargs.update(
+        pool_size=10,
+        max_overflow=20,
+        pool_timeout=30,
+    )
+engine = create_engine(settings.database_url, **engine_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -44,7 +76,14 @@ def init_db() -> None:
     without help. `_apply_migrations` issues idempotent `ALTER TABLE ... ADD
     COLUMN` for any column listed in `_MIGRATIONS` that doesn't already exist.
     """
-    from app.models import asset, chat, course, section, video  # noqa: F401
+    from app.models import (  # noqa: F401
+        asset,
+        chat,
+        course,
+        plugin_run,
+        section,
+        video,
+    )
 
     Base.metadata.create_all(bind=engine)
     _apply_migrations()
@@ -138,6 +177,21 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "videos",
         "transcribe_started_at",
         "ALTER TABLE videos ADD COLUMN transcribe_started_at DATETIME",
+    ),
+    # MVP2.1.0.1 — plugin_runs.status. The PluginPool worker
+    # (app/workers/plugin_pool.py) writes this as
+    #   queued  → created by submit() before the job is picked up
+    #   running → the worker starts the plugin function
+    #   done    → plugin returned ok=True
+    #   failed  → plugin returned ok=False OR the worker crashed
+    # so the UI can poll and show progress without holding the
+    # HTTP request open. Default 'done' backfills legacy rows
+    # (which were created by the synchronous-in-request code
+    # path) as already-finished runs.
+    (
+        "plugin_runs",
+        "status",
+        "ALTER TABLE plugin_runs ADD COLUMN status VARCHAR(20) DEFAULT 'done'",
     ),
 ]
 
