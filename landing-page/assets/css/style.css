@@ -2077,3 +2077,56 @@ section { padding: 6rem 0; }
 .other-support__list a { color: var(--brand-1); font-weight: 500; }
 
 /* ---------- Nav: hide some items on mobile to avoid overflow ---------- */
+
+/* =============================================================
+   v2.1.0.4b SUPPLEMENTS — Tier card badge variants, pay notes
+   ============================================================= */
+
+/* "Limited" variant of the Most-popular badge — softer color,
+   for the Talk tier that has a monthly cap. */
+.tier-card__badge--soft {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+[data-theme="dark"] .tier-card__badge--soft {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+/* "About the QR codes" privacy note (donate.html) */
+.pay__privacy-note,
+.pay__deploy-note {
+  max-width: 800px;
+  margin: 1.5rem auto 0;
+  padding: 1rem 1.25rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--brand-1);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.pay__deploy-note {
+  border-left-color: var(--success);
+  background: rgba(16, 185, 129, 0.04);
+  margin-top: 0.75rem;
+}
+.pay__privacy-note strong,
+.pay__deploy-note strong {
+  color: var(--text);
+}
+.pay__privacy-note a,
+.pay__deploy-note a {
+  color: var(--brand-1);
+}
+.pay__deploy-note code {
+  background: var(--bg);
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+  border: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+}

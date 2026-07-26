@@ -28,7 +28,8 @@ landing-page/
 ├── _config.yml             # Jekyll config (GitHub Pages theme override)
 ├── CNAME                   # (optional) custom domain
 ├── scripts/
-│   └── build_supporters.py # XLSX/CSV → supporters.json converter
+│   ├── build_supporters.py       # XLSX/CSV → supporters.json converter
+│   └── copy_personal_assets.sh   # Copy gitignored .local QRs over placeholders
 ├── assets/
 │   ├── css/style.css       # All styles
 │   ├── js/
@@ -97,10 +98,10 @@ Before going live, replace these placeholders in the HTML files:
 | Placeholder | Where | What to do |
 |---|---|---|
 | `YOUR_VIDEO_ID` | `index.html` (Demo section) | Upload demo to YouTube (unlisted OK), paste the video ID |
-| `YOUR_FORMSPREE_ID` | `contact.html` (form action) | Sign up at [formspree.io](https://formspree.io), get a form ID |
+| _(optional)_ `YOUR_FORMSPREE_ID` | `contact.html` (form action) | The form currently uses `mailto:` (zero third-party). To switch to Formspree later, sign up at [formspree.io](https://formspree.io), get a form ID, and follow the in-file comment in `assets/js/contact.js`. |
 | `YOUR_PAYPAL_HANDLE` | `donate.html` (PayPal amount buttons) | Get a [PayPal.me](https://paypal.me) link |
-| `TODO_REPLACE_WITH_YOUR_ZELLE_EMAIL_OR_PHONE` | `donate.html` (Zelle section) | Your Zelle ID |
-| 4 placeholder QR codes | `assets/images/donate/{zelle,paynow,wechat,alipay}.png` | Replace with your real QR codes |
+| _(optional)_ Zelle ID | `donate.html` (Zelle section) | The placeholder now shows `jackyopenclaw.168@gmail.com` (your default contact email). If you want Zelle tied to a different email, change it in the `<li>` inside the Zelle `<details>`. |
+| 4 real QR codes | `assets/images/donate/{zelle,paynow,wechat,alipay}.png` | Save your real QRs with `.local.` ANYWHERE in the filename — e.g. `.zelle.png.local.PNG`, `.wechat.png.local`, `paynow.local.jpg`. See `landing-page/.gitignore` — the `.local.` substring is what keeps them out of git. Then run `./scripts/copy_personal_assets.sh` to copy them over the placeholders before deploying. |
 | Footer "Made with caffeine" location | All footers | Update if you move cities |
 
 ## Maintainer guide: the Supporters wall

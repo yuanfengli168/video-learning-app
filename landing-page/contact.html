@@ -145,30 +145,39 @@
     </div>
   </section>
 
-  <!-- ============== CONTACT FORM (Formspree) ============== -->
+  <!-- ============== CONTACT FORM (mailto: compose) ============== -->
+  <!--
+    Form behavior: clicking "Open in email app" assembles a mailto:
+    URL with the form fields pre-filled, and opens the user's default
+    email client. No backend, no third-party, no JS dependency for
+    the core flow (the JS only adds a polished preview before
+    launching the mail client; the noscript fallback below works
+    with a hardcoded subject + body for users with JS disabled).
+
+    To switch to Formspree later: replace the <form action="..."> with
+    action="https://formspree.io/f/YOUR_FORM_ID" and uncomment the
+    Formspree section in assets/js/contact.js.
+  -->
   <section class="contact-form-section">
     <div class="container contact-form-section__inner">
       <div class="contact-form-section__intro">
-        <h2>Or send a quick message</h2>
+        <h2>Or draft a message</h2>
         <p>
-          Powered by <a href="https://formspree.io" target="_blank" rel="noopener">Formspree</a>
-          (free tier, 50 messages/month, no signup required to receive).
-          Your message goes straight to my inbox — I read every one.
+          Fill in the form below and your default email app will open with
+          everything pre-filled — just hit <strong>Send</strong>. No third-party
+          form service, no data leaves your browser until <em>you</em> press send.
         </p>
         <ul class="contact-form-section__notes">
           <li><strong>What it's for:</strong> bug reports, install help, feature ideas, partnerships, "just thanks" messages.</li>
           <li><strong>What it's NOT for:</strong> support contracts (I'm a solo dev; for ongoing support, consider <a href="donate.html">donating</a> instead).</li>
-          <li><strong>Privacy:</strong> Formspree stores the submission to deliver it. I don't share your address with anyone.</li>
+          <li><strong>Privacy:</strong> nothing is sent over the network until you click send in your email app. Your message goes straight to my Gmail inbox.</li>
         </ul>
       </div>
 
-      <!-- TODO: Replace YOUR_FORMSPREE_ID with your Formspree form ID before going live.
-           Get one at https://formspree.io/forms (free, no signup needed for 50/mo). -->
       <form
         class="contact-form"
-        action="https://formspree.io/f/YOUR_FORMSPREE_ID"
-        method="POST"
         data-contact-form
+        data-mailto="jackyopenclaw.168@gmail.com"
       >
         <label class="contact-form__field">
           <span>Your name</span>
@@ -200,17 +209,21 @@
         <!-- Honeypot: bots fill this in, humans don't see it. -->
         <input type="text" name="_gotcha" class="contact-form__honeypot" tabindex="-1" autocomplete="off" aria-hidden="true" />
 
-        <!-- Disable the form if Formspree is not yet configured. -->
+        <!-- JS-disabled fallback: a plain mailto: link users can click. -->
         <noscript>
           <p class="contact-form__warning">
-            Forms require JavaScript for the honeypot to work, but you can
-            still email me directly at
-            <a href="mailto:jackyopenclaw.168@gmail.com">jackyopenclaw.168@gmail.com</a>.
+            JavaScript is off, so the form preview is disabled. Click below to
+            open your email app with a blank message to me, then type your
+            message there.
+            <br><br>
+            <a class="btn btn--primary" href="mailto:jackyopenclaw.168@gmail.com?subject=Video%20Learning%20App%20%E2%80%94%20question">
+              Open email app →
+            </a>
           </p>
         </noscript>
 
         <button type="submit" class="btn btn--primary btn--lg contact-form__submit">
-          Send message
+          ✉️ Open in email app
         </button>
 
         <p class="contact-form__status" data-contact-form-status aria-live="polite"></p>

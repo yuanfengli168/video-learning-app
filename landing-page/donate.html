@@ -10,7 +10,7 @@
   <!-- Open Graph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Donate — Video Learning App" />
-  <meta property="og:description" content="Support an open-source project. PayPal, Zelle, PayNow, WeChat Pay, Alipay. $20+ gets you a 30-min chat." />
+  <meta property="og:description" content="Support an open-source project. PayPal, Zelle, PayNow, WeChat Pay, Alipay. Optional 30-min chat slot — limited to 4 per month." />
   <meta property="og:url" content="https://yuanfengli168.github.io/video-learning-app/donate.html" />
 
   <!-- Favicon -->
@@ -86,7 +86,7 @@
       <p class="page-hero__eyebrow">Support the project</p>
       <h1 class="page-hero__title">Donate</h1>
       <p class="page-hero__subtitle">
-        Video Learning App is <strong>free, open source, and ad-free forever</strong>.
+        Video Learning App is <strong>free, and open source!</strong>.
         If it's saved you time, consider buying me a coffee — it goes
         directly to hosting, hardware, and the occasional 3am debugging
         session.
@@ -117,15 +117,16 @@
           <p class="tier-card__desc">A week of API costs for testing. Thanks!</p>
         </div>
 
-        <div class="tier-card">
+        <div class="tier-card tier-card--featured">
+          <div class="tier-card__badge">Most popular</div>
           <div class="tier-card__emoji" aria-hidden="true">🥈</div>
           <h3 class="tier-card__name">Silver</h3>
           <p class="tier-card__price">$10+</p>
           <p class="tier-card__desc">A month of CI runs. Real momentum.</p>
         </div>
 
-        <div class="tier-card tier-card--featured">
-          <div class="tier-card__badge">Most popular</div>
+        <div class="tier-card">
+          <div class="tier-card__badge tier-card__badge--soft">Limited · 4 / month</div>
           <div class="tier-card__emoji" aria-hidden="true">🎙️</div>
           <h3 class="tier-card__name">Talk (30-min)</h3>
           <p class="tier-card__price">$20+</p>
@@ -145,10 +146,13 @@
       </div>
 
       <p class="tiers__note">
-        <strong>How the Talk tier works:</strong> donate $20+ via any method below,
-        then email me at <a href="mailto:jackyopenclaw.168@gmail.com?subject=Talk%20donation">jackyopenclaw.168@gmail.com</a>
+        <strong>How the Talk tier works:</strong> I cap it at
+        <strong>4 talks per month</strong>, first come first served.
+        Donate $20+ via any method below, then email me at
+        <a href="mailto:jackyopenclaw.168@gmail.com?subject=Talk%20donation">jackyopenclaw.168@gmail.com</a>
         with the receipt (or just the date) and 3 time slots that work for you
-        in the next 2 weeks. I'll reply within 24h with a Google Meet link.
+        in my replied email. I'll reply to the first 4 senders for the months 
+        or let you know if the month is already full.
         No claim within 30 days = the slot is forfeit (be cool).
       </p>
     </div>
@@ -175,13 +179,12 @@
         </div>
 
         <div class="pay-card__amounts">
-          <!-- TODO: Replace YOUR_PAYPAL_HANDLE with your actual PayPal.me handle
-               (e.g. "jackyli168" → https://paypal.me/jackyli168). Get one at paypal.me. -->
-          <a class="amount-btn" href="https://paypal.me/YOUR_PAYPAL_HANDLE/5" target="_blank" rel="noopener">$5</a>
-          <a class="amount-btn" href="https://paypal.me/YOUR_PAYPAL_HANDLE/10" target="_blank" rel="noopener">$10</a>
-          <a class="amount-btn amount-btn--featured" href="https://paypal.me/YOUR_PAYPAL_HANDLE/20" target="_blank" rel="noopener">$20 <span>(Talk)</span></a>
-          <a class="amount-btn" href="https://paypal.me/YOUR_PAYPAL_HANDLE/50" target="_blank" rel="noopener">$50</a>
-          <a class="amount-btn amount-btn--ghost" href="https://paypal.me/YOUR_PAYPAL_HANDLE" target="_blank" rel="noopener">Custom</a>
+          <!-- PayPal.me link: jackyLi168. Friends & family for 0% fees. -->
+          <a class="amount-btn" href="https://paypal.me/jackyLi168/5" target="_blank" rel="noopener">$5</a>
+          <a class="amount-btn" href="https://paypal.me/jackyLi168/10" target="_blank" rel="noopener">$10</a>
+          <a class="amount-btn" href="https://paypal.me/jackyLi168/20" target="_blank" rel="noopener">$20 <span>(Talk · limited)</span></a>
+          <a class="amount-btn" href="https://paypal.me/jackyLi168/50" target="_blank" rel="noopener">$50</a>
+          <a class="amount-btn amount-btn--ghost" href="https://paypal.me/jackyLi168" target="_blank" rel="noopener">Custom</a>
         </div>
 
         <p class="pay-card__note">
@@ -209,7 +212,7 @@
             <ol>
               <li>Open your bank's app (Chase, BoA, Wells Fargo, etc. — most US banks have Zelle built in)</li>
               <li>Tap <strong>Send money with Zelle</strong></li>
-              <li>Scan the QR code, OR enter: <code>TODO_REPLACE_WITH_YOUR_ZELLE_EMAIL_OR_PHONE</code></li>
+              <li>Open your bank's app, tap <strong>Send with Zelle</strong>, and search for <code>jackyopenclaw.168@gmail.com</code> — or just scan the QR code on the left</li>
               <li>Enter the amount and confirm — money arrives in <strong>minutes</strong>, no fees</li>
             </ol>
             <p class="pay-card__warning">
@@ -301,6 +304,23 @@
         </div>
       </details>
 
+      <p class="pay__privacy-note">
+        <strong>About the QR codes:</strong> they're just payment instructions
+        (like a mailing address for money) — no account access, no personal info
+        beyond what your bank app already shows me. If you'd rather not share
+        your phone number publicly, use the QR instead of typing it in.
+        See <a href="donate.html#privacy">Privacy &amp; safety notes</a> below.
+      </p>
+
+      <p class="pay__deploy-note">
+        <strong>Deploying with your real QRs?</strong> The placeholder QR codes
+        in this repo are tracked by git. Drop your real QRs as
+        <code>assets/images/donate/.&lt;name&gt;.png.local</code> (e.g.
+        <code>.zelle.png.local</code>) and they will NOT be committed — see
+        <code>landing-page/.gitignore</code>. Copy them over the placeholders
+        locally before deploying (or write a small build script).
+      </p>
+
     </div>
   </section>
 
@@ -346,6 +366,43 @@
           by default donors show as "Anonymous" unless they opt in. Email me
           with your preferred name + a 1-line comment and I'll add you on the
           next update.
+        </p>
+      </details>
+
+      <details class="faq-item" id="privacy">
+        <summary>Is it safe to post QR codes publicly? Privacy &amp; safety notes</summary>
+        <p>
+          <strong>Short answer: yes, with the caveats below.</strong> A
+          payment QR code is just a payment address — like an email address
+          for money. It doesn't expose your bank login, password, or balance.
+        </p>
+        <p><strong>What I personally do to stay safe:</strong></p>
+        <ul>
+          <li>
+            <strong>Use a dedicated email</strong> for donations
+            (this site's contact address is already dedicated to the project).
+            If you have a personal Zelle tied to your main phone, consider
+            using a Google Voice number or a separate payments-only email.
+          </li>
+          <li>
+            <strong>PayNow is by NRIC/UEN</strong> — slightly more identifiable
+            than an email, but it's the only way PayNow works in SG.
+          </li>
+          <li>
+            <strong>WeChat Pay / Alipay</strong> display your avatar/nickname to
+            me by default. If you'd rather stay anonymous, ask me to set up
+            a "收款码" (collection-only QR) without a profile.
+          </li>
+          <li>
+            <strong>Push payments (Zelle, PayNow) cannot be reversed</strong> —
+            don't send money to anyone you haven't verified. I will never DM
+            you asking for a donation.
+          </li>
+        </ul>
+        <p>
+          If you spot a problem (a scammer impersonating me, a phishing link,
+          a leaked credential) please email
+          <a href="mailto:jackyopenclaw.168@gmail.com?subject=Safety%20report">jackyopenclaw.168@gmail.com</a>.
         </p>
       </details>
     </div>
