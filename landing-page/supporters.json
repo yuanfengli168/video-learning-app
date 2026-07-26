@@ -1,0 +1,17 @@
+{
+  "$schema": "./supporters.schema.json",
+  "$comment": "Public list of supporters. Source of truth: the private supporters.xlsx (or Google Sheet) maintained by the project owner. Regenerate this file with `python3 scripts/build_supporters.py` after editing the spreadsheet.",
+  "generated_at": null,
+  "monthly_caps": {
+    "$comment": "Optional. Per-tier monthly cap displayed on the donate page. Only 'talk' is capped — it limits the owner's 1-on-1 chat slots so they don't get over-committed. Other tiers are uncapped (purely voluntary).",
+    "talk": 4
+  },
+  "tiers": {
+    "coffee": { "label": "Coffee", "emoji": "☕", "min_usd": 1, "color": "#a16207" },
+    "bronze": { "label": "Bronze", "emoji": "🥉", "min_usd": 5, "color": "#92400e" },
+    "silver": { "label": "Silver", "emoji": "🥈", "min_usd": 10, "color": "#71717a" },
+    "gold":   { "label": "Gold",   "emoji": "🥇", "min_usd": 20, "color": "#ca8a04" },
+    "talk":   { "label": "Talk (30-min)", "emoji": "🎙️", "min_usd": 20, "color": "#6366f1", "monthly_cap": 4 }
+  },
+  "supporters": []
+}

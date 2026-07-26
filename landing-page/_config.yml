@@ -1,0 +1,8 @@
+# Jekyll config for GitHub Pages
+# Tells GH Pages to serve the folder as-is (no Jekyll processing).
+# The "lsi" exclude prevents GitHub from building with Jekyll, which
+# would mangle our index.html and assets.
+include: []
+exclude: []
+permalink: /:title/
+markdown: kramdown

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <title>Contact — Video Learning App</title>
+  <meta name="description" content="Get in touch with the Video Learning App team. Bug reports, feature requests, partnership inquiries, or just to say hi." />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Contact — Video Learning App" />
+  <meta property="og:description" content="Get in touch. Bug reports, feature requests, or partnership inquiries." />
+  <meta property="og:url" content="https://yuanfengli168.github.io/video-learning-app/contact.html" />
+
+  <!-- Favicon (inline SVG, no request) -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%23a855f7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='20' fill='url(%23g)'/%3E%3Cpath d='M35 30L35 70 L70 50 Z' fill='white'/%3E%3C/svg%3E" />
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="assets/css/style.css" />
+
+  <!-- Preconnect to font CDN -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" />
+
+  <!-- Apply theme before paint (no FOUC) -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('vla-theme');
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var theme = stored || (prefersDark ? 'dark' : 'light');
+        document.documentElement.dataset.theme = theme;
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+
+  <!-- ============== NAV ============== -->
+  <nav class="nav" aria-label="Primary">
+    <div class="nav__inner container">
+      <a href="index.html" class="nav__brand" aria-label="Home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.9"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.6"/></linearGradient></defs><path d="M6 4l12 8-12 8V4z" fill="url(#bg)"/></svg>
+        </span>
+        <span class="brand-name">Video Learning App</span>
+      </a>
+
+      <div class="nav__links">
+        <a href="index.html#features">Features</a>
+        <a href="index.html#demo">Demo</a>
+        <a href="index.html#screenshots">Screenshots</a>
+        <a href="index.html#install">Install</a>
+        <a href="donate.html">Donate</a>
+        <a href="supporters.html">Supporters</a>
+        <a href="contact.html" aria-current="page">Contact</a>
+        <a href="https://github.com/yuanfengli168/video-learning-app" class="nav__github" target="_blank" rel="noopener" aria-label="GitHub repository">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 0a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.24 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 0z"/></svg>
+          <span>GitHub</span>
+        </a>
+        <button class="theme-toggle" type="button" aria-label="Toggle theme" data-theme-toggle>
+          <svg class="theme-toggle__icon theme-toggle__icon--sun" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="theme-toggle__icon theme-toggle__icon--moon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+
+      <button class="nav__menu" type="button" aria-label="Open menu" data-menu-toggle>
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+
+    <!-- Mobile menu -->
+    <div class="nav__mobile" data-menu>
+      <a href="index.html#features">Features</a>
+      <a href="index.html#demo">Demo</a>
+      <a href="index.html#screenshots">Screenshots</a>
+      <a href="index.html#install">Install</a>
+      <a href="donate.html">Donate</a>
+      <a href="supporters.html">Supporters</a>
+      <a href="contact.html" aria-current="page">Contact</a>
+      <a href="https://github.com/yuanfengli168/video-learning-app" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+
+  <!-- ============== HERO ============== -->
+  <header class="page-hero">
+    <div class="container">
+      <p class="page-hero__eyebrow">Get in touch</p>
+      <h1 class="page-hero__title">Contact</h1>
+      <p class="page-hero__subtitle">
+        Bug reports, feature ideas, partnership inquiries, or just a quick
+        "thanks" — all welcome. Pick the channel that suits you.
+      </p>
+    </div>
+  </header>
+
+  <!-- ============== CONTACT METHODS ============== -->
+  <section class="contact">
+    <div class="container">
+      <div class="contact__grid">
+
+        <!-- ── Email (primary) ── -->
+        <a class="contact-card" href="mailto:jackyopenclaw.168@gmail.com?subject=Video%20Learning%20App%20—%20">
+          <div class="contact-card__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+              <polyline points="22,6 12,13 2,6"/>
+            </svg>
+          </div>
+          <h2 class="contact-card__title">Email</h2>
+          <p class="contact-card__line">jackyopenclaw.168@gmail.com</p>
+          <p class="contact-card__meta">Replies within 1–2 days</p>
+          <span class="contact-card__cta">Send email →</span>
+        </a>
+
+        <!-- ── GitHub Issues (best for bugs) ── -->
+        <a class="contact-card" href="https://github.com/yuanfengli168/video-learning-app/issues/new" target="_blank" rel="noopener">
+          <div class="contact-card__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+              <path d="M12 0a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.24 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 0z"/>
+            </svg>
+          </div>
+          <h2 class="contact-card__title">GitHub Issues</h2>
+          <p class="contact-card__line">Best for bug reports &amp; feature requests</p>
+          <p class="contact-card__meta">Public thread, others can chime in</p>
+          <span class="contact-card__cta">Open an issue →</span>
+        </a>
+
+        <!-- ── GitHub Discussions (best for questions) ── -->
+        <a class="contact-card" href="https://github.com/yuanfengli168/video-learning-app/discussions" target="_blank" rel="noopener">
+          <div class="contact-card__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+          <h2 class="contact-card__title">Discussions</h2>
+          <p class="contact-card__line">Best for "how do I…" questions</p>
+          <p class="contact-card__meta">Community help, search the archive</p>
+          <span class="contact-card__cta">Ask the community →</span>
+        </a>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== CONTACT FORM (mailto: compose) ============== -->
+  <!--
+    Form behavior: clicking "Open in email app" assembles a mailto:
+    URL with the form fields pre-filled, and opens the user's default
+    email client. No backend, no third-party, no JS dependency for
+    the core flow (the JS only adds a polished preview before
+    launching the mail client; the noscript fallback below works
+    with a hardcoded subject + body for users with JS disabled).
+
+    To switch to Formspree later: replace the <form action="..."> with
+    action="https://formspree.io/f/YOUR_FORM_ID" and uncomment the
+    Formspree section in assets/js/contact.js.
+  -->
+  <section class="contact-form-section">
+    <div class="container contact-form-section__inner">
+      <div class="contact-form-section__intro">
+        <h2>Or draft a message</h2>
+        <p>
+          Fill in the form below and your default email app will open with
+          everything pre-filled — just hit <strong>Send</strong>. No third-party
+          form service, no data leaves your browser until <em>you</em> press send.
+        </p>
+        <ul class="contact-form-section__notes">
+          <li><strong>What it's for:</strong> bug reports, install help, feature ideas, partnerships, "just thanks" messages.</li>
+          <li><strong>What it's NOT for:</strong> support contracts (I'm a solo dev; for ongoing support, consider <a href="donate.html">donating</a> instead).</li>
+          <li><strong>Privacy:</strong> nothing is sent over the network until you click send in your email app. Your message goes straight to my Gmail inbox.</li>
+        </ul>
+      </div>
+
+      <form
+        class="contact-form"
+        data-contact-form
+        data-mailto="jackyopenclaw.168@gmail.com"
+      >
+        <label class="contact-form__field">
+          <span>Your name</span>
+          <input type="text" name="name" required maxlength="100" autocomplete="name" placeholder="Jane Doe" />
+        </label>
+
+        <label class="contact-form__field">
+          <span>Your email <em>(so I can reply)</em></span>
+          <input type="email" name="email" required maxlength="200" autocomplete="email" placeholder="you@example.com" />
+        </label>
+
+        <label class="contact-form__field">
+          <span>What's it about?</span>
+          <select name="topic" required>
+            <option value="">Choose a topic…</option>
+            <option value="bug">🐞 Bug report</option>
+            <option value="feature">💡 Feature request</option>
+            <option value="install">🔧 Install / setup help</option>
+            <option value="partnership">🤝 Partnership / business</option>
+            <option value="other">✉️ Something else</option>
+          </select>
+        </label>
+
+        <label class="contact-form__field">
+          <span>Message</span>
+          <textarea name="message" required rows="6" maxlength="2000" placeholder="The more detail, the better I can help. If it's a bug, please include: OS, Python version, what you tried, what happened, what you expected."></textarea>
+        </label>
+
+        <!-- Honeypot: bots fill this in, humans don't see it. -->
+        <input type="text" name="_gotcha" class="contact-form__honeypot" tabindex="-1" autocomplete="off" aria-hidden="true" />
+
+        <!-- JS-disabled fallback: a plain mailto: link users can click. -->
+        <noscript>
+          <p class="contact-form__warning">
+            JavaScript is off, so the form preview is disabled. Click below to
+            open your email app with a blank message to me, then type your
+            message there.
+            <br><br>
+            <a class="btn btn--primary" href="mailto:jackyopenclaw.168@gmail.com?subject=Video%20Learning%20App%20%E2%80%94%20question">
+              Open email app →
+            </a>
+          </p>
+        </noscript>
+
+        <button type="submit" class="btn btn--primary btn--lg contact-form__submit">
+          ✉️ Open in email app
+        </button>
+
+        <p class="contact-form__status" data-contact-form-status aria-live="polite"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============== FOOTER ============== -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 4l12 8-12 8V4z" fill="currentColor"/></svg>
+        </span>
+        <span>Video Learning App</span>
+      </div>
+
+      <nav class="footer__links" aria-label="Footer">
+        <div class="footer__col">
+          <h4>Product</h4>
+          <a href="index.html#features">Features</a>
+          <a href="index.html#demo">Demo</a>
+          <a href="index.html#screenshots">Screenshots</a>
+          <a href="index.html#install">Install</a>
+        </div>
+        <div class="footer__col">
+          <h4>Community</h4>
+          <a href="donate.html">Donate</a>
+          <a href="supporters.html">Supporters</a>
+          <a href="contact.html">Contact</a>
+          <a href="https://github.com/yuanfengli168/video-learning-app" target="_blank" rel="noopener">GitHub</a>
+        </div>
+        <div class="footer__col">
+          <h4>Resources</h4>
+          <a href="https://github.com/yuanfengli168/video-learning-app/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+          <a href="https://github.com/yuanfengli168/video-learning-app/blob/main/doc/HowToStart.md" target="_blank" rel="noopener">Docs</a>
+          <a href="https://github.com/yuanfengli168/video-learning-app/blob/main/doc/MVP2.1-Status.md" target="_blank" rel="noopener">Status</a>
+        </div>
+      </nav>
+
+      <div class="footer__bottom">
+        <p>Apache 2.0 · Made with caffeine in Singapore 🇨🇳→🇸🇬</p>
+        <p class="footer__meta">v2.1.0.4 · 633 tests passing</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/js/main.js"></script>
+  <script src="assets/js/contact.js"></script>
+</body>
+</html>

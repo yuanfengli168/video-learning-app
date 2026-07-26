@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <title>Video Learning App — Turn any lecture into a study kit</title>
+  <meta name="description" content="Open-source, local-first AI that turns any video lecture into a searchable transcript, clickable mindmap, quiz, flashcards, and a tutor chat. Whisper + Ollama. 633 tests. Free forever." />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Video Learning App — Turn any lecture into a study kit" />
+  <meta property="og:description" content="Open-source, local-first AI. Whisper + Ollama. Your videos never leave your machine." />
+  <meta property="og:image" content="assets/images/og-image.png" />
+  <meta property="og:url" content="https://yuanfengli168.github.io/video-learning-app/" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <!-- Favicon (inline SVG, no request) -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%236366f1'/%3E%3Cstop offset='100%25' stop-color='%23a855f7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='20' fill='url(%23g)'/%3E%3Cpath d='M35 30 L35 70 L70 50 Z' fill='white'/%3E%3C/svg%3E" />
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="assets/css/style.css" />
+
+  <!-- Preconnect to font CDN -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" />
+
+  <!-- Apply theme before paint (no FOUC) -->
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('vla-theme');
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var theme = stored || (prefersDark ? 'dark' : 'light');
+        document.documentElement.dataset.theme = theme;
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+
+  <!-- ============== NAV ============== -->
+  <nav class="nav" aria-label="Primary">
+    <div class="nav__inner container">
+      <a href="#top" class="nav__brand" aria-label="Home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity="0.9"/><stop offset="100%" stop-color="currentColor" stop-opacity="0.6"/></linearGradient></defs><path d="M6 4l12 8-12 8V4z" fill="url(#bg)"/></svg>
+        </span>
+        <span class="brand-name">Video Learning App</span>
+      </a>
+
+      <div class="nav__links">
+        <a href="#features">Features</a>
+        <a href="#demo">Demo</a>
+        <a href="#screenshots">Screenshots</a>
+        <a href="#install">Install</a>
+        <a href="donate.html">Donate</a>
+        <a href="supporters.html">Supporters</a>
+        <a href="contact.html">Contact</a>
+        <a href="https://github.com/yuanfengli168/video-learning-app" class="nav__github" target="_blank" rel="noopener" aria-label="GitHub repository">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 0a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 0z"/></svg>
+          <span>GitHub</span>
+        </a>
+        <button class="theme-toggle" type="button" aria-label="Toggle theme" data-theme-toggle>
+          <svg class="theme-toggle__icon theme-toggle__icon--sun" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="theme-toggle__icon theme-toggle__icon--moon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+
+      <button class="nav__menu" type="button" aria-label="Open menu" data-menu-toggle>
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+
+    <!-- Mobile menu -->
+    <div class="nav__mobile" data-menu>
+      <a href="#features">Features</a>
+      <a href="#demo">Demo</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#install">Install</a>
+      <a href="donate.html">Donate</a>
+      <a href="supporters.html">Supporters</a>
+      <a href="contact.html">Contact</a>
+      <a href="https://github.com/yuanfengli168/video-learning-app" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+
+  <!-- ============== HERO ============== -->
+  <header id="top" class="hero">
+    <div class="hero__bg" aria-hidden="true">
+      <div class="orb orb--1"></div>
+      <div class="orb orb--2"></div>
+      <div class="orb orb--3"></div>
+      <div class="grid"></div>
+    </div>
+
+    <div class="container hero__inner">
+      <div class="hero__badges">
+        <span class="badge"><span class="badge__dot"></span>Open source · Apache 2.0</span>
+        <span class="badge">633 tests · 92% coverage</span>
+      </div>
+
+      <h1 class="hero__title">
+        Turn any lecture into a
+        <span class="hero__title-grad">complete study kit</span>
+        <span class="hero__cursor" aria-hidden="true"></span>
+      </h1>
+
+      <p class="hero__sub">
+        Drop in a video. Get a searchable transcript, a clickable mindmap, auto-generated
+        quizzes and flashcards, and a tutor chat that knows the whole video.
+        <strong>100% local. No cloud. No subscription. 5-minute install.</strong>
+      </p>
+
+      <div class="hero__cta">
+        <a class="btn btn--primary" href="https://github.com/yuanfengli168/video-learning-app" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 0a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.21.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 0z"/></svg>
+          Star on GitHub
+        </a>
+        <a class="btn btn--ghost" href="#demo">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          Watch the demo
+        </a>
+        <a class="btn btn--text" href="#install">
+          or read the install guide →
+        </a>
+      </div>
+
+      <div class="hero__stats">
+        <div class="stat"><div class="stat__num">633</div><div class="stat__label">Tests passing</div></div>
+        <div class="stat"><div class="stat__num">92%</div><div class="stat__label">Backend coverage</div></div>
+        <div class="stat"><div class="stat__num">0</div><div class="stat__label">Cloud dependencies</div></div>
+        <div class="stat"><div class="stat__num">5min</div><div class="stat__label">To install</div></div>
+      </div>
+
+      <!-- Floating product mockup -->
+      <div class="hero__mockup" aria-hidden="true">
+        <div class="mockup">
+          <div class="mockup__bar">
+            <span></span><span></span><span></span>
+            <div class="mockup__url">video-learning.app / video / 1B-7X-2k3</div>
+          </div>
+          <div class="mockup__body">
+            <div class="mockup__video">
+              <div class="mockup__play">▶</div>
+            </div>
+            <div class="mockup__side">
+              <div class="mockup__tabs">
+                <span class="active">Summary</span>
+                <span>Mindmap</span>
+                <span>Quiz</span>
+                <span>Chat</span>
+              </div>
+              <div class="mockup__lines">
+                <div style="width:90%"></div>
+                <div style="width:75%"></div>
+                <div style="width:85%"></div>
+                <div style="width:60%"></div>
+                <div style="width:80%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============== LOGOS / SOCIAL PROOF STRIP ============== -->
+  <section class="strip" aria-label="Tech stack">
+    <div class="container strip__inner">
+      <p class="strip__label">Built with tools you trust</p>
+      <div class="strip__logos">
+        <span>FastAPI</span>
+        <span>Python 3.14</span>
+        <span>Whisper</span>
+        <span>Ollama</span>
+        <span>SQLAlchemy</span>
+        <span>Jinja2</span>
+        <span>Tailwind</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== FEATURES ============== -->
+  <section id="features" class="features">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">What it does</p>
+        <h2>One video in. Six tools out.</h2>
+        <p class="section-sub">
+          Every feature is designed to make you <em>test yourself</em> — not just re-read notes.
+          That's the whole philosophy.
+        </p>
+      </div>
+
+      <div class="features__grid">
+
+        <article class="feature feature--featured">
+          <div class="feature__icon">📝</div>
+          <h3>Searchable transcript</h3>
+          <p>
+            Whisper transcribes locally. Click any line to jump the video. Live search
+            with prev/next navigation. Export to MD, JSON, or TXT.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__icon">🧠</div>
+          <h3>Clickable mindmap</h3>
+          <p>
+            Every node is a timestamp. Click → video jumps. Even leaf nodes work —
+            the AI walks up the tree to find the nearest parent.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__icon">📇</div>
+          <h3>Auto flashcards + quiz</h3>
+          <p>
+            Not just summaries — actual recall tests. Click "Teach me real-world usage"
+            on any flashcard to open a tutor chat.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__icon">💬</div>
+          <h3>Discuss the whole video</h3>
+          <p>
+            A ChatGPT-style chat with the full transcript + summary + mindmap as
+            context. Ask "what did the prof mean at 23:15?" — it answers.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__icon">⏱️</div>
+          <h3>Topic timestamps</h3>
+          <p>
+            Auto-generated by the LLM. Jump back to the exact 3-minute segment you
+            need to review. No more scrubbing.
+          </p>
+        </article>
+
+        <article class="feature">
+          <div class="feature__icon">🛠️</div>
+          <h3>Plugin Tools</h3>
+          <p>
+            Convert WebM → MP4 in one click. Background worker pool means the
+            transcoder survives tab close. Plugin system designed to grow.
+          </p>
+        </article>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== DEMO VIDEO ============== -->
+  <section id="demo" class="demo">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">See it in action</p>
+        <h2>2 minutes. 1 lecture. 6 study tools.</h2>
+        <p class="section-sub">
+          Watch how a 2-hour lecture becomes a complete study kit — no editing, no manual work.
+        </p>
+      </div>
+
+      <div class="demo__player">
+        <!-- YouTube embed (primary) — change YOUR_VIDEO_ID to your real
+             YouTube video ID. Get it from the URL: youtube.com/watch?v=XXXXXXXX
+             To switch to a self-hosted MP4 instead, see assets/video/README.md. -->
+        <div class="demo__video-wrap" data-demo-video>
+          <iframe
+            src="https://www.youtube.com/embed/YOUR_VIDEO_ID?rel=0&modestbranding=1"
+            title="Video Learning App demo"
+            frameborder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowfullscreen
+            loading="lazy"></iframe>
+        </div>
+        <!-- Fallback shown only if the iframe fails to load (ad blocker, JS off, etc.) -->
+        <noscript>
+          <p class="demo__fallback">
+            JavaScript is required to view the embedded demo. Find it on
+            <a href="https://www.youtube.com/@yourhandle" target="_blank" rel="noopener">YouTube</a>
+            or read the
+            <a href="../doc/marketing/video-demo-script.md" target="_blank" rel="noopener">demo script</a>.
+          </p>
+        </noscript>
+      </div>
+
+      <p class="demo__caption">
+        Full video script + shot list available in
+        <a href="../doc/marketing/video-demo-script.md" target="_blank" rel="noopener">doc/marketing/video-demo-script.md</a>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============== SCREENSHOTS ============== -->
+  <section id="screenshots" class="screenshots">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">The product</p>
+        <h2>What it actually looks like</h2>
+        <p class="section-sub">
+          Real screenshots from the running app. Click any image to enlarge.
+        </p>
+      </div>
+
+      <div class="screenshots__grid">
+
+        <a href="assets/images/screenshot-upload.png" class="shot" data-lightbox>
+          <div class="shot__img" data-img="screenshot-upload.png" aria-label="Upload screen"></div>
+          <div class="shot__caption">1. Upload · drag-and-drop, up to 10 GB</div>
+        </a>
+
+        <a href="assets/images/screenshot-transcript.png" class="shot" data-lightbox>
+          <div class="shot__img" data-img="screenshot-transcript.png" aria-label="Transcript screen"></div>
+          <div class="shot__caption">2. Transcript · click any line to seek</div>
+        </a>
+
+        <a href="assets/images/screenshot-mindmap.png" class="shot shot--wide" data-lightbox>
+          <div class="shot__img" data-img="screenshot-mindmap.png" aria-label="Mindmap screen"></div>
+          <div class="shot__caption">3. Mindmap · every node is a clickable timestamp</div>
+        </a>
+
+        <a href="assets/images/screenshot-quiz.png" class="shot" data-lightbox>
+          <div class="shot__img" data-img="screenshot-quiz.png" aria-label="Quiz screen"></div>
+          <div class="shot__caption">4. Quiz · recall tests, not re-reading</div>
+        </a>
+
+        <a href="assets/images/screenshot-discuss.png" class="shot" data-lightbox>
+          <div class="shot__img" data-img="screenshot-discuss.png" aria-label="Discuss screen"></div>
+          <div class="shot__caption">5. Discuss · AI tutor with full video context</div>
+        </a>
+
+        <a href="assets/images/screenshot-tools.png" class="shot" data-lightbox>
+          <div class="shot__img" data-img="screenshot-tools.png" aria-label="Tools tab"></div>
+          <div class="shot__caption">6. Tools · WebM → MP4 in one click</div>
+        </a>
+
+      </div>
+
+      <p class="screenshots__note">
+        Don't have screenshots yet? See
+        <a href="assets/images/README.md">assets/images/README.md</a>
+        for the recommended capture list (with dimensions and content).
+      </p>
+    </div>
+  </section>
+
+  <!-- ============== INSTALL ============== -->
+  <section id="install" class="install">
+    <div class="container">
+      <div class="section-head">
+        <p class="eyebrow">Get started</p>
+        <h2>5 minutes from <code>git clone</code> to <code>ready</code></h2>
+        <p class="section-sub">
+          macOS, Linux, and Windows. Works on a stock M1 MacBook with 16 GB RAM.
+        </p>
+      </div>
+
+      <div class="install__steps">
+        <div class="step">
+          <div class="step__num">1</div>
+          <div class="step__body">
+            <h3>Clone &amp; install</h3>
+            <pre class="code"><code>git clone https://github.com/yuanfengli168/video-learning-app
+cd video-learning-app
+bash scripts/setup.sh</code></pre>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step__num">2</div>
+          <div class="step__body">
+            <h3>Pull the LLM</h3>
+            <pre class="code"><code>ollama serve &amp;          # auto-started by setup.sh on macOS
+ollama pull glm-5.2:cloud # the default LLM (~2 GB)</code></pre>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step__num">3</div>
+          <div class="step__body">
+            <h3>Add your Firebase key</h3>
+            <pre class="code"><code>bash scripts/setup_firebase_key.sh
+# (paste the JSON you downloaded from Firebase console)</code></pre>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step__num">4</div>
+          <div class="step__body">
+            <h3>Start the app</h3>
+            <pre class="code"><code>bash scripts/start.sh
+# Open http://localhost:8000</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <p class="install__more">
+        Full guide (troubleshooting, optional MLX backend, Postgres migration):
+        <a href="https://github.com/yuanfengli168/video-learning-app/blob/main/doc/HowToStart.md" target="_blank" rel="noopener">doc/HowToStart.md</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- ============== TESTIMONIAL / SOCIAL PROOF ============== -->
+  <section class="proof">
+    <div class="container">
+      <div class="proof__inner">
+        <p class="proof__quote">
+          <span class="proof__mark">"</span>The whole point of this app is to make
+          you <strong>test yourself</strong> — not just re-read notes. If you're
+          not failing quizzes, you're not learning.<span class="proof__mark">"</span>
+        </p>
+        <p class="proof__author">— the README, distilled</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== CTA ============== -->
+  <section class="cta">
+    <div class="container cta__inner">
+      <h2>Ready to actually learn from what you watch?</h2>
+      <p>Free. Open source. 5-minute install. No credit card.</p>
+      <div class="cta__buttons">
+        <a class="btn btn--primary btn--lg" href="https://github.com/yuanfengli168/video-learning-app" target="_blank" rel="noopener">
+          Get it on GitHub
+        </a>
+        <a class="btn btn--ghost btn--lg" href="#demo">
+          Watch the demo first
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== FOOTER ============== -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 4l12 8-12 8V4z" fill="currentColor"/></svg>
+        </span>
+        <span>Video Learning App</span>
+      </div>
+
+      <nav class="footer__links" aria-label="Footer">
+        <div class="footer__col">
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#demo">Demo</a>
+          <a href="#screenshots">Screenshots</a>
+          <a href="#install">Install</a>
+        </div>
+        <div class="footer__col">
+          <h4>Community</h4>
+          <a href="donate.html">Donate</a>
+          <a href="supporters.html">Supporters</a>
+          <a href="contact.html">Contact</a>
+          <a href="https://github.com/yuanfengli168/video-learning-app" target="_blank" rel="noopener">GitHub</a>
+        </div>
+        <div class="footer__col">
+          <h4>Resources</h4>
+          <a href="https://github.com/yuanfengli168/video-learning-app/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a>
+          <a href="https://github.com/yuanfengli168/video-learning-app/blob/main/doc/HowToStart.md" target="_blank" rel="noopener">Docs</a>
+          <a href="https://github.com/yuanfengli168/video-learning-app/blob/main/doc/MVP2.1-Status.md" target="_blank" rel="noopener">Status</a>
+        </div>
+      </nav>
+    </div>
+
+    <div class="container footer__bottom">
+      <p>© 2026 Video Learning App. Licensed under Apache 2.0.</p>
+      <p class="footer__meta">Built with FastAPI · Whisper · Ollama · 633 tests · 92% coverage</p>
+    </div>
+  </footer>
+
+  <!-- Lightbox -->
+  <div class="lightbox" data-lightbox-target hidden role="dialog" aria-modal="true" aria-label="Screenshot preview">
+    <button class="lightbox__close" type="button" aria-label="Close" data-lightbox-close>×</button>
+    <img class="lightbox__img" alt="" />
+    <p class="lightbox__caption"></p>
+  </div>
+
+  <script src="assets/js/main.js" defer></script>
+</body>
+</html>

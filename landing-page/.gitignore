@@ -1,0 +1,75 @@
+# ============== Landing-page-specific ignores ==============
+#
+# Personal payment assets (NEVER commit these to the public repo)
+# -----------------------------------------------------------
+# The placeholders (zelle.png, paynow.png, etc.) ARE tracked so
+# the site works out of the box. To use your real QRs:
+#   1. Save them anywhere with `.local.` in the filename
+#      e.g. .zelle.png.local.PNG, zelle.png.local, .paynow.JPG.local
+#      The presence of `.local.` ANYWHERE in the filename blocks it.
+#   2. Run ./scripts/copy_personal_assets.sh to copy them over
+#      the placeholders before deploying
+#
+# HOW THIS WORKS
+# --------------
+# The ignore pattern `*\.local.*` matches any file that has the
+# substring `.local.` in its name. This catches BOTH the case
+# where `.local` is at the end (.zelle.png.local) AND when it's
+# in the middle (.zelle.png.local.PNG).
+#
+# Test results:
+#   zelle.png          → tracked  (placeholder, matches allow rule)
+#   zelle.png.local    → ignored  (matches *.local.* block)
+#   .zelle.png.local   → ignored  (matches *.local.* block)
+#   .zelle.png.local.PNG → ignored (matches *.local.* block)
+#   zelle.local.png    → ignored  (matches *.local.* block)
+#   zelle.PNG.local    → ignored  (matches *.local.* block)
+
+# Block any file containing `.local.` in its name
+*\.local.*
+*.LOCAL.*
+*\.local
+*.LOCAL
+
+# Demo video (if you record one locally before uploading to YouTube)
+*\.local.mp4
+*\.local.MP4
+*\.local.webm
+*\.local.WEBM
+*\.local.mov
+*\.local.MOV
+
+# Any local secrets (in case you ever inline Formspree / API keys)
+.env
+.env.local
+.secrets.local
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# ALLOW RULES (placed AFTER the block rules)
+# ============================================================
+# The placeholder PNGs/JPGs (zelle.png, paynow.png, wechat.png,
+# alipay.png) MUST be tracked so the site works out of the box.
+# These allow rules explicitly re-include them. Because the block
+# rules above are MORE SPECIFIC (they match `*\.local.*` which the
+# allow rules don't), this works correctly.
+!/zelle.png
+!/zelle.jpg
+!/zelle.jpeg
+!/zelle.webp
+!/paynow.png
+!/paynow.jpg
+!/paynow.jpeg
+!/paynow.webp
+!/wechat.png
+!/wechat.jpg
+!/wechat.jpeg
+!/wechat.webp
+!/alipay.png
+!/alipay.jpg
+!/alipay.jpeg
+!/alipay.webp
+!/README.md

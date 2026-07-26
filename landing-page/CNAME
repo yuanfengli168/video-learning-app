@@ -1,0 +1,20 @@
+# CNAME — put your custom domain here (one line, no protocol).
+# When deploying to GitHub Pages, this file tells GH to serve
+# the site at your custom domain instead of <username>.github.io.
+#
+# Examples:
+#   videolearning.app
+#   www.videolearning.app
+#   learn.yourdomain.com
+#
+# If you're using the default <username>.github.io URL, just delete this file.
+#
+# IMPORTANT: After enabling, also configure DNS at your registrar:
+#   - CNAME record: www → <username>.github.io
+#   - A records for apex (no www):
+#       185.199.108.153
+#       185.199.109.153
+#       185.199.110.153
+#       185.199.111.153
+# Then in GitHub → Settings → Pages → Custom domain, enter the domain
+# and enable "Enforce HTTPS".

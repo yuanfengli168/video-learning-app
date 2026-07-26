@@ -1,0 +1,12 @@
+{
+  "$comment": "JSON Schema (informal, not enforced) for supporters.json. The build script validates against this.",
+  "supporters_entry": {
+    "name": "string — full name as donor wants it shown (or 'Anonymous')",
+    "amount_usd": "number — exact amount in USD (used only to compute tier; not displayed publicly)",
+    "date": "string — ISO 8601 date 'YYYY-MM-DD'",
+    "comment": "string? — optional 1-line comment from donor; max 200 chars; shown as a quote below the name",
+    "tier": "enum: 'coffee' | 'bronze' | 'silver' | 'gold' | 'talk'",
+    "claimed_talk": "boolean? — true if the $20+ donor has scheduled their 30-min talk",
+    "anonymous": "boolean? — true to show as 'Anonymous'"
+  }
+}
