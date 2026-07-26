@@ -1,0 +1,66 @@
+{
+  "courses": [
+    {
+      "id": "course-1",
+      "title": "Machine Learning Foundations",
+      "description": "Stanford CS229 condensed. Best learned in small chunks.",
+      "updated_at": "2026-07-26T10:00:00.000Z"
+    }
+  ],
+  "sections": [
+    {
+      "id": "sec-1",
+      "course_id": "course-1",
+      "title": "Week 1 — Intro & Linear Regression",
+      "order_index": 0,
+      "updated_at": "2026-07-26T10:00:00.000Z"
+    },
+    {
+      "id": "sec-2",
+      "course_id": "course-1",
+      "title": "Week 2 — Classification & Gradient Descent",
+      "order_index": 1,
+      "updated_at": "2026-07-26T10:00:00.000Z"
+    }
+  ],
+  "videos": [
+    {
+      "id": "vid-1",
+      "section_id": "sec-1",
+      "title": "1. Why Machine Learning?",
+      "order_index": 0,
+      "summary": "## Why ML?\n\nTraditional programming requires you to write the rules. Machine learning flips this: you provide the data + the answers, and the algorithm figures out the rules.\n\nThis is useful when:\n- The rules are too complex to write by hand (e.g. recognizing cats in photos)\n- The rules change over time (e.g. fraud detection)\n- The data is too large for humans to inspect",
+      "transcript": "[0.0s] Welcome to CS229. Today we're going to talk about why machine learning matters.\n\n[15.0s] Traditional programming: you write the rules. The computer follows them. Simple.\n\n[32.0s] But what if the rules are too complex? Take image recognition. You'd have to write rules for every possible lighting condition, every angle...\n\n[60.0s] That's where ML comes in. You give the computer examples — labeled data — and it learns the rules itself.",
+      "flashcards": "[{\"term\": \"Supervised learning\", \"definition\": \"Learning from labeled examples (input → known output).\"}, {\"term\": \"Unsupervised learning\", \"definition\": \"Finding structure in unlabeled data.\"}, {\"term\": \"Features\", \"definition\": \"The input variables the model uses to make predictions.\"}]",
+      "quiz": "[{\"question\": \"What is the main difference between traditional programming and machine learning?\", \"options\": [\"ML is faster\", \"ML learns rules from data instead of being explicitly programmed\", \"ML uses more memory\", \"ML requires a GPU\"], \"answer\": \"ML learns rules from data instead of being explicitly programmed\"}]",
+      "mindmap": "# Why ML?\n## Use when\n- Rules too complex\n- Rules change over time\n- Data too large to inspect\n## Types\n- Supervised\n- Unsupervised\n- Reinforcement",
+      "updated_at": "2026-07-26T10:00:00.000Z"
+    },
+    {
+      "id": "vid-2",
+      "section_id": "sec-1",
+      "title": "2. Linear Regression — The Workhorse",
+      "order_index": 1,
+      "summary": "## Linear Regression\n\nThe simplest ML model. Predict a continuous output from one or more inputs by fitting a line (or hyperplane).\n\nKey idea: minimize the mean squared error between predictions and actual values.\n\nThis is solvable in closed form (normal equation) or iteratively (gradient descent).",
+      "transcript": "[0.0s] Linear regression is the hello world of machine learning.\n\n[12.0s] Given some data points, find the line that best fits them. 'Best' means minimizing the sum of squared errors.\n\n[45.0s] We can solve this analytically using the normal equation. But for large datasets, gradient descent is faster.\n\n[80.0s] The intuition: imagine you're on a mountain in fog. You want to find the lowest point. You feel which direction goes downhill and step that way. Repeat.",
+      "flashcards": "[{\"term\": \"MSE\", \"definition\": \"Mean Squared Error — the loss function for linear regression.\"}, {\"term\": \"Normal equation\", \"definition\": \"Closed-form solution: θ = (X^T X)^-1 X^T y\"}, {\"term\": \"Learning rate\", \"definition\": \"How big a step gradient descent takes each iteration.\"}]",
+      "quiz": "[{\"question\": \"What does gradient descent optimize?\", \"options\": [\"The number of features\", \"The loss function\", \"The dataset size\", \"The learning rate\"], \"answer\": \"The loss function\"}]",
+      "mindmap": "# Linear Regression\n## Loss\n- MSE\n## Solutions\n- Normal equation (closed form)\n- Gradient descent (iterative)\n## Hyperparams\n- Learning rate",
+      "updated_at": "2026-07-26T10:00:00.000Z"
+    },
+    {
+      "id": "vid-3",
+      "section_id": "sec-2",
+      "title": "3. Logistic Regression & Classification",
+      "order_index": 0,
+      "summary": "## Classification\n\nWhen the output is a category (not a number), we use classification. Logistic regression is the simplest classifier: it outputs a probability between 0 and 1 using the sigmoid function.\n\nThe loss function changes from MSE to binary cross-entropy (log loss).",
+      "transcript": "[0.0s] Classification is everywhere. Spam vs not-spam. Fraud vs legitimate. Cat vs dog.\n\n[20.0s] Logistic regression wraps a linear function in a sigmoid, so the output is a probability.\n\n[55.0s] The loss is now log loss, not MSE. This is because we want to heavily penalize confident wrong predictions.",
+      "flashcards": "[{\"term\": \"Sigmoid\", \"definition\": \"σ(x) = 1 / (1 + e^-x). Squashes any real number to (0, 1).\"}, {\"term\": \"Log loss\", \"definition\": \"-y log(p) - (1-y) log(1-p). Penalizes confident wrong predictions.\"}]",
+      "quiz": "[{\"question\": \"What function does logistic regression use to squash its output?\", \"options\": [\"ReLU\", \"Sigmoid\", \"Tanh\", \"Softmax\"], \"answer\": \"Sigmoid\"}]",
+      "mindmap": "# Classification\n## Model\n- Logistic regression\n## Activation\n- Sigmoid\n## Loss\n- Log loss / cross entropy",
+      "updated_at": "2026-07-26T10:00:00.000Z"
+    }
+  ],
+  "deleted_ids": [],
+  "sync_token": "2026-07-26 10:00:00"
+}

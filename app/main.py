@@ -20,6 +20,8 @@ from app.routers import generation as generation_router
 from app.routers import plugins as plugins_router
 from app.routers import videos as videos_router
 from app.auth.session import router as session_router
+# MVP: pocket v0.1 — mobile companion sub-app, mounted at /m/*
+from app.pocket import router as pocket_router
 
 
 @asynccontextmanager
@@ -160,6 +162,8 @@ app.include_router(generation_router.router)
 app.include_router(chat_router.router)
 app.include_router(plugins_router.router)
 app.include_router(frontend_router.router)
+# MVP: pocket v0.1 — mobile companion sub-app at /m/*
+app.include_router(pocket_router, prefix="/m")
 
 
 @app.get("/api/health")

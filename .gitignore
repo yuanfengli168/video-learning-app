@@ -67,3 +67,7 @@ downloads/
 *.pfx
 secrets/
 credentials/
+certs/
+ios/PocketMVP/build/
+ios/PocketMVP/PocketMVP.xcodeproj/xcuserdata/
+ios/PocketMVP/PocketMVP.xcodeproj/project.xcworkspace/xcuserdata/
