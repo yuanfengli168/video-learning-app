@@ -27,7 +27,8 @@ final class APIClient {
         self.decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { d in
             let s = try d.singleValueContainer().decode(String.self)
-            // Try fractional ISO, then SQLite-native "YYYY-MM-DD HH:MM:SS"
+            // Try common shapes; backend emits naive ISO ("2026-07-21T06:48:15"),
+            // SQLite-native ("2026-07-21 06:48:15"), or ISO with fractional/Z.
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             if let dt = iso.date(from: s) { return dt }
@@ -35,8 +36,15 @@ final class APIClient {
             if let dt = iso.date(from: s) { return dt }
             let fmt = DateFormatter()
             fmt.locale = Locale(identifier: "en_US_POSIX")
-            fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
-            if let dt = fmt.date(from: s) { return dt }
+            fmt.timeZone = TimeZone(identifier: "UTC")
+            for pattern in [
+                "yyyy-MM-dd HH:mm:ss.SSSSSS",
+                "yyyy-MM-dd HH:mm:ss",
+                "yyyy-MM-dd'T'HH:mm:ss",
+            ] {
+                fmt.dateFormat = pattern
+                if let dt = fmt.date(from: s) { return dt }
+            }
             throw DecodingError.dataCorruptedError(in: try d.singleValueContainer(),
                 debugDescription: "Unrecognized date: \(s)")
         }
@@ -95,6 +103,7 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyDevAuth(to: &req)
         let (data, resp) = try await session.data(for: req)
         try Self.assertOK(resp, data: data)
         return try decoder.decode(T.self, from: data)
@@ -108,9 +117,20 @@ final class APIClient {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try encoder.encode(body)
         }
+        Self.applyDevAuth(to: &req)
         let (data, resp) = try await session.data(for: req)
         try Self.assertOK(resp, data: data)
         return try decoder.decode(T.self, from: data)
+    }
+
+    /// Apply the dev-only `X-Dev-User-Id` header if configured. The backend
+    /// only honors it when started with `POCKET_DEV_AUTH=1`, so this is
+    /// safe to leave set in source — production backends will just 401
+    /// instead of trusting the header.
+    private static func applyDevAuth(to req: inout URLRequest) {
+        if let uid = AppConfig.devUserId {
+            req.setValue(uid, forHTTPHeaderField: "X-Dev-User-Id")
+        }
     }
 
     private static func assertOK(_ resp: URLResponse, data: Data) throws {

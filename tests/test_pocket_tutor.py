@@ -124,8 +124,8 @@ def test_generate_chunks_happy_path():
 @pytest.fixture
 def auth_client(db_session):
     app.dependency_overrides.clear()
-    from app.auth.dependencies import get_current_user
-    app.dependency_overrides[get_current_user] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
+    from app.pocket.dev_auth import get_current_user_dev_or_real
+    app.dependency_overrides[get_current_user_dev_or_real] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
     try:
         with TestClient(app) as client:
             yield client

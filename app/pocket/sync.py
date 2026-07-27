@@ -64,18 +64,52 @@ def _video_assets(db: Session, video_id: str) -> dict[str, str]:
     for r in rows:
         content = r.content or ""
         if r.asset_type == "transcript":
-            try:
-                segs = json.loads(content)
-                content = "\n".join(
-                    f"[{seg.get('start', 0):.1f}s] {seg.get('text', '')}"
-                    for seg in segs
-                )
-            except (json.JSONDecodeError, TypeError):
-                pass
+            content = _flatten_transcript(content)
         out[r.asset_type] = content
         if r.updated_at and (max_asset_dt is None or r.updated_at > max_asset_dt):
             max_asset_dt = r.updated_at
     return out, max_asset_dt
+
+
+def _flatten_transcript(content: str) -> str:
+    """Normalize a transcript to one [ts] text per line.
+
+    Tolerates three real shapes seen in the DB:
+    - JSON list of {start,end,text} dicts
+    - JSON list of plain strings
+    - JSON object {"segments": [...]} (the most common historical format)
+
+    Falls back to the raw content if nothing parses.
+    """
+    if not content:
+        return ""
+    try:
+        parsed = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return content
+
+    segs: list
+    if isinstance(parsed, list):
+        segs = parsed
+    elif isinstance(parsed, dict) and isinstance(parsed.get("segments"), list):
+        segs = parsed["segments"]
+    else:
+        return content
+
+    lines: list[str] = []
+    for seg in segs:
+        if isinstance(seg, str):
+            lines.append(seg)
+        elif isinstance(seg, dict):
+            ts = seg.get("start", 0)
+            try:
+                ts_str = f"[{float(ts):.1f}s]"
+            except (TypeError, ValueError):
+                ts_str = "[0.0s]"
+            lines.append(f"{ts_str} {seg.get('text', '')}")
+        else:
+            lines.append(str(seg))
+    return "\n".join(lines)
 
 
 def _serialize_section(s: Section) -> dict[str, Any]:

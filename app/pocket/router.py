@@ -15,10 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user  # noqa: F401  (kept for future use)
 from app.database import get_db
 from app.models import Video
 from app.pocket import jobs, sync
+from app.pocket.dev_auth import get_current_user_dev_or_real as get_current_user
 from app.pocket.models import PocketChunk, PocketProgress
 from app.pocket.schemas import (
     ChunkDoneOut,

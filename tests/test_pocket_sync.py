@@ -18,13 +18,15 @@ from app.models import Asset, Course, Section, Video
 
 @pytest.fixture
 def auth_client(db_session):
-    """TestClient with get_current_user mocked to return a fixed user."""
-    async def _fake_user():
-        return {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
+    """TestClient with the pocket router's auth dependency mocked.
 
+    The pocket router uses `get_current_user_dev_or_real` (imported as
+    `get_current_user` in router.py), so we override that exact function
+    object — not the original `get_current_user` from app.auth.dependencies.
+    """
     app.dependency_overrides.clear()
-    from app.auth.dependencies import get_current_user
-    app.dependency_overrides[get_current_user] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
+    from app.pocket.dev_auth import get_current_user_dev_or_real
+    app.dependency_overrides[get_current_user_dev_or_real] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
     try:
         with TestClient(app) as client:
             yield client

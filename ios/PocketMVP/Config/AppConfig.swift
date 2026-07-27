@@ -20,4 +20,10 @@ enum AppConfig {
     /// instead of calling the API. Lets us develop the UI without the
     /// backend running. Set to false to talk to the live API.
     static let useSampleData: Bool = false
+
+    /// Dev-only auth bypass. When non-nil, the iOS app sends an
+    /// `X-Dev-User-Id` header on every request, and the backend (when
+    /// started with `POCKET_DEV_AUTH=1`) trusts it as the authenticated
+    /// user. Set to nil in production. See `app/pocket/dev_auth.py`.
+    static let devUserId: String? = "ltLtLQzr3nOr2hQKdeTxYnIOYYN2"
 }
