@@ -54,13 +54,34 @@ final class APIClient {
     // MARK: - Endpoints
 
     /// GET /m/snapshot?since=<token>
-    func fetchSnapshot(since: String? = nil) async throws -> Snapshot {
+    ///
+    /// Honors the ETag/If-None-Match dance: if the server returns 304
+    /// (no body), this returns a result with `notModified = true` and
+    /// the same ETag — caller should keep its existing snapshot.
+    func fetchSnapshot(since: String? = nil, ifNoneMatch: String? = nil) async throws -> SnapshotResult {
         var comps = URLComponents(url: AppConfig.baseURL.appendingPathComponent("/m/snapshot"),
                                   resolvingAgainstBaseURL: false)!
         if let since = since {
             comps.queryItems = [URLQueryItem(name: "since", value: since)]
         }
-        return try await get(url: comps.url!, as: Snapshot.self)
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let etag = ifNoneMatch {
+            req.setValue(etag, forHTTPHeaderField: "If-None-Match")
+        }
+        Self.applyDevAuth(to: &req)
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw APIError.invalidResponse }
+        let etag = http.value(forHTTPHeaderField: "ETag") ?? ""
+
+        if http.statusCode == 304 {
+            // Server says "nothing changed." Caller keeps its existing snapshot.
+            return SnapshotResult(snapshot: .empty, etag: etag, notModified: true)
+        }
+        try Self.assertOK(resp, data: data)
+        let snap = try decoder.decode(Snapshot.self, from: data)
+        return SnapshotResult(snapshot: snap, etag: etag, notModified: false)
     }
 
     /// POST /m/teach/{video_id}

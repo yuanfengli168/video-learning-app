@@ -6,6 +6,8 @@ import Combine
 /// for the UI: views read `snapshot` and never call the API directly.
 @MainActor
 final class SnapshotStore: ObservableObject {
+    private static let lastETagKey = "pocket.lastETag"
+
     @Published var snapshot: Snapshot = .empty
     @Published var isSyncing: Bool = false
     @Published var lastError: String? = nil
@@ -14,6 +16,11 @@ final class SnapshotStore: ObservableObject {
     /// Per-video progress cache (in-memory; lost on relaunch — that's fine
     /// for v0.1, the server is authoritative and we re-fetch on demand).
     @Published var progress: [String: ProgressSnapshot] = [:]
+
+    /// Last ETag we saw from the server, for cheap 304 round-trips.
+    /// Persisted in UserDefaults so it survives relaunches — without this,
+    /// every relaunch is a 200 with full body.
+    @Published private(set) var lastETag: String = UserDefaults.standard.string(forKey: "pocket.lastETag") ?? ""
 
     /// Load the initial snapshot (either from the API or the bundled sample).
     func loadInitial() async {
@@ -24,15 +31,27 @@ final class SnapshotStore: ObservableObject {
         await sync()
     }
 
-    /// Force a sync from the server. Uses the last `sync_token` for incremental.
+    /// Force a sync from the server. Uses the last `sync_token` + ETag
+    /// for incremental sync with "nothing changed" 304 fast path.
     func sync() async {
         isSyncing = true
         lastError = nil
         defer { isSyncing = false }
         do {
-            let new = try await APIClient.shared.fetchSnapshot(since: snapshot.syncToken.isEmpty ? nil : snapshot.syncToken)
-            snapshot = merge(snapshot, with: new)
-            lastSyncDate = Date()
+            let since = snapshot.syncToken.isEmpty ? nil : snapshot.syncToken
+            let result = try await APIClient.shared.fetchSnapshot(
+                since: since,
+                ifNoneMatch: lastETag.isEmpty ? nil : lastETag
+            )
+            if result.notModified {
+                // 304 — server says nothing changed. Keep existing snapshot.
+                lastSyncDate = Date()
+            } else {
+                snapshot = merge(snapshot, with: result.snapshot)
+                lastETag = result.etag
+                UserDefaults.standard.set(result.etag, forKey: Self.lastETagKey)
+                lastSyncDate = Date()
+            }
         } catch {
             lastError = error.localizedDescription
             // If we have nothing, try to fall back to sample data

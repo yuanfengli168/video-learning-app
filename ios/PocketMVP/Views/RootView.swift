@@ -10,16 +10,7 @@ struct RootView: View {
                 .navigationTitle("Pocket")
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            Task { await store.sync() }
-                        } label: {
-                            if store.isSyncing {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                        }
-                        .accessibilityLabel("Sync from server")
+                        SyncStatusDot()
                     }
                 }
         }

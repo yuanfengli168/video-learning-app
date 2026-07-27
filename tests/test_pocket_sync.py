@@ -205,3 +205,39 @@ def test_snapshot_requires_auth(db_session):
     with TestClient(app) as client:
         r = client.get("/m/snapshot")
     assert r.status_code == 401
+
+
+# ── ETag 304 "nothing changed" fast path ────────────────────────
+
+def test_snapshot_returns_etag_header(auth_client, db_session):
+    """Every 200 response must include an ETag header so the phone can
+    short-circuit the next call with If-None-Match."""
+    r = auth_client.get("/m/snapshot")
+    assert r.status_code == 200
+    etag = r.headers.get("etag")
+    assert etag is not None
+    # ETag is a quoted hash; sanity-check shape
+    assert etag.startswith('"') and etag.endswith('"')
+    assert len(etag) > 10
+
+
+def test_snapshot_returns_304_when_if_none_match_matches(auth_client, db_session):
+    """If the phone sends back the same ETag, server responds 304 with no body."""
+    r1 = auth_client.get("/m/snapshot")
+    etag = r1.headers["etag"]
+
+    r2 = auth_client.get("/m/snapshot", headers={"If-None-Match": etag})
+    assert r2.status_code == 304
+    # 304 must NOT include a body — the phone skips JSON decode
+    assert r2.content == b""
+    # And the ETag should echo back so the phone can keep using it
+    assert r2.headers.get("etag") == etag
+
+
+def test_snapshot_returns_200_when_etag_differs(auth_client, db_session):
+    """A different ETag means the phone is behind; server returns fresh data."""
+    r1 = auth_client.get("/m/snapshot")
+    r2 = auth_client.get("/m/snapshot", headers={"If-None-Match": '"stale-tag-12345"'})
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r2.content != b""

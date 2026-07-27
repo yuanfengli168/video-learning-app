@@ -260,3 +260,32 @@ v0.1 was a clean vertical slice but couldn't be smoke-tested with real data beca
 
 ### Security note
 The `X-Dev-User-Id` header is **only honored when `POCKET_DEV_AUTH=1`**. Without that env var set, the same header is ignored and the request 401s. Production deployments must never set this env var.
+
+---
+
+## v0.1.2-polish — Sync UX upgrades (no auth changes)
+
+**Tag:** `pocket-v0.1.2-polish` on `mvp-mobile-pocket-v0.1`
+**Date:** 2026-07-27
+
+### What changed
+- **iOS: SyncStatusDot component** — replaces the static sync icon with a colored dot reflecting actual sync state (green = fresh, blue pulsing = syncing, red = error, gray = never synced). Shows relative timestamp ("in 0s"). Tappable to retry.
+- **Backend: ETag/If-None-Match on /m/snapshot** — server computes a hash of the sync_token, sends as ETag header. Phone sends previous ETag as If-None-Match; if unchanged, server returns 304 Not Modified with no body. Saves ~99% of bandwidth on "I open the app, nothing changed" case.
+- **iOS: ETag persistence** — the ETag is stored in UserDefaults so it survives relaunches. Without this, every relaunch is a fresh 200 with full body.
+- **iOS: SnapshotResult type** — wraps the API response with a `notModified` flag so the SnapshotStore knows to keep its existing snapshot on 304.
+
+### Tests
+- 3 new tests in test_pocket_sync.py:
+  - `test_snapshot_returns_etag_header` — every 200 has an ETag
+  - `test_snapshot_returns_304_when_if_none_match_matches` — matching ETag → 304 + empty body
+  - `test_snapshot_returns_200_when_etag_differs` — stale ETag → fresh 200
+- All 10 sync tests + 17 tutor tests + 3 dev-auth tests = 30 green
+
+### Verified end-to-end
+- iOS sim launch 1: `GET /m/snapshot → 200 OK` (full body)
+- iOS sim launch 2: `GET /m/snapshot → 304 Not Modified` (no body, server log confirms)
+- Status dot visible in top-right of course list: 🟢 "in 0s"
+
+### Not changed
+- Auth model (still dev header, gated by POCKET_DEV_AUTH=1)
+- v0.1.2 real Firebase auth is the next thing — not bundled here

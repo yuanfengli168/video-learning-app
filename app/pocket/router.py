@@ -11,7 +11,8 @@ Endpoints (all require an authenticated user, same as the rest of the app):
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -35,14 +36,49 @@ router = APIRouter(tags=["pocket"])
 
 # ── /m/snapshot ────────────────────────────────────────────────
 
+import hashlib
+
+
+def _etag_for(snapshot: dict) -> str:
+    """Compute a short, stable ETag from the snapshot's sync_token.
+
+    Phone sends this as `If-None-Match` on the next call. If unchanged,
+    server returns 304 with no body — saves ~99% of bandwidth on
+    'nothing changed' opens.
+    """
+    token = snapshot.get("sync_token", "") or ""
+    # Use a short prefix of SHA-256; wrap in quotes per HTTP spec.
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+    return f'"{digest}"'
+
+
 @router.get("/snapshot", response_model=SnapshotOut)
 def get_snapshot(
+    request: Request,
+    response: Response,
     since: str | None = None,
     user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Return a sync snapshot. Optional `since` token for incremental sync."""
-    return sync.build_snapshot(db=db, user_id=user["uid"], since=since)
+    """Return a sync snapshot. Optional `since` token for incremental sync.
+
+    Honors `If-None-Match` for cheap "nothing changed" round-trips:
+    the phone sends the previous response's ETag, and we return 304 with
+    no body if the sync_token hasn't moved.
+    """
+    snapshot = sync.build_snapshot(db=db, user_id=user["uid"], since=since)
+    etag = _etag_for(snapshot)
+    # Make the ETag available to the client on the 200 response too,
+    # so subsequent calls can use it as If-None-Match.
+    response.headers["ETag"] = etag
+
+    if_none_match = request.headers.get("If-None-Match")
+    if if_none_match and if_none_match == etag:
+        # 304 has no body. The phone treats this as "no changes" and
+        # just bumps its in-memory lastSyncDate.
+        return Response(status_code=304, headers={"ETag": etag})
+
+    return snapshot
 
 
 # ── /m/teach ───────────────────────────────────────────────────
