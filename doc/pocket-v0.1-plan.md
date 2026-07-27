@@ -289,3 +289,45 @@ The `X-Dev-User-Id` header is **only honored when `POCKET_DEV_AUTH=1`**. Without
 ### Not changed
 - Auth model (still dev header, gated by POCKET_DEV_AUTH=1)
 - v0.1.2 real Firebase auth is the next thing — not bundled here
+
+---
+
+## v0.1.2-foreground-and-persist — UX polish: foreground sync + disk cache
+
+**Tag:** `pocket-v0.1.2-foreground-and-persist` on `mvp-mobile-pocket-v0.1`
+**Date:** 2026-07-27
+
+### What changed
+- **iOS: Foreground auto-sync.** `RootView` watches `@Environment(\.scenePhase)` and
+  calls `store.syncIfStale()` whenever the app becomes `.active`. Throttled
+  to 1 sync / 30s so rapid scenePhase bounces (e.g. dismissing a sheet)
+  don't fire. Combined with the ETag 304 from v0.1.2-polish, this means
+  "I open the phone, I see fresh data instantly, every time."
+- **iOS: Snapshot persistence on disk.** `SnapshotStore` now writes the latest
+  snapshot + ETag to `~/Documents/snapshot_cache.json` after every
+  successful sync. On `loadInitial()`, the disk cache is read first so the
+  UI shows data immediately on cold start (no spinner), then a network
+  sync runs in the background. Survives app restart; wiped on uninstall
+  (iOS sandbox cleanup).
+- **iOS: 304 path is correct on cold start.** When the disk cache hits,
+  the network call sends the stored ETag. If the server returns 304, the
+  in-memory snapshot stays unchanged. No flicker, no data loss.
+
+### Tests
+- No new pytest tests (the persistence and foreground-sync logic live in
+  iOS, not Python). The 3 ETag tests added in v0.1.2-polish still pass,
+  confirming the contract the iOS app depends on.
+- All 30 backend tests still green.
+
+### Verified end-to-end
+- 1st launch: `GET /m/snapshot → 200 OK` (writes disk cache)
+- 2nd launch: `GET /m/snapshot?since=<token> → 304 Not Modified` (foreground
+  auto-sync via scenePhase)
+- 3rd launch: `GET /m/snapshot?since=<token> → 304 Not Modified` (cold start
+  reads disk, then 304)
+- UI: courses appear immediately on cold start, no spinner, status dot green
+
+### Not changed
+- Auth model (still dev header, gated by POCKET_DEV_AUTH=1)
+- Real Firebase auth is v0.1.3
+- No data model or API changes

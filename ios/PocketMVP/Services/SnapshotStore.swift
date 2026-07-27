@@ -7,6 +7,13 @@ import Combine
 @MainActor
 final class SnapshotStore: ObservableObject {
     private static let lastETagKey = "pocket.lastETag"
+    private static let snapshotCacheURL: URL = {
+        // ~/Documents/snapshot_cache.json — survives app relaunch but is wiped
+        // when the user uninstalls the app (iOS sandbox cleanup). For v0.1.2
+        // this is the right scope: persistent across restarts, gone on uninstall.
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("snapshot_cache.json")
+    }()
 
     @Published var snapshot: Snapshot = .empty
     @Published var isSyncing: Bool = false
@@ -22,12 +29,29 @@ final class SnapshotStore: ObservableObject {
     /// every relaunch is a 200 with full body.
     @Published private(set) var lastETag: String = UserDefaults.standard.string(forKey: "pocket.lastETag") ?? ""
 
-    /// Load the initial snapshot (either from the API or the bundled sample).
+    /// Last successful sync time. Used by the foreground-auto-sync throttle
+    /// so we don't fire a sync every time iOS hands us a scenePhase change.
+    private var lastSyncAttempt: Date = .distantPast
+
+    /// Throttle window for auto-sync. 30s is short enough to feel live
+    /// (open the app on the train, see fresh data) but long enough that
+    /// rapid scenePhase bounces don't hammer the server.
+    private static let autoSyncThrottle: TimeInterval = 30
+
+    /// Load the initial snapshot. Reads from disk first so the UI shows
+    /// data immediately (no spinner on cold start), then triggers a network
+    /// sync in the background to refresh.
     func loadInitial() async {
         if AppConfig.useSampleData {
             snapshot = Self.loadSampleSnapshot() ?? .empty
             return
         }
+        // 1. Hydrate from disk cache (instant — no spinner)
+        if let cached = Self.loadCachedSnapshot() {
+            snapshot = cached.snapshot
+            lastETag = cached.etag
+        }
+        // 2. Refresh from network in the background
         await sync()
     }
 
@@ -50,6 +74,7 @@ final class SnapshotStore: ObservableObject {
                 snapshot = merge(snapshot, with: result.snapshot)
                 lastETag = result.etag
                 UserDefaults.standard.set(result.etag, forKey: Self.lastETagKey)
+                Self.persistSnapshot(snapshot, etag: result.etag)
                 lastSyncDate = Date()
             }
         } catch {
@@ -59,6 +84,40 @@ final class SnapshotStore: ObservableObject {
                 snapshot = Self.loadSampleSnapshot() ?? .empty
             }
         }
+    }
+
+    /// Throttled sync used by the foreground hook. Returns immediately if
+    /// we synced less than `autoSyncThrottle` seconds ago.
+    func syncIfStale() async {
+        let now = Date()
+        if now.timeIntervalSince(lastSyncAttempt) < Self.autoSyncThrottle {
+            return
+        }
+        lastSyncAttempt = now
+        await sync()
+    }
+
+    // MARK: - Disk persistence
+
+    private struct CachedSnapshot: Codable {
+        let snapshot: Snapshot
+        let etag: String
+    }
+
+    private static func persistSnapshot(_ snap: Snapshot, etag: String) {
+        do {
+            let cached = CachedSnapshot(snapshot: snap, etag: etag)
+            let data = try JSONEncoder().encode(cached)
+            try data.write(to: snapshotCacheURL, options: .atomic)
+        } catch {
+            // best-effort: a persist failure is not fatal, the in-memory
+            // snapshot is still correct
+        }
+    }
+
+    private static func loadCachedSnapshot() -> CachedSnapshot? {
+        guard let data = try? Data(contentsOf: snapshotCacheURL) else { return nil }
+        return try? JSONDecoder().decode(CachedSnapshot.self, from: data)
     }
 
     /// Per-video: load progress (which chunks are done).

@@ -11,8 +11,8 @@
 		3D9E7CB8E4A607FD82195DC5 /* VideoDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518F63D8F71631B54788E25E /* VideoDetailView.swift */; };
 		3ED7C703931F7700D79AA492 /* SnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBDECA90A2167B222C96A81E /* SnapshotStore.swift */; };
 		40A6B6551B5AB299D7BA88F1 /* CourseListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AAD31248B5DD18FF4E34DC /* CourseListView.swift */; };
+		515DF65185C92FEBD574E31E /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_804B81E2-13EA-4201-AD47-733D19E1A1DD" /* PocketMVPApp.swift */; };
 		5E7A5654E21889A1AE044A93 /* TeachMeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C737077227DFA3C6D1C5896 /* TeachMeView.swift */; };
-		75ECDC4D6ADB3C88F12BEC48 /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_5CDD9ECB-1350-4049-9F16-362A6BF7D314" /* PocketMVPApp.swift */; };
 		9CE4D7A8D5FA17A7D08AB5CF /* SnapshotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D92C5E7F1D81BE9ACA9EC8C /* SnapshotModels.swift */; };
 		A186E18F7157FF2BA68C39D3 /* SyncStatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9519E40D8FCD0FC441AFF52A /* SyncStatusDot.swift */; };
 		BB91DD8E47DA73F0B9AA8B59 /* SnapshotResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0176715A8F2B3F3CA0A22A /* SnapshotResult.swift */; };
@@ -37,7 +37,7 @@
 		D4871AC707290FE6227484A0 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		DBDECA90A2167B222C96A81E /* SnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStore.swift; sourceTree = "<group>"; };
 		F7AAD31248B5DD18FF4E34DC /* CourseListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourseListView.swift; sourceTree = "<group>"; };
-		"TEMP_5CDD9ECB-1350-4049-9F16-362A6BF7D314" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
+		"TEMP_804B81E2-13EA-4201-AD47-733D19E1A1DD" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -109,10 +109,10 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		"TEMP_6A467EF6-E0AA-4BB2-B191-7ACF81C14061" /* . */ = {
+		"TEMP_8A5BBD98-F79E-41A1-9F43-D53A1AB34CDC" /* . */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_5CDD9ECB-1350-4049-9F16-362A6BF7D314" /* PocketMVPApp.swift */,
+				"TEMP_804B81E2-13EA-4201-AD47-733D19E1A1DD" /* PocketMVPApp.swift */,
 				60C512AA12E4DA2EEB7CDF42 /* Config */,
 				1524F80D83B4949F19309230 /* Models */,
 				481B24658F7A769C70724E65 /* PocketMVP */,
@@ -185,7 +185,7 @@
 				D280C5DC944CEB3312C0E055 /* APIClient.swift in Sources */,
 				C55362DBCD869010413F7ED7 /* AppConfig.swift in Sources */,
 				40A6B6551B5AB299D7BA88F1 /* CourseListView.swift in Sources */,
-				75ECDC4D6ADB3C88F12BEC48 /* PocketMVPApp.swift in Sources */,
+				515DF65185C92FEBD574E31E /* PocketMVPApp.swift in Sources */,
 				3252C06CD9332420FAE7B7CC /* RootView.swift in Sources */,
 				F7FED12DC36721512633D146 /* SectionListView.swift in Sources */,
 				9CE4D7A8D5FA17A7D08AB5CF /* SnapshotModels.swift in Sources */,
