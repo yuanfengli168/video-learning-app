@@ -227,3 +227,36 @@ Return STRICT JSON (no prose, no markdown fence):
 - [ ] Tapping "Mark done" persists, and the last-seen chunk is highlighted on next launch
 - [ ] Commit + tag `pocket-v0.1` on branch `mvp-mobile-pocket-v0.1`
 - [ ] `landing-page/` and any `mvp2-*` work untouched (`git diff main -- landing-page/` empty)
+
+---
+
+## v0.1.1 — Dev auth unlock + data shape fixes (uncommitted-tagged delta)
+
+**Tag:** `pocket-v0.1.1` on `mvp-mobile-pocket-v0.1`
+**Date:** 2026-07-27
+**Diff vs v0.1:** 8 files, +196/-19
+
+### What changed
+- **Backend** — `app/pocket/dev_auth.py`: new `get_current_user_dev_or_real` dependency. When `POCKET_DEV_AUTH=1` env var is set, requests authenticate via `X-Dev-User-Id` header. 401 otherwise. Gated by env var so it can never be enabled in production by accident.
+- **Backend** — `app/pocket/router.py`: pocket routes now use the dev-aware dependency.
+- **Backend** — `app/pocket/sync.py`: transcript parsing now tolerates three real DB shapes (bare JSON list, `{"segments": [...]}` object, list of plain strings). Fixes 500 on the RAG-Class course's Chinese transcript.
+- **iOS** — `AppConfig.devUserId`: hardcoded Firebase UID the sim uses.
+- **iOS** — `APIClient.applyDevAuth`: injects `X-Dev-User-Id` on every request.
+- **iOS** — `APIClient` date decoder: more permissive (naive ISO, fractional ISO, SQLite-native).
+
+### Tests
+- NEW `tests/test_pocket_dev_auth.py` (3 tests): dev header works, no header 401s, per-user data isolation.
+- Updated `test_pocket_sync.py` + `test_pocket_tutor.py` fixtures to override the same dependency function the router uses.
+- **27/27 tests green** (was 24 in v0.1).
+
+### Why v0.1.1 exists separately
+v0.1 was a clean vertical slice but couldn't be smoke-tested with real data because the iOS sim had no auth mechanism. v0.1.1 adds the **dev-only** auth bypass so we can verify the full data path on the sim, with zero risk of accidental production use (env var gate). v0.2 will replace this with real Firebase auth.
+
+### Verified end-to-end (post v0.1.1)
+- iOS sim → `https://localhost:8443/m/snapshot` with `X-Dev-User-Id: ltLtLQzr3nOr2hQKdeTxYnIOYYN2`
+- Returns 2 courses: "RAG - Class" (Mashibing, July 21) and "Test1"
+- iOS app renders both in the course list with section/video counts
+- mkcert-issued cert trusted by simulator (via `xcrun simctl keychain add-root-cert`)
+
+### Security note
+The `X-Dev-User-Id` header is **only honored when `POCKET_DEV_AUTH=1`**. Without that env var set, the same header is ignored and the request 401s. Production deployments must never set this env var.
