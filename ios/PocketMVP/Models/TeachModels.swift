@@ -32,6 +32,7 @@ struct Chunk: Codable, Identifiable, Hashable {
     let endTs: Double
     let durationLabel: DurationLabel
     let conceptTitle: String
+    let transcriptQuote: String
     let teachText: String
     let checkQuestion: String
 
@@ -42,6 +43,7 @@ struct Chunk: Codable, Identifiable, Hashable {
         case endTs = "end_ts"
         case durationLabel = "duration_label"
         case conceptTitle = "concept_title"
+        case transcriptQuote = "transcript_quote"
         case teachText = "teach_text"
         case checkQuestion = "check_question"
     }
@@ -102,5 +104,148 @@ struct ProgressSnapshot: Codable {
         case chunksDone = "chunks_done"
         case lastSeenChunk = "last_seen_chunk"
         case lastSeenAt = "last_seen_at"
+    }
+}
+
+// MARK: - Real teaching (v0.1.3): typed answers + AI feedback + favorites
+
+/// What the AI grader can say about the student's answer.
+/// (Mirrors `app.pocket.tutor.VERDICT_*`.)
+enum AIVerdict: String, Codable {
+    case gotIt = "got_it"
+    case partial
+    case missed
+
+    var displayName: String {
+        switch self {
+        case .gotIt:   return "Got it"
+        case .partial: return "Partially"
+        case .missed:  return "Missed"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .gotIt:   return "checkmark.circle.fill"
+        case .partial: return "minus.circle.fill"
+        case .missed:  return "xmark.circle.fill"
+        }
+    }
+}
+
+/// Request body for POST /m/chunk/{id}/feedback — grade a single answer.
+struct FeedbackRequest: Codable {
+    let userAnswer: String
+
+    enum CodingKeys: String, CodingKey {
+        case userAnswer = "user_answer"
+    }
+}
+
+/// Response body for POST /m/chunk/{id}/feedback.
+struct FeedbackResponse: Codable {
+    let chunkId: String
+    let verdict: AIVerdict
+    let explanation: String
+
+    enum CodingKeys: String, CodingKey {
+        case chunkId = "chunk_id"
+        case verdict, explanation
+    }
+}
+
+/// Request body for POST /m/chunk/{id}/done — combined "mark done + save answer + (optionally) favorite".
+struct MarkDoneWithAnswerRequest: Codable {
+    let userAnswer: String
+    let isFavorite: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case userAnswer = "user_answer"
+        case isFavorite = "is_favorite"
+    }
+}
+
+/// Response body for POST /m/chunk/{id}/favorite.
+struct FavoriteToggleResponse: Codable {
+    let chunkId: String
+    let isFavorite: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case chunkId = "chunk_id"
+        case isFavorite = "is_favorite"
+    }
+}
+
+/// One progress row used in the per-video progress detail view.
+/// Captures what the student typed + the last AI verdict so the iOS
+/// app can render "your answers" without re-querying Ollama.
+struct ProgressDetailItem: Codable, Identifiable, Hashable {
+    let chunkId: String
+    let chunkIndex: Int
+    let conceptTitle: String
+    let isDone: Bool
+    let userAnswer: String
+    let isFavorite: Bool
+    let lastAIVerdict: String
+    let lastAIExplanation: String
+
+    var id: String { chunkId }
+
+    enum CodingKeys: String, CodingKey {
+        case chunkId = "chunk_id"
+        case chunkIndex = "chunk_index"
+        case conceptTitle = "concept_title"
+        case isDone = "is_done"
+        case userAnswer = "user_answer"
+        case isFavorite = "is_favorite"
+        case lastAIVerdict = "last_ai_verdict"
+        case lastAIExplanation = "last_ai_explanation"
+    }
+
+    var verdictEnum: AIVerdict? {
+        AIVerdict(rawValue: lastAIVerdict)
+    }
+}
+
+/// Response for GET /m/progress/{video_id}/detail.
+struct ProgressDetailResponse: Codable {
+    let videoId: String
+    let items: [ProgressDetailItem]
+
+    enum CodingKeys: String, CodingKey {
+        case videoId = "video_id"
+        case items
+    }
+}
+
+/// One favorite chunk in GET /m/favorites/{video_id}.
+struct FavoriteChunk: Codable, Identifiable, Hashable {
+    let chunkId: String
+    let chunkIndex: Int
+    let conceptTitle: String
+    let transcriptQuote: String
+    let userAnswer: String
+    let lastAIVerdict: String
+
+    var id: String { chunkId }
+
+    enum CodingKeys: String, CodingKey {
+        case chunkId = "chunk_id"
+        case chunkIndex = "chunk_index"
+        case conceptTitle = "concept_title"
+        case transcriptQuote = "transcript_quote"
+        case userAnswer = "user_answer"
+        case lastAIVerdict = "last_ai_verdict"
+    }
+}
+
+/// Response for GET /m/favorites/{video_id}.
+struct FavoritesResponse: Codable {
+    let videoId: String
+    let favorites: [FavoriteChunk]
+
+    enum CodingKeys: String, CodingKey {
+        case videoId = "video_id"
+        case favorites
     }
 }

@@ -31,14 +31,29 @@ log = logging.getLogger(__name__)
 # ── Prompt template ────────────────────────────────────────────
 
 SYSTEM_PROMPT = (
-    "You are a patient tutor. Teach the following video to a busy adult who only "
-    "has fragmented time slots (2 min, 5 min, 25 min). Split the video into teachable "
-    "chunks, each ending in a check-for-understanding moment. Use ONLY the materials "
-    "provided — do not invent facts. Cite no external sources. If the materials are "
-    "insufficient for a chunk, skip it rather than guess."
+    "You are a patient, expert teacher. The student has NEVER watched this video. "
+    "You will split the video into teachable chunks. For each chunk, write a "
+    "self-contained mini-lesson that teaches the actual content of that portion of "
+    "the video — NOT a teaser, NOT a summary, NOT a '30-second version'. The student "
+    "should be able to learn the material from your lesson alone, without ever "
+    "watching the source video.\n\n"
+    "Rules you must follow:\n"
+    "1. Use ONLY the materials provided. Do not invent facts, names, numbers, or "
+    "examples. If a chunk's source material is too thin to teach, set "
+    "teach_text to a single sentence explaining the gap and skip the check question.\n"
+    "2. Quote 1 to 2 short lines from the transcript per chunk (use the 'transcript_quote' "
+    "field). The quote must be a verbatim substring of the provided transcript. This lets "
+    "the student verify your lesson against the source.\n"
+    "3. The check question must be answerable from THIS chunk's teach_text alone. "
+    "Never ask about something the student has no way of knowing from your lesson.\n"
+    "4. teach_text must be a full lesson (3-6 sentences), not a one-liner. Use plain "
+    "language, give examples if the materials have them, and explain WHY not just WHAT.\n"
+    "5. Citation/source discipline: only say things present in the transcript, summary, "
+    "quiz, flashcards, or mindmap. If you would be tempted to say something not in the "
+    "materials, don't say it."
 )
 
-USER_TEMPLATE = """Transcript:
+USER_TEMPLATE = """Transcript (the full video, with [seconds] timestamps):
 {transcript}
 
 Materials (use ONLY these — do not invent):
@@ -47,14 +62,23 @@ Materials (use ONLY these — do not invent):
 - Flashcards: {flashcards}
 - Mindmap: {mindmap}
 
+The student will read your chunks in order. For each chunk:
+- focus on the time range you specify in start_ts/end_ts
+- but you have the FULL transcript above as context so each chunk can reference
+  what came before naturally
+- teach_text should be a mini-lesson, not a teaser
+- transcript_quote must be a VERBATIM substring of the transcript (look it up
+  in the [seconds] text above and copy it exactly, including the [seconds] prefix)
+
 Return STRICT JSON (no prose, no markdown fence, no commentary):
 [{{
   "start_ts": <seconds, float>,
   "end_ts":   <seconds, float>,
   "duration_label": "2min" | "5min" | "25min",
   "concept_title":   "<= 8 words",
-  "teach_text":      "<= 80 words, plain text, no markdown",
-  "check_question":  "<= 30 words"
+  "transcript_quote": "<= 30 words, VERBATIM from the transcript, including [seconds] prefix>",
+  "teach_text":      "3-6 sentences. A mini-lesson, not a teaser.",
+  "check_question":  "<= 30 words, answerable from teach_text alone"
 }}]
 """
 
@@ -178,8 +202,7 @@ def _coerce_chunk(raw: dict[str, Any], index: int) -> dict[str, Any]:
         "start_ts": float(raw.get("start_ts", 0.0)),
         "end_ts": float(raw.get("end_ts", 0.0)),
         "duration_label": label,
-        "concept_title": str(raw.get("concept_title", ""))[:255],
-        "teach_text": str(raw.get("teach_text", "")),
+        "concept_title": str(raw.get("concept_title", ""))[:255],        "transcript_quote": str(raw.get("transcript_quote", ""))[:500],        "teach_text": str(raw.get("teach_text", "")),
         "check_question": str(raw.get("check_question", "")),
     }
 
@@ -224,3 +247,160 @@ def generate_chunks(
         used_fallback=used_fallback,
         elapsed_s=time.monotonic() - start,
     )
+
+
+# ── Grading (v0.1.3) ─────────────────────────────────────
+
+# Verdict taxonomy — the only three values the AI is allowed to return.
+# Single source of truth for both single + batch grading endpoints.
+VERDICT_GOT_IT = "got_it"
+VERDICT_PARTIAL = "partial"
+VERDICT_MISSED = "missed"
+VALID_VERDICTS = {VERDICT_GOT_IT, VERDICT_PARTIAL, VERDICT_MISSED}
+
+
+GRADING_SYSTEM_PROMPT = (
+    "You are a fair, concise teacher grading a student's answer. "
+    "Compare the student's answer to the canonical answer (which is what the "
+    "video actually taught). Return a verdict and a 1-2 sentence explanation.\n\n"
+    "Verdicts (return EXACTLY one of these three strings, no synonyms):\n"
+    '  - "got_it":   student captured the key idea(s) of the canonical answer\n'
+    '  - "partial":  student got the gist but missed a key part\n'
+    '  - "missed":   student is wrong or off-topic\n\n'
+    "Explanation: 1-2 sentences, plain language, no markdown. Be specific about "
+    "what was right and what was missing. No hedging, no apologies, no 'great "
+    "question' filler. If the student wrote nothing, return verdict=missed with "
+    "explanation='No answer provided.'\n"
+    "NEVER invent information not in the canonical answer. If the canonical "
+    "answer itself is thin, say so honestly in the explanation."
+)
+
+
+GRADING_USER_TEMPLATE = """Canonical answer (what the video actually said):
+{canonical}
+
+Student's answer:
+{user}
+
+Return STRICT JSON (no prose, no markdown fence):
+{{
+  "verdict": "got_it" | "partial" | "missed",
+  "explanation": "<= 2 sentences"
+}}
+"""
+
+
+def _call_ollama_grading(prompt: str) -> dict:
+    """One Ollama call for grading. Returns parsed JSON dict."""
+    url = f"{_ollama_url()}/api/generate"
+    payload = {
+        "model": _ollama_model(),
+        "prompt": prompt,
+        "system": GRADING_SYSTEM_PROMPT,
+        "stream": False,
+        "options": {
+            "temperature": 0.1,    # very low — grading should be deterministic
+            "num_predict": 256,    # short — we only need verdict + 1-2 sentences
+        },
+    }
+    with httpx.Client(timeout=60.0) as client:
+        r = client.post(url, json=payload)
+        r.raise_for_status()
+        data = r.json()
+    text = data.get("response", "").strip()
+    # Strip markdown fence if present
+    if text.startswith("```"):
+        first_nl = text.find("\n")
+        if first_nl != -1:
+            text = text[first_nl + 1 :]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def grade_single(user_answer: str, canonical_answer: str) -> dict:
+    """Grade one student answer. Returns {verdict, explanation} or {error}."""
+    prompt = GRADING_USER_TEMPLATE.format(
+        canonical=canonical_answer or "(no canonical answer provided)",
+        user=user_answer or "",
+    )
+    try:
+        out = _call_ollama_grading(prompt)
+        verdict = str(out.get("verdict", "")).strip().lower()
+        if verdict not in VALID_VERDICTS:
+            verdict = VERDICT_MISSED
+        explanation = str(out.get("explanation", "")).strip()[:500]
+        return {"verdict": verdict, "explanation": explanation}
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e), "verdict": VERDICT_MISSED, "explanation": "Grading failed."}
+
+
+def grade_batch(items: list[dict]) -> list[dict]:
+    """Grade multiple (user, canonical) pairs in one Ollama call.
+
+    items: [{"user_answer": str, "canonical_answer": str}, ...]
+    returns: list of {"verdict", "explanation"} aligned with input.
+    """
+    # Build a single prompt with a numbered list
+    parts = []
+    for i, it in enumerate(items):
+        parts.append(
+            f"[{i}]\nCanonical: {it.get('canonical_answer', '') or '(none)'}\n"
+            f"Student:   {it.get('user_answer', '')}\n"
+        )
+    user_prompt = (
+        "Grade each of the following student answers. Return STRICT JSON array, "
+        "one verdict object per student, IN THE SAME ORDER.\n\n"
+        + "\n".join(parts) + "\n\n"
+        "Return:\n"
+        '[{"verdict": "got_it"|"partial"|"missed", "explanation": "<= 2 sentences"}, ...]'
+    )
+    try:
+        out_text = _call_ollama_grading(user_prompt)
+        # _call_ollama_grading returns a dict for single; for batch we need raw text
+        # Re-fetch raw response for batch — the helper above parses single only.
+        url = f"{_ollama_url()}/api/generate"
+        payload = {
+            "model": _ollama_model(),
+            "prompt": user_prompt,
+            "system": GRADING_SYSTEM_PROMPT,
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 1024},
+        }
+        with httpx.Client(timeout=120.0) as client:
+            r = client.post(url, json=payload)
+            r.raise_for_status()
+            raw = r.json().get("response", "").strip()
+        # Strip fence
+        if raw.startswith("```"):
+            first_nl = raw.find("\n")
+            if first_nl != -1:
+                raw = raw[first_nl + 1 :]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+        # Find JSON array
+        try:
+            arr = json.loads(raw)
+        except json.JSONDecodeError:
+            start = raw.find("[")
+            end = raw.rfind("]")
+            arr = json.loads(raw[start:end + 1]) if (start != -1 and end != -1) else []
+        # Align results with input length
+        results = []
+        for i in range(len(items)):
+            if i < len(arr) and isinstance(arr[i], dict):
+                v = str(arr[i].get("verdict", "")).strip().lower()
+                if v not in VALID_VERDICTS:
+                    v = VERDICT_MISSED
+                e = str(arr[i].get("explanation", "")).strip()[:500]
+                results.append({"verdict": v, "explanation": e})
+            else:
+                results.append({"verdict": VERDICT_MISSED, "explanation": "Grading failed for this item."})
+        return results
+    except Exception as e:  # noqa: BLE001
+        return [{"verdict": VERDICT_MISSED, "explanation": f"Batch grading failed: {e}"} for _ in items]

@@ -66,6 +66,7 @@ class ChunkOut(BaseModel):
     end_ts: float
     duration_label: DurationLabel
     concept_title: str
+    transcript_quote: str = ""
     teach_text: str
     check_question: str
 
@@ -95,3 +96,86 @@ class ProgressOut(BaseModel):
     chunks_done: list[int] = Field(default_factory=list)
     last_seen_chunk: int | None = None
     last_seen_at: datetime | None = None
+
+
+# ── v0.1.3: grading + favorites + typed answers ─────────────
+
+# Verdict for AI grading of a student's answer
+class FeedbackRequest(BaseModel):
+    user_answer: str = ""
+    canonical_answer: str = ""
+
+
+class FeedbackResponse(BaseModel):
+    chunk_id: str | None = None
+    verdict: Literal["got_it", "partial", "missed"]
+    explanation: str
+
+
+class BatchFeedbackItem(BaseModel):
+    chunk_id: str
+    user_answer: str = ""
+    canonical_answer: str = ""
+
+
+class BatchFeedbackRequest(BaseModel):
+    items: list[BatchFeedbackItem]
+
+
+class BatchFeedbackResponse(BaseModel):
+    verdicts: list[FeedbackResponse]
+
+
+class MarkDoneWithAnswerRequest(BaseModel):
+    """Body for /m/chunk/{id}/done that also persists typed answer + favorite."""
+    user_answer: str = ""
+    is_favorite: bool | None = None  # None = don't change, True/False = set
+
+
+class FavoriteToggleResponse(BaseModel):
+    chunk_id: str
+    is_favorite: bool
+
+
+class FavoritesOut(BaseModel):
+    """Per-video favorited chunks (rich). Returned by GET /m/favorites/{video_id}.
+
+    Each item carries the chunk concept title, the verbatim transcript quote,
+    the student's typed answer, and the last AI verdict so the iOS
+    Favorites screen can render standalone cards without re-querying.
+    """
+    video_id: str
+    favorites: list["FavoriteItemOut"] = Field(default_factory=list)
+
+
+class FavoriteItemOut(BaseModel):
+    chunk_id: str
+    chunk_index: int
+    concept_title: str
+    transcript_quote: str = ""
+    user_answer: str = ""
+    last_ai_verdict: str = ""
+    last_ai_explanation: str = ""
+
+
+class ProgressDetailOut(BaseModel):
+    """Extended progress (v0.1.3): per-chunk rich detail.
+
+    Returned by GET /m/progress/{video_id}/detail. Each item is one chunk
+    with the student's typed answer, favorite flag, and the last AI
+    verdict + explanation so the iOS app can render the "Review my
+    answers" screen with a single round trip.
+    """
+    video_id: str
+    items: list["ProgressDetailItemOut"] = Field(default_factory=list)
+
+
+class ProgressDetailItemOut(BaseModel):
+    chunk_id: str
+    chunk_index: int
+    concept_title: str
+    is_done: bool
+    user_answer: str = ""
+    is_favorite: bool = False
+    last_ai_verdict: str = ""
+    last_ai_explanation: str = ""

@@ -60,6 +60,28 @@ struct VideoDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .padding()
+
+            // Secondary actions: review answers + see favorites
+            HStack(spacing: 8) {
+                NavigationLink(destination: ReviewMyAnswersView(video: video)) {
+                    Label("Review answers", systemImage: "list.bullet.rectangle")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color(.tertiarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                NavigationLink(destination: FavoritesView(video: video)) {
+                    Label("Favorites", systemImage: "heart")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color(.tertiarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 12)
         }
         .navigationTitle(video.title)
         .navigationBarTitleDisplayMode(.inline)

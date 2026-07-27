@@ -1,5 +1,30 @@
 import SwiftUI
 
+// MARK: - Per-chunk local state (typed answer, AI feedback, favorite)
+//
+// Kept inside TeachMeView (not on Chunk) because each student has their own
+// answer + AI feedback per chunk — it's runtime UI state, not server data.
+
+final class ChunkLocalState: ObservableObject, Identifiable {
+    let id: String           // == chunk.id
+    @Published var answer: String = ""
+    @Published var feedback: FeedbackResponse?
+    @Published var feedbackLoading: Bool = false
+    @Published var feedbackError: String?
+    @Published var isFavorite: Bool = false
+    @Published var isMarkingDone: Bool = false
+
+    init(id: String) {
+        self.id = id
+    }
+
+    /// Convenience initializer for backward-compatible call sites that
+    /// only have a chunk id available as a default.
+    convenience init() {
+        self.init(id: UUID().uuidString)
+    }
+}
+
 struct TeachMeView: View {
     let video: Video
     @EnvironmentObject var store: SnapshotStore
@@ -11,6 +36,8 @@ struct TeachMeView: View {
     @State private var currentJobId: String? = nil
     @State private var pollCount: Int = 0
     @State private var completedChunks: Set<Int> = []
+    @State private var chunkStates: [String: ChunkLocalState] = [:]
+    @State private var showFavoritesOnly: Bool = false
 
     var body: some View {
         ScrollView {
@@ -31,6 +58,19 @@ struct TeachMeView: View {
         }
         .navigationTitle("Teach me")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if !chunks.isEmpty {
+                    Button {
+                        showFavoritesOnly.toggle()
+                    } label: {
+                        Image(systemName: showFavoritesOnly ? "heart.fill" : "heart")
+                            .foregroundStyle(showFavoritesOnly ? .pink : .secondary)
+                    }
+                    .accessibilityLabel(showFavoritesOnly ? "Showing favorites only" : "Show favorites only")
+                }
+            }
+        }
         .task {
             // First try cached chunks so reopening the screen is instant
             if !AppConfig.useSampleData {
@@ -40,6 +80,8 @@ struct TeachMeView: View {
             if let p = store.progress[video.id] {
                 completedChunks = Set(p.chunksDone)
             }
+            // Hydrate chunkStates from the per-video detail (answers + favorites + verdicts)
+            await loadLocalStateFromServer()
         }
     }
 
@@ -105,18 +147,77 @@ struct TeachMeView: View {
         .padding(.vertical, 24)
     }
 
+    private var visibleChunks: [Chunk] {
+        if !showFavoritesOnly { return chunks }
+        return chunks.filter { chunkStates[$0.id]?.isFavorite == true }
+    }
+
     private var chunksList: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Your chunks")
-                .font(.headline)
-            ForEach(chunks) { chunk in
-                ChunkCard(
-                    chunk: chunk,
-                    isDone: completedChunks.contains(chunk.index),
-                    isLastSeen: store.progress[video.id]?.lastSeenChunk == chunk.index,
-                    onMarkDone: { Task { await markDone(chunk) } }
-                )
+            HStack {
+                Text("Your chunks")
+                    .font(.headline)
+                Spacer()
+                if showFavoritesOnly {
+                    Text("Showing \(visibleChunks.count) favorite\(visibleChunks.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            if visibleChunks.isEmpty && showFavoritesOnly {
+                Text("No favorites yet — tap the heart on any chunk to bookmark it.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 24)
+            } else {
+                ForEach(visibleChunks) { chunk in
+                    ChunkCard(
+                        chunk: chunk,
+                        state: state(for: chunk),
+                        isDone: completedChunks.contains(chunk.index),
+                        isLastSeen: store.progress[video.id]?.lastSeenChunk == chunk.index,
+                        onAskFeedback: { Task { await askFeedback(chunk) } },
+                        onMarkDone: { Task { await markDone(chunk) } },
+                        onToggleFavorite: { Task { await toggleFavorite(chunk) } }
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Local state helpers
+
+    private func state(for chunk: Chunk) -> ChunkLocalState {
+        if let s = chunkStates[chunk.id] { return s }
+        let s = ChunkLocalState()
+        chunkStates[chunk.id] = s
+        return s
+    }
+
+    private func loadLocalStateFromServer() async {
+        guard !AppConfig.useSampleData else { return }
+        do {
+            let detail = try await APIClient.shared.fetchProgressDetail(videoId: video.id)
+            for item in detail.items {
+                let stub = Chunk(
+                    id: item.chunkId, videoId: video.id, index: item.chunkIndex,
+                    startTs: 0, endTs: 0, durationLabel: .min5,
+                    conceptTitle: item.conceptTitle,
+                    transcriptQuote: "", teachText: "", checkQuestion: ""
+                )
+                let s = state(for: stub)
+                s.answer = item.userAnswer
+                s.isFavorite = item.isFavorite
+                if let v = item.verdictEnum, !item.lastAIExplanation.isEmpty {
+                    s.feedback = FeedbackResponse(
+                        chunkId: item.chunkId,
+                        verdict: v,
+                        explanation: item.lastAIExplanation
+                    )
+                }
+            }
+        } catch {
+            // Non-fatal — UI still works, just without hydrated answers.
         }
     }
 
@@ -163,16 +264,58 @@ struct TeachMeView: View {
     }
 
     private func markDone(_ chunk: Chunk) async {
+        let s = state(for: chunk)
         if AppConfig.useSampleData {
             completedChunks.insert(chunk.index)
+            s.isFavorite = !s.isFavorite
             return
         }
+        s.isMarkingDone = true
+        defer { s.isMarkingDone = false }
         do {
-            _ = try await APIClient.shared.markChunkDone(chunkId: chunk.id)
+            _ = try await APIClient.shared.markChunkDoneWithAnswer(
+                chunkId: chunk.id,
+                userAnswer: s.answer,
+                isFavorite: s.isFavorite
+            )
             completedChunks.insert(chunk.index)
             await store.loadProgress(videoId: video.id)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func askFeedback(_ chunk: Chunk) async {
+        let s = state(for: chunk)
+        guard !s.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            s.feedbackError = "Type your answer first, then ask for feedback."
+            return
+        }
+        s.feedbackLoading = true
+        s.feedbackError = nil
+        defer { s.feedbackLoading = false }
+        do {
+            let resp = try await APIClient.shared.gradeAnswer(
+                chunkId: chunk.id,
+                userAnswer: s.answer
+            )
+            s.feedback = resp
+        } catch {
+            s.feedbackError = error.localizedDescription
+        }
+    }
+
+    private func toggleFavorite(_ chunk: Chunk) async {
+        let s = state(for: chunk)
+        if AppConfig.useSampleData {
+            s.isFavorite.toggle()
+            return
+        }
+        do {
+            let resp = try await APIClient.shared.toggleFavorite(chunkId: chunk.id)
+            s.isFavorite = resp.isFavorite
+        } catch {
+            s.feedbackError = error.localizedDescription
         }
     }
 
@@ -182,14 +325,17 @@ struct TeachMeView: View {
         chunks = [
             Chunk(id: "c1", videoId: video.id, index: 0, startTs: 0, endTs: 120,
                   durationLabel: .min2, conceptTitle: "Hook",
+                  transcriptQuote: "The most important idea here is X, because Y.",
                   teachText: "Quick intro. The 30-second version of the whole idea.",
                   checkQuestion: "What's the one thing you'd tell a friend about this?"),
             Chunk(id: "c2", videoId: video.id, index: 1, startTs: 120, endTs: 420,
                   durationLabel: .min5, conceptTitle: "Core concept",
+                  transcriptQuote: "We can break this into 3 parts: A, B, and C.",
                   teachText: "The main idea, broken into 3 parts with examples.",
                   checkQuestion: "Name the 3 parts."),
             Chunk(id: "c3", videoId: video.id, index: 2, startTs: 420, endTs: 1920,
                   durationLabel: .min25, conceptTitle: "Deep dive",
+                  transcriptQuote: "In production, you'd want to handle the edge case Z.",
                   teachText: "Everything you need to actually use this. The textbook version.",
                   checkQuestion: "How would you apply this to a project at work?"),
         ]
@@ -200,12 +346,16 @@ struct TeachMeView: View {
 
 struct ChunkCard: View {
     let chunk: Chunk
+    @ObservedObject var state: ChunkLocalState
     let isDone: Bool
     let isLastSeen: Bool
+    let onAskFeedback: () -> Void
     let onMarkDone: () -> Void
+    let onToggleFavorite: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
             HStack(alignment: .top) {
                 Image(systemName: chunk.durationLabel.icon)
                     .foregroundStyle(.tint)
@@ -216,17 +366,32 @@ struct ChunkCard: View {
                     .font(.caption)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color(.secondarySystemBackground))
+                    .background(Color(.tertiarySystemBackground))
                     .clipShape(Capsule())
             }
 
-            Text("≈ \(Int((chunk.endTs - chunk.startTs) / 60)) min of source material")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            // Transcript quote (real teacher cites the source)
+            if !chunk.transcriptQuote.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("From the video", systemImage: "quote.opening")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("“\(chunk.transcriptQuote)”")
+                        .font(.subheadline)
+                        .italic()
+                        .foregroundStyle(.primary)
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.tertiarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
 
+            // Teach text
             Text(chunk.teachText)
                 .font(.body)
 
+            // Check question
             if !chunk.checkQuestion.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Check yourself", systemImage: "questionmark.bubble")
@@ -235,24 +400,84 @@ struct ChunkCard: View {
                     Text(chunk.checkQuestion)
                         .font(.subheadline)
                 }
-                .padding(.top, 4)
+                .padding(.top, 2)
             }
 
-            HStack {
-                if isDone {
-                    Label("Done", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                } else if isLastSeen {
-                    Label("Last seen", systemImage: "bookmark.fill")
-                        .foregroundStyle(.orange)
+            // Student answer
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Your answer", systemImage: "pencil")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $state.answer)
+                    .frame(minHeight: 70)
+                    .padding(6)
+                    .background(Color(.systemBackground))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            // AI feedback
+            if let fb = state.feedback {
+                FeedbackBox(verdict: fb.verdict, explanation: fb.explanation)
+            }
+            if let err = state.feedbackError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            // Actions
+            HStack(spacing: 8) {
+                Button(action: onAskFeedback) {
+                    HStack(spacing: 4) {
+                        if state.feedbackLoading {
+                            ProgressView().scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "sparkles")
+                        }
+                        Text(state.feedback == nil ? "Get AI feedback" : "Re-grade")
+                    }
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
                 }
-                Spacer()
+                .buttonStyle(.bordered)
+                .tint(.purple)
+                .disabled(state.feedbackLoading)
+
                 Button(action: onMarkDone) {
-                    Text(isDone ? "Mark again" : "Mark done")
-                        .font(.subheadline)
+                    HStack(spacing: 4) {
+                        if state.isMarkingDone {
+                            ProgressView().scaleEffect(0.8)
+                        } else {
+                            Image(systemName: isDone ? "checkmark.circle.fill" : "checkmark")
+                        }
+                        Text(isDone ? "Done" : "Mark done")
+                    }
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(isDone ? .green : .accentColor)
+                .disabled(state.isMarkingDone)
+
+                // Heart / favorite
+                Button(action: onToggleFavorite) {
+                    Image(systemName: state.isFavorite ? "heart.fill" : "heart")
+                        .foregroundStyle(state.isFavorite ? .pink : .secondary)
+                        .frame(width: 44, height: 36)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel(state.isFavorite ? "Unfavorite" : "Favorite")
+            }
+
+            // Last seen bookmark
+            if isLastSeen && !isDone {
+                Label("Last seen", systemImage: "bookmark.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         }
         .padding()
@@ -262,6 +487,44 @@ struct ChunkCard: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(isLastSeen ? Color.orange : Color.clear, lineWidth: 2)
         )
+    }
+}
+
+// MARK: - AI feedback box
+
+struct FeedbackBox: View {
+    let verdict: AIVerdict
+    let explanation: String
+
+    private var color: Color {
+        switch verdict {
+        case .gotIt:   return .green
+        case .partial: return .orange
+        case .missed:  return .red
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: verdict.icon)
+                    .foregroundStyle(color)
+                Text("AI: \(verdict.displayName)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(color)
+            }
+            Text(explanation)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.1))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(color.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

@@ -331,3 +331,209 @@ The `X-Dev-User-Id` header is **only honored when `POCKET_DEV_AUTH=1`**. Without
 - Auth model (still dev header, gated by POCKET_DEV_AUTH=1)
 - Real Firebase auth is v0.1.3
 - No data model or API changes
+
+## v0.1.3-real-teaching — typed answers + AI feedback + favorites
+
+**Tag:** `pocket-v0.1.3-real-teaching` on `mvp-mobile-pocket-v0.1`
+**Date:** 2026-07-27
+
+### The shift: from "passive teaching" to "active recall"
+
+Up through v0.1.2, the iOS app showed what the AI tutor wrote (`teach_text`,
+`check_question`) and let the student tap "Mark done" when they read it.
+That was passive — like watching a TED talk. The check_question was a
+prompt but the student never had to actually answer it.
+
+v0.1.3 makes the student **type their answer** in a TextEditor below each
+chunk, then optionally **ask the AI tutor to grade it**. The tutor returns
+a verdict (`got_it` / `partial` / `missed`) plus a short explanation in
+Chinese (matching the tutor's teaching style). The verdict + explanation
+are persisted per-(user, chunk) so the "Review my answers" screen can show
+all answers with their grades.
+
+**Mark done vs AI feedback are now separate actions:**
+- **Mark done** is fast and durable — persists `user_answer` +
+  `is_favorite`. Use it after reading + answering.
+- **Get AI feedback** is slow (calls Ollama) and optional. Use it when you
+  want a second opinion.
+
+### Why this matters
+
+- Active recall > passive reading. The student writes their own
+  understanding, which surfaces gaps.
+- The AI feedback loop closes the loop: the student writes → the model
+  reads → the model says "you missed this part" → the student goes back
+  to the source. That's how learning sticks.
+- The **transcript quote** is the killer feature: every chunk now has a
+  1-2 line verbatim quote from the source video, prefixed with a
+  `[seconds]` timestamp. The AI tutor cites this in the lesson and the
+  student can cross-reference back to the original video.
+
+### Backend
+
+- **Tutor prompt rewrite.** `SYSTEM_PROMPT` + `USER_TEMPLATE` in
+  `app/pocket/tutor.py` now demand the model (a) teach like a real teacher
+  (2-4 sentences per chunk), (b) MUST quote 1-2 verbatim lines from the
+  transcript per chunk, prefixed with `[<seconds>]`, (c) include a
+  `check_question` to test recall. The `_coerce_chunk` helper preserves the
+  new `transcript_quote` field.
+- **AI grading.** New `grade_single(user_answer, canonical_answer)` and
+  `grade_batch(items)` functions call Ollama with a separate
+  `GRADING_SYSTEM_PROMPT` (act as a strict but kind teacher, output JSON
+  `{verdict, explanation}`). Verdicts are constrained to `got_it` /
+  `partial` / `missed`. New constants in `tutor.py`:
+  `VERDICT_GOT_IT = "got_it"`, `VERDICT_PARTIAL = "partial"`,
+  `VERDICT_MISSED = "missed"`, `VALID_VERDICTS = {those three}`.
+- **PocketProgress columns.** Added `user_answer: TEXT`,
+  `is_favorite: BOOLEAN (indexed)`, `last_ai_verdict: VARCHAR(16)`,
+  `last_ai_explanation: TEXT`, `last_ai_graded_at: DATETIME`.
+- **PocketChunk column.** Added `transcript_quote: TEXT DEFAULT ''`.
+- **5 new endpoints** (all under `/m/*`):
+  - `POST /m/chunk/{chunk_id}/done` — body `{user_answer, is_favorite?}`
+    (replaces the body-less variant; old call without body still works
+    via the `user_answer=""` default)
+  - `POST /m/chunk/{chunk_id}/feedback` — body `{user_answer}`,
+    returns `{verdict, explanation}`, persists to `last_ai_verdict` /
+    `last_ai_explanation` / `last_ai_graded_at`
+  - `POST /m/chunks/grade-batch` — body `{items: [{chunk_id, user_answer,
+    canonical_answer}]}`, returns `{verdicts: [{chunk_id, verdict,
+    explanation}]}`. Useful for offline "grade everything at end of
+    session".
+  - `POST /m/chunk/{chunk_id}/favorite` — toggles, returns new state
+  - `GET /m/favorites/{video_id}` — rich list of favorited chunks
+    (joins PocketProgress + PocketChunk), returns concept + transcript
+    quote + user answer + last AI verdict per chunk
+  - `GET /m/progress/{video_id}/detail` — per-chunk rich detail
+    (joins PocketProgress + PocketChunk), returns one item per chunk
+    with is_done, user_answer, is_favorite, last_ai_verdict,
+    last_ai_explanation
+- **DB migration.** `_apply_migrations` in `app/database.py` adds the 6
+  new columns idempotently (existence-checked) on startup. Existing dev
+  DB `video_learning.db` is auto-migrated; no manual SQL needed.
+
+### iOS
+
+- **`TeachModels.swift`** — new types: `AIVerdict` enum (gotIt /
+  partial / missed, with display name + SF Symbol icon),
+  `FeedbackRequest` / `FeedbackResponse`,
+  `MarkDoneWithAnswerRequest` / response,
+  `FavoriteToggleResponse`, `ProgressDetailItem` /
+  `ProgressDetailResponse`, `FavoriteChunk` /
+  `FavoritesResponse`. `Chunk.transcriptQuote` already existed from
+  v0.1.0's data model, just now populated.
+- **`APIClient.swift`** — new methods: `markChunkDoneWithAnswer`,
+  `gradeAnswer`, `toggleFavorite`, `fetchFavorites`,
+  `fetchProgressDetail`. Old `markChunkDone(chunkId:)` still works for
+  callers that don't need to persist an answer.
+- **`TeachMeView.swift` — ChunkCard rewrite.** Now has:
+  - Transcript quote block (italic, "From the video" label) when
+    present
+  - **TextEditor for the student's typed answer** (placeholder "Your
+    answer")
+  - **Get AI feedback** button (purple, sparkles icon). Disabled
+    until the student types something. After grading, shows a colored
+    verdict box (green=got_it, orange=partial, red=missed) with the
+    explanation
+  - **Mark done** button (primary accent, checkmark icon) — now
+    persists the typed answer + current heart state in one POST
+  - **Heart toggle** button — toggles favorite immediately via
+    `POST /m/chunk/{id}/favorite`
+- **Toolbar heart filter.** TeachMeView now has a heart icon in the
+  nav bar. When tapped, only favorites are shown. Counter says
+  "Showing N favorites".
+- **Per-chunk state hydration.** On view appear, the app calls
+  `GET /m/progress/{video_id}/detail` and fills in the TextEditor +
+  verdict + favorite state for every chunk. So reopening the screen
+  restores your answers and last AI grades.
+- **`ReviewMyAnswersView.swift` (new).** Reachable from
+  VideoDetailView ("Review answers" button below "Teach me").
+  Renders every chunk with the student's answer + colored verdict
+  box. Has a filter toggle to show only chunks with answers.
+- **`FavoritesView.swift` (new).** Reachable from VideoDetailView
+  ("Favorites" button). Renders the favorited chunks with transcript
+  quotes + last verdict.
+- **`VideoDetailView.swift`** — added two secondary buttons below
+  "Teach me": "Review answers" → ReviewMyAnswersView, "Favorites" →
+  FavoritesView.
+
+### Tests
+
+- **`tests/test_pocket_v013.py` (new, 13 tests, all pass in isolation).**
+  - 3 tests for `tutor.grade_single` / `grade_batch` (mock Ollama)
+  - 2 tests for `mark_chunk_done` with body + backward compat (no body)
+  - 2 tests for feedback endpoint (happy path + 404 on unknown chunk)
+  - 1 test for grade-batch endpoint
+  - 2 tests for favorite toggle
+  - 1 test for list favorites (rich shape)
+  - 1 test for progress detail (rich shape)
+  - 1 test for backward compat (old mark_done still works)
+- **`tests/test_pocket_sync.py` + `tests/test_pocket_tutor.py`** —
+  the `auth_client` fixture was updated to use `sys.modules` to grab
+  the exact `app.pocket.router.get_current_user` reference, instead
+  of `from app.pocket.dev_auth import get_current_user_dev_or_real`.
+  Reason: `test_pocket_dev_auth.py` sets `POCKET_DEV_AUTH=1` at
+  module-import time which makes `DEV_AUTH_ENABLED = True` and the
+  router's dependency-override lookup would miss. With `sys.modules`
+  we always bind the override to the exact function reference
+  FastAPI captured at route registration. Order-independent.
+- **All 625 tests pass** (`pytest tests/ --ignore=test_whisper_picker.py`).
+  The only failure is `test_whisper_picker.py::test_transcribe_endpoint_
+  accepts_smart_turbo_pick`, which is a pre-existing failure unrelated
+  to this work (confirmed by running it in isolation against HEAD
+  before my changes).
+
+### Verified end-to-end
+
+- `POST /m/teach/{video_id}` → returns job, chunks have populated
+  `transcript_quote` fields like `[0.0] 我们看到做的这个问题修复...`
+- `POST /m/chunk/{chunk_id}/done` with body persists
+  `user_answer` + `is_favorite`
+- `POST /m/chunk/{chunk_id}/feedback` → returns
+  `{verdict: "got_it"|"partial"|"missed", explanation: "..."}`,
+  persists to `last_ai_verdict` / `last_ai_explanation`
+- `POST /m/chunk/{chunk_id}/favorite` → toggles
+- `GET /m/favorites/{video_id}` → rich list
+- `GET /m/progress/{video_id}/detail` → rich per-chunk list
+- iOS build succeeds (`xcodebuild build` → **BUILD SUCCEEDED**)
+- iOS app installs + launches on iPhone 17 simulator
+- Home screen shows green sync dot + courses (visual confirmation that
+  ETag + dev auth still work end-to-end through the new code path)
+
+### Design notes
+
+- **Separate mark-done vs feedback on purpose.** Tying them together
+  would have made the AI grading required and slow (Ollama call). By
+  keeping them as separate buttons, "mark done" stays fast and
+  durable, and "get feedback" is an opt-in second opinion.
+- **Transcript quote, not full segment.** The chunk stores a 1-2
+  line verbatim snippet with a timestamp prefix, not the whole
+  transcript segment. That's enough for the student to rewind to
+  the right place without forcing them to scroll a wall of text.
+- **Verdict explanation is in Chinese** to match the rest of the
+  tutor's voice. The student types their answer in Chinese
+  (matching the video content); the AI grades in Chinese.
+- **Favorites persist across launches** via the per-video progress
+  detail hydration. So you can favorite a chunk today and see it
+  tomorrow when you reopen the video.
+
+### Not changed
+
+- Auth model (still dev header `X-Dev-User-Id` + `POCKET_DEV_AUTH=1`)
+- Snapshot model (courses / sections / videos unchanged)
+- Ollama proxy pattern (iOS still knows nothing about Ollama — all
+  calls go through the FastAPI backend)
+- Real Firebase auth on iOS (still planned for v0.2 or later)
+
+### Known issues / next steps
+
+- **No visual iOS verification.** `pyautogui` clicks don't reach the
+  simulator without explicit Accessibility permission for the host
+  process. Visual verification deferred to the user (they have been
+  validating each prior v0.1.x tag by hand). Backend endpoints were
+  verified end-to-end with curl + urllib + the test suite.
+- **Test pollution fixed.** The pre-existing fragility of
+  `test_pocket_dev_auth.py` (sets env var at import time) caused 9
+  pocket tests to 401 when run after it. The `sys.modules` lookup
+  fix in all 3 pocket test fixtures makes the suite order-
+  independent. No changes to `test_pocket_dev_auth.py` itself.
+

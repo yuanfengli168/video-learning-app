@@ -112,6 +112,51 @@ final class APIClient {
         return try await post(url: url, body: Optional<String>.none, as: ChunkDone.self)
     }
 
+    /// POST /m/chunk/{chunk_id}/done — with body (v0.1.3: typed answer + favorite).
+    /// Use this when the student typed an answer or tapped the heart.
+    func markChunkDoneWithAnswer(
+        chunkId: String,
+        userAnswer: String,
+        isFavorite: Bool? = nil
+    ) async throws -> ChunkDone {
+        let url = AppConfig.baseURL.appendingPathComponent("/m/chunk/\(chunkId)/done")
+        let body = MarkDoneWithAnswerRequest(
+            userAnswer: userAnswer,
+            isFavorite: isFavorite
+        )
+        return try await post(url: url, body: body, as: ChunkDone.self)
+    }
+
+    /// POST /m/chunk/{chunk_id}/feedback — grade the student's answer via Ollama.
+    /// This is the "real teaching" endpoint: returns got_it / partial / missed +
+    /// a short explanation the student can read.
+    func gradeAnswer(
+        chunkId: String,
+        userAnswer: String
+    ) async throws -> FeedbackResponse {
+        let url = AppConfig.baseURL.appendingPathComponent("/m/chunk/\(chunkId)/feedback")
+        let body = FeedbackRequest(userAnswer: userAnswer)
+        return try await post(url: url, body: body, as: FeedbackResponse.self)
+    }
+
+    /// POST /m/chunk/{chunk_id}/favorite — toggle the heart. Returns new state.
+    func toggleFavorite(chunkId: String) async throws -> FavoriteToggleResponse {
+        let url = AppConfig.baseURL.appendingPathComponent("/m/chunk/\(chunkId)/favorite")
+        return try await post(url: url, body: Optional<String>.none, as: FavoriteToggleResponse.self)
+    }
+
+    /// GET /m/favorites/{video_id} — list the favorited chunks for a video.
+    func fetchFavorites(videoId: String) async throws -> FavoritesResponse {
+        let url = AppConfig.baseURL.appendingPathComponent("/m/favorites/\(videoId)")
+        return try await get(url: url, as: FavoritesResponse.self)
+    }
+
+    /// GET /m/progress/{video_id}/detail — full progress with student answers + AI verdicts.
+    func fetchProgressDetail(videoId: String) async throws -> ProgressDetailResponse {
+        let url = AppConfig.baseURL.appendingPathComponent("/m/progress/\(videoId)/detail")
+        return try await get(url: url, as: ProgressDetailResponse.self)
+    }
+
     /// GET /m/progress/{video_id}
     func fetchProgress(videoId: String) async throws -> ProgressSnapshot {
         let url = AppConfig.baseURL.appendingPathComponent("/m/progress/\(videoId)")

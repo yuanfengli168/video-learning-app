@@ -8,7 +8,7 @@ PocketProgress — per-(user, video) chunk completion state.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -50,6 +50,7 @@ class PocketChunk(Base):
     end_ts: Mapped[float] = mapped_column(Float, nullable=False)
     duration_label: Mapped[str] = mapped_column(String(8), nullable=False)  # "2min"|"5min"|"25min"
     concept_title: Mapped[str] = mapped_column(String(255), nullable=False)
+    transcript_quote: Mapped[str] = mapped_column(Text, default="")
     teach_text: Mapped[str] = mapped_column(Text, nullable=False)
     check_question: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -76,3 +77,10 @@ class PocketProgress(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+    # v0.1.3: phone now persists the user's typed answer + favorite state
+    # + the most recent AI verdict. All phone-writable, never affects source.
+    user_answer: Mapped[str] = mapped_column(Text, default="")
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    last_ai_verdict: Mapped[str] = mapped_column(String(16), default="")  # "got_it" | "partial" | "missed"
+    last_ai_explanation: Mapped[str] = mapped_column(Text, default="")
+    last_ai_graded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

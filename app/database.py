@@ -193,6 +193,43 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "status",
         "ALTER TABLE plugin_runs ADD COLUMN status VARCHAR(20) DEFAULT 'done'",
     ),
+    # Pocket v0.1.3 — real teaching UX: typed answers, AI feedback,
+    # favorites. PocketProgress gains the student's answer text, the
+    # favorite flag (indexed), and the last AI grading snapshot so
+    # the iOS app can render the verdict + explanation without
+    # re-querying Ollama. PocketChunk gets a transcript quote the
+    # teacher (Ollama) must cite in its lesson so the student can
+    # cross-reference back to the source video.
+    (
+        "pocket_progress",
+        "user_answer",
+        "ALTER TABLE pocket_progress ADD COLUMN user_answer TEXT DEFAULT ''",
+    ),
+    (
+        "pocket_progress",
+        "is_favorite",
+        "ALTER TABLE pocket_progress ADD COLUMN is_favorite BOOLEAN DEFAULT 0",
+    ),
+    (
+        "pocket_progress",
+        "last_ai_verdict",
+        "ALTER TABLE pocket_progress ADD COLUMN last_ai_verdict VARCHAR(16) DEFAULT ''",
+    ),
+    (
+        "pocket_progress",
+        "last_ai_explanation",
+        "ALTER TABLE pocket_progress ADD COLUMN last_ai_explanation TEXT DEFAULT ''",
+    ),
+    (
+        "pocket_progress",
+        "last_ai_graded_at",
+        "ALTER TABLE pocket_progress ADD COLUMN last_ai_graded_at DATETIME",
+    ),
+    (
+        "pocket_chunks",
+        "transcript_quote",
+        "ALTER TABLE pocket_chunks ADD COLUMN transcript_quote TEXT DEFAULT ''",
+    ),
 ]
 
 

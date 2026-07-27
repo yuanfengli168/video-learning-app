@@ -20,13 +20,18 @@ from app.models import Asset, Course, Section, Video
 def auth_client(db_session):
     """TestClient with the pocket router's auth dependency mocked.
 
-    The pocket router uses `get_current_user_dev_or_real` (imported as
-    `get_current_user` in router.py), so we override that exact function
-    object — not the original `get_current_user` from app.auth.dependencies.
+    The router module (`app.pocket.router`) imports
+    `get_current_user_dev_or_real as get_current_user` at load time. We
+    go through sys.modules to grab the actual module and bind the override
+    to that exact function reference, so FastAPI's dep override lookup
+    matches regardless of test ordering or env var state.
     """
+    import sys
+    pocket_router_module = sys.modules["app.pocket.router"]
+    dep_callable = pocket_router_module.get_current_user
+
     app.dependency_overrides.clear()
-    from app.pocket.dev_auth import get_current_user_dev_or_real
-    app.dependency_overrides[get_current_user_dev_or_real] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
+    app.dependency_overrides[dep_callable] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
     try:
         with TestClient(app) as client:
             yield client

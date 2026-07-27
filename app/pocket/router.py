@@ -11,7 +11,9 @@ Endpoints (all require an authenticated user, same as the rest of the app):
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from datetime import datetime
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,12 +21,22 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user  # noqa: F401  (kept for future use)
 from app.database import get_db
 from app.models import Video
-from app.pocket import jobs, sync
+from app.pocket import jobs, sync, tutor
 from app.pocket.dev_auth import get_current_user_dev_or_real as get_current_user
 from app.pocket.models import PocketChunk, PocketProgress
 from app.pocket.schemas import (
+    BatchFeedbackRequest,
+    BatchFeedbackResponse,
     ChunkDoneOut,
     ChunkOut,
+    FavoriteToggleResponse,
+    FavoritesOut,
+    FavoriteItemOut,
+    FeedbackRequest,
+    FeedbackResponse,
+    MarkDoneWithAnswerRequest,
+    ProgressDetailOut,
+    ProgressDetailItemOut,
     ProgressOut,
     SnapshotOut,
     TeachJobCreated,
@@ -136,45 +148,6 @@ def get_cached_chunks(
 
 # ── /m/chunk/{id}/done ─────────────────────────────────────────
 
-@router.post("/chunk/{chunk_id}/done", response_model=ChunkDoneOut)
-def mark_chunk_done(
-    chunk_id: str,
-    user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict:
-    """Mark a chunk complete. Idempotent."""
-    chunk = db.execute(
-        select(PocketChunk).where(PocketChunk.id == chunk_id)
-    ).scalar_one_or_none()
-    if chunk is None:
-        raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
-
-    existing = db.execute(
-        select(PocketProgress).where(
-            PocketProgress.user_id == user["uid"],
-            PocketProgress.video_id == chunk.video_id,
-            PocketProgress.chunk_index == chunk.index,
-        )
-    ).scalar_one_or_none()
-
-    if existing is None:
-        db.add(PocketProgress(
-            user_id=user["uid"],
-            video_id=chunk.video_id,
-            chunk_index=chunk.index,
-        ))
-    # else: already done — idempotent no-op
-    db.commit()
-
-    return {
-        "chunk_id": chunk.id,
-        "video_id": chunk.video_id,
-        "completed": True,
-    }
-
-
-# ── /m/progress/{video_id} ─────────────────────────────────────
-
 @router.get("/progress/{video_id}", response_model=ProgressOut)
 def get_progress(
     video_id: str,
@@ -204,6 +177,310 @@ def get_progress(
     }
 
 
+# ── v0.1.3: extended progress with answers + favorites + verdicts ──
+
+@router.get("/progress/{video_id}/detail", response_model=ProgressDetailOut)
+def get_progress_detail(
+    video_id: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Extended progress for the Teach-me UI: typed answers, favorites, AI verdicts.
+
+    Joins PocketProgress with PocketChunk so the iOS Review-my-answers
+    screen can render one rich card per chunk with concept title,
+    student answer, and last AI verdict + explanation.
+    """
+    rows = db.execute(
+        select(PocketProgress, PocketChunk)
+        .join(
+            PocketChunk,
+            (PocketChunk.video_id == PocketProgress.video_id)
+            & (PocketChunk.index == PocketProgress.chunk_index)
+        )
+        .where(
+            PocketProgress.user_id == user["uid"],
+            PocketProgress.video_id == video_id,
+        )
+        .order_by(PocketProgress.chunk_index)
+    ).all()
+
+    if not rows:
+        return ProgressDetailOut(video_id=video_id, items=[]).model_dump()
+
+    items = [
+        ProgressDetailItemOut(
+            chunk_id=chunk.id,
+            chunk_index=progress.chunk_index,
+            concept_title=chunk.concept_title,
+            is_done=progress.completed_at is not None,
+            user_answer=progress.user_answer or "",
+            is_favorite=bool(progress.is_favorite),
+            last_ai_verdict=progress.last_ai_verdict or "",
+            last_ai_explanation=progress.last_ai_explanation or "",
+        )
+        for progress, chunk in rows
+    ]
+    return ProgressDetailOut(video_id=video_id, items=items).model_dump()
+
+
+# ── v0.1.3: mark-done with typed answer + favorite toggle ─────
+
+@router.post("/chunk/{chunk_id}/done", response_model=ChunkDoneOut)
+def mark_chunk_done(
+    chunk_id: str,
+    body: MarkDoneWithAnswerRequest | None = Body(default=None),
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Mark a chunk complete. Idempotent. Optionally persists user_answer + is_favorite."""
+    chunk = db.execute(
+        select(PocketChunk).where(PocketChunk.id == chunk_id)
+    ).scalar_one_or_none()
+    if chunk is None:
+        raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
+
+    existing = db.execute(
+        select(PocketProgress).where(
+            PocketProgress.user_id == user["uid"],
+            PocketProgress.video_id == chunk.video_id,
+            PocketProgress.chunk_index == chunk.index,
+        )
+    ).scalar_one_or_none()
+
+    now = datetime.utcnow()
+    if existing is None:
+        existing = PocketProgress(
+            user_id=user["uid"],
+            video_id=chunk.video_id,
+            chunk_index=chunk.index,
+        )
+        db.add(existing)
+    if body and body.user_answer:
+        existing.user_answer = body.user_answer
+    if body and body.is_favorite is not None:
+        existing.is_favorite = body.is_favorite
+    existing.last_seen_at = now
+    db.commit()
+    db.refresh(existing)
+
+    return {
+        "chunk_id": chunk.id,
+        "video_id": chunk.video_id,
+        "completed": True,
+    }
+
+
+# ── v0.1.3: AI grading (single + batch) ─────────────────────
+
+@router.post("/chunk/{chunk_id}/feedback", response_model=FeedbackResponse)
+def chunk_feedback(
+    chunk_id: str,
+    body: FeedbackRequest,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Grade the student's typed answer against the canonical chunk answer.
+
+    Persists the verdict + explanation to PocketProgress.
+    """
+    chunk = db.execute(
+        select(PocketChunk).where(PocketChunk.id == chunk_id)
+    ).scalar_one_or_none()
+    if chunk is None:
+        raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
+
+    result = tutor.grade_single(
+        user_answer=body.user_answer,
+        canonical_answer=body.canonical_answer or chunk.check_question,
+    )
+
+    existing = db.execute(
+        select(PocketProgress).where(
+            PocketProgress.user_id == user["uid"],
+            PocketProgress.video_id == chunk.video_id,
+            PocketProgress.chunk_index == chunk.index,
+        )
+    ).scalar_one_or_none()
+    now = datetime.utcnow()
+    if existing is None:
+        existing = PocketProgress(
+            user_id=user["uid"],
+            video_id=chunk.video_id,
+            chunk_index=chunk.index,
+            user_answer=body.user_answer,
+            last_ai_verdict=result["verdict"],
+            last_ai_explanation=result["explanation"],
+            last_ai_graded_at=now,
+        )
+        db.add(existing)
+    else:
+        if body.user_answer:
+            existing.user_answer = body.user_answer
+        existing.last_ai_verdict = result["verdict"]
+        existing.last_ai_explanation = result["explanation"]
+        existing.last_ai_graded_at = now
+        existing.last_seen_at = now
+    db.commit()
+
+    return FeedbackResponse(
+        chunk_id=chunk.id,
+        verdict=result["verdict"],  # type: ignore[arg-type]
+        explanation=result["explanation"],
+    )
+
+
+@router.post("/chunks/grade-batch", response_model=BatchFeedbackResponse)
+def chunks_grade_batch(
+    body: BatchFeedbackRequest,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Grade multiple student answers in one Ollama call (faster for many chunks)."""
+    if not body.items:
+        return BatchFeedbackResponse(verdicts=[]).model_dump()
+
+    chunk_ids = [it.chunk_id for it in body.items]
+    chunks = {
+        c.id: c
+        for c in db.execute(
+            select(PocketChunk).where(PocketChunk.id.in_(chunk_ids))
+        ).scalars().all()
+    }
+
+    items_for_ollama = []
+    for it in body.items:
+        ch = chunks.get(it.chunk_id)
+        items_for_ollama.append({
+            "user_answer": it.user_answer,
+            "canonical_answer": it.canonical_answer or (ch.check_question if ch else ""),
+        })
+
+    results = tutor.grade_batch(items_for_ollama)
+
+    now = datetime.utcnow()
+    for it, result in zip(body.items, results):
+        ch = chunks.get(it.chunk_id)
+        if ch is None:
+            continue
+        existing = db.execute(
+            select(PocketProgress).where(
+                PocketProgress.user_id == user["uid"],
+                PocketProgress.video_id == ch.video_id,
+                PocketProgress.chunk_index == ch.index,
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = PocketProgress(
+                user_id=user["uid"],
+                video_id=ch.video_id,
+                chunk_index=ch.index,
+                user_answer=it.user_answer,
+                last_ai_verdict=result["verdict"],
+                last_ai_explanation=result["explanation"],
+                last_ai_graded_at=now,
+            )
+            db.add(existing)
+        else:
+            if it.user_answer:
+                existing.user_answer = it.user_answer
+            existing.last_ai_verdict = result["verdict"]
+            existing.last_ai_explanation = result["explanation"]
+            existing.last_ai_graded_at = now
+            existing.last_seen_at = now
+    db.commit()
+
+    verdicts = []
+    for it, result in zip(body.items, results):
+        verdicts.append(FeedbackResponse(
+            chunk_id=it.chunk_id,
+            verdict=result["verdict"],  # type: ignore[arg-type]
+            explanation=result["explanation"],
+        ))
+    return BatchFeedbackResponse(verdicts=verdicts).model_dump()
+
+
+# ── v0.1.3: favorites ──────────────────────────────────────
+
+@router.post("/chunk/{chunk_id}/favorite", response_model=FavoriteToggleResponse)
+def toggle_favorite(
+    chunk_id: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Toggle favorite on a chunk. Idempotent — calling twice returns to the original state."""
+    chunk = db.execute(
+        select(PocketChunk).where(PocketChunk.id == chunk_id)
+    ).scalar_one_or_none()
+    if chunk is None:
+        raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
+
+    existing = db.execute(
+        select(PocketProgress).where(
+            PocketProgress.user_id == user["uid"],
+            PocketProgress.video_id == chunk.video_id,
+            PocketProgress.chunk_index == chunk.index,
+        )
+    ).scalar_one_or_none()
+    now = datetime.utcnow()
+    if existing is None:
+        existing = PocketProgress(
+            user_id=user["uid"],
+            video_id=chunk.video_id,
+            chunk_index=chunk.index,
+            is_favorite=True,
+            last_seen_at=now,
+        )
+        db.add(existing)
+    else:
+        existing.is_favorite = not existing.is_favorite
+        existing.last_seen_at = now
+    db.commit()
+    db.refresh(existing)
+    return FavoriteToggleResponse(chunk_id=chunk.id, is_favorite=existing.is_favorite)
+
+
+@router.get("/favorites/{video_id}", response_model=FavoritesOut)
+def list_favorites(
+    video_id: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """List the user's favorited chunks for this video (rich).
+
+    Joins PocketProgress (favorite + answer + AI verdict) with PocketChunk
+    (concept + transcript quote) so the iOS Favorites screen can render
+    complete cards with one round trip.
+    """
+    rows = db.execute(
+        select(PocketProgress, PocketChunk)
+        .join(
+            PocketChunk,
+            (PocketChunk.video_id == PocketProgress.video_id)
+            & (PocketChunk.index == PocketProgress.chunk_index)
+        )
+        .where(
+            PocketProgress.user_id == user["uid"],
+            PocketProgress.video_id == video_id,
+            PocketProgress.is_favorite == True,  # noqa: E712
+        )
+        .order_by(PocketProgress.chunk_index)
+    ).all()
+    items = [
+        FavoriteItemOut(
+            chunk_id=chunk.id,
+            chunk_index=progress.chunk_index,
+            concept_title=chunk.concept_title,
+            transcript_quote=chunk.transcript_quote or "",
+            user_answer=progress.user_answer or "",
+            last_ai_verdict=progress.last_ai_verdict or "",
+            last_ai_explanation=progress.last_ai_explanation or "",
+        )
+        for progress, chunk in rows
+    ]
+    return FavoritesOut(video_id=video_id, favorites=items).model_dump()
+
+
 # ── helpers ────────────────────────────────────────────────────
 
 def _chunk_row_to_out(row: PocketChunk) -> dict:
@@ -215,6 +492,7 @@ def _chunk_row_to_out(row: PocketChunk) -> dict:
         "end_ts": row.end_ts,
         "duration_label": row.duration_label,
         "concept_title": row.concept_title,
+        "transcript_quote": row.transcript_quote or "",
         "teach_text": row.teach_text,
         "check_question": row.check_question,
     }

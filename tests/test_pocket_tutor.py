@@ -21,7 +21,7 @@ def test_format_user_prompt_contains_all_materials():
     prompt = tutor._format_user_prompt(
         transcript="T", summary="S", quiz="Q", flashcards="F", mindmap="M"
     )
-    for needle in ("T", "S", "Q", "F", "M", "Transcript:", "Summary:", "Quiz:", "Flashcards:", "Mindmap:"):
+    for needle in ("T", "S", "Q", "F", "M", "Transcript", "Summary:", "Quiz:", "Flashcards:", "Mindmap:"):
         assert needle in prompt, f"missing {needle!r} in prompt"
 
 
@@ -123,9 +123,20 @@ def test_generate_chunks_happy_path():
 
 @pytest.fixture
 def auth_client(db_session):
+    """TestClient with the pocket router's auth dependency mocked.
+
+    Goes through sys.modules to grab the actual `app.pocket.router` module
+    (the `app.pocket` package re-exports the APIRouter instance, not the
+    module) and binds the override to that exact `get_current_user`
+    reference — robust against test ordering pollution from other test
+    files that set POCKET_DEV_AUTH at import time.
+    """
+    import sys
+    pocket_router_module = sys.modules["app.pocket.router"]
+    dep_callable = pocket_router_module.get_current_user
+
     app.dependency_overrides.clear()
-    from app.pocket.dev_auth import get_current_user_dev_or_real
-    app.dependency_overrides[get_current_user_dev_or_real] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
+    app.dependency_overrides[dep_callable] = lambda: {"uid": "test-user-pocket-1", "email": "pocket@test.local"}
     try:
         with TestClient(app) as client:
             yield client
