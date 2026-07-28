@@ -25,5 +25,10 @@ enum FirebaseAppConfig {
     /// Set to `false` after registering com.shoothigh.pocketmvp in
     /// Firebase Console + updating GoogleService-Info.plist with the
     /// real iOS GOOGLE_APP_ID.
+    ///
+    /// Default is `true` because the iOS plist is gitignored (open-source
+    /// repo — see ios/PocketMVP/.gitignore). Each developer downloads
+    /// their own copy from Firebase Console and flips this flag when
+    /// they have it.
     static let skipConfigure: Bool = true
 }
