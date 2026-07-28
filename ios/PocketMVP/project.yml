@@ -6,6 +6,21 @@ options:
   createIntermediateGroups: true
   generateEmptyDirectories: true
 
+# Firebase iOS SDK + GoogleSignIn via Swift Package Manager.
+# Mirrors the web app's Firebase project (video-learning-app-3cf41) so the
+# same user accounts work on both platforms.
+#
+# FirebaseAuth: email/password + Google + Apple sign-in
+# FirebaseCore: shared Firebase init
+# GoogleSignIn: native Google sign-in UI (vs the web's popup)
+packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: "10.20.0"
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: "7.0.0"
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -26,6 +41,14 @@ targets:
         excludes:
           - "Resources/sample_snapshot.json"
           - "project.yml"
+    dependencies:
+      - package: Firebase
+        product: FirebaseAuth
+      # FirebaseCore is brought in transitively by FirebaseAuth — no need
+      # to depend on it explicitly. (Adding it explicitly caused Xcode
+      # to complain "Missing package product 'FirebaseCore'" because
+      # Xcode resolves it through FirebaseAuth's transitive closure.)
+      - package: GoogleSignIn
     info:
       path: PocketMVP/Info.plist
       properties:
@@ -34,13 +57,24 @@ targets:
         CFBundleVersion: "1"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
+          UISupportsMultipleScenes: false
         # ATS: localhost is allowlisted by default; we add this so even
         # a real iPhone (future) on the LAN can hit the dev Mac without
         # the NSAllowsArbitraryLoads hack. In v0.2 we'll add a proper
         # mkcert root CA installed on the device.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Google Sign-In: URL scheme that GoogleSignIn uses to bounce
+        # back to the app after the OAuth flow. Must match the
+        # REVERSED_CLIENT_ID value from Firebase Console → GoogleService-Info.plist.
+        # For the dev project (video-learning-app-3cf41) the reversed
+        # client id is: com.googleusercontent.apps.637126854377-...
+        # We register the standard scheme here; GIDSignIn dynamically
+        # constructs the full URL on first launch.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.google.GIDURLScheme
+            CFBundleURLSchemes:
+              - com.shoothigh.pocketmvp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.shoothigh.pocketmvp

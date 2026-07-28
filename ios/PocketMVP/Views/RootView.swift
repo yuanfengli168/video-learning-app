@@ -1,21 +1,45 @@
 import SwiftUI
 
 /// Top-level navigation. iOS pattern: NavigationStack with course list as root.
+///
+/// v0.1.3-real-teaching v0.2 (Firebase auth on iOS): when no user is
+/// signed in, show LoginView instead of the course list. Once signed in,
+/// FirebaseAuthService.currentUser is non-nil and we swap to the real
+/// app shell.
 struct RootView: View {
     @EnvironmentObject var store: SnapshotStore
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var auth = FirebaseAuthService.shared
 
     var body: some View {
-        NavigationStack {
-            CourseListView()
-                .navigationTitle("Pocket")
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        SyncStatusDot()
-                    }
+        Group {
+            if auth.currentUser == nil {
+                NavigationStack {
+                    LoginView()
                 }
+            } else {
+                NavigationStack {
+                    CourseListView()
+                        .navigationTitle("Pocket")
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                HStack(spacing: 8) {
+                                    SyncStatusDot()
+                                    Menu {
+                                        Button("Sign out", role: .destructive) {
+                                            auth.signOut()
+                                        }
+                                    } label: {
+                                        Image(systemName: "person.crop.circle")
+                                    }
+                                }
+                            }
+                        }
+                }
+            }
         }
         .task {
+            auth.configureIfNeeded()
             await store.loadInitial()
         }
         .onChange(of: scenePhase) { _, newPhase in

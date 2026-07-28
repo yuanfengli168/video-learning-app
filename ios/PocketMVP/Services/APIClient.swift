@@ -207,11 +207,25 @@ final class APIClient {
         return try decoder.decode(T.self, from: data)
     }
 
-    /// Apply the dev-only `X-Dev-User-Id` header if configured. The backend
-    /// only honors it when started with `POCKET_DEV_AUTH=1`, so this is
-    /// safe to leave set in source — production backends will just 401
-    /// instead of trusting the header.
+    /// Apply authentication headers.
+    ///
+    /// Order of precedence (later wins):
+    /// 1. Dev-only `X-Dev-User-Id` header (for offline UI dev when the
+    ///    backend is started with `POCKET_DEV_AUTH=1`).
+    /// 2. Firebase Bearer token (when the user has signed in). The
+    ///    `Bearer <idToken>` form is what `app.auth.dependencies.
+    ///    get_current_user` verifies on the backend via Firebase Admin
+    ///    SDK.
+    ///
+    /// If a Firebase token is available, we send it and IGNORE the dev
+    /// header — real auth takes precedence so the user sees their own
+    /// data, not the dev UID's.
     private static func applyDevAuth(to req: inout URLRequest) {
+        if let token = KeychainTokenStore.shared.loadToken() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            // Real Firebase auth wins — don't also send the dev header.
+            return
+        }
         if let uid = AppConfig.devUserId {
             req.setValue(uid, forHTTPHeaderField: "X-Dev-User-Id")
         }
