@@ -612,3 +612,128 @@ Re-graded chunk 3 ("游戏对弈功能测试") with the user's actual answer:
   match."
 }
 ```
+
+## v0.1.3 hardening — graceful Ollama-down error handling
+
+**Commit:** `fa4c3e0` on `mvp-mobile-pocket-v0.1` + `01b7626` (iOS)
+**Date:** 2026-07-28
+
+### The problem
+
+Before this change, if Ollama was down (not running, network down,
+returned 5xx), the iOS app would:
+- Tap "Get AI feedback" → spinner forever or a 500 error in the log
+- No way for the UI to know Ollama is offline (the only signal was
+  "I tapped the button and nothing happened")
+- Hard to debug: the student doesn't know if it's their Wi-Fi, the
+  Mac, or Ollama
+
+### Backend
+
+- **`OllamaUnavailableError`** in `app/pocket/tutor.py`. Subclasses
+  nothing; just carries `kind` (`unreachable` | `timeout` | `http_5xx`)
+  + `detail`.
+- **`_call_ollama` + `_call_ollama_grading`** now convert
+  `httpx.ConnectError` and `httpx.TimeoutException` to
+  `OllamaUnavailableError`, and treat HTTP ≥ 400 as a 5xx-class
+  failure. Anything else still propagates as the raw exception so we
+  don't accidentally hide real bugs.
+- **`is_ollama_available(timeout_s=2.0)`** — lightweight ping to
+  `/api/tags`. Returns `(ok: bool, detail: str)`. Cheap (~50ms locally).
+- **`/api/health` now reports Ollama status** under `.ollama`:
+  ```json
+  {
+    "status": "ok",
+    "app": "Video Learning App",
+    "ollama": {
+      "available": false,
+      "detail": "unreachable: [Errno 61] Connection refused",
+      "model": "glm-5.2:cloud"
+    }
+  }
+  ```
+  Always returns 200 (the rest of the app works even if Ollama is down)
+  so load balancers / health checks don't flag it.
+- **`POST /m/chunk/{id}/feedback`** catches `OllamaUnavailableError`
+  and returns 200 with `{verdict: missed, explanation: <kind-specific>,
+  ollama_unavailable: true}`. **Nothing is persisted** to
+  `PocketProgress` — the student can retry once Ollama is back without
+  seeing a stale verdict.
+- **`POST /m/chunks/grade-batch`** returns one fallback dict per input
+  item with the same kind-specific explanation.
+- **`FeedbackResponse`** schema gains `ollama_unavailable: bool = False`
+  (default false so existing clients see no change).
+- **`grade_single`** re-raises `OllamaUnavailableError` instead of
+  swallowing it (the router handles the kind-specific response now).
+
+### iOS
+
+- **`HealthStatus`** struct in `Models/SnapshotResult.swift`. Matches
+  the `/api/health` response.
+- **`APIClient.fetchHealth() async -> HealthStatus?`** — returns nil
+  on any error (network down, server not running, etc.) so the caller
+  treats it as "API unreachable" without crashing.
+- **`OllamaStatusBanner`** (new view). Orange warning card with retry
+  button. Shown at the top of `TeachMeView` when `tutorAvailable == false`.
+- **`TeachMeView`**:
+  - `@State tutorAvailable: Bool?` (nil = not yet checked, true/false
+    after first `/api/health` ping)
+  - `@State tutorDetail: String` (the `.ollama.detail` from the response)
+  - On `.task`: calls `checkTutorStatus()` once. The banner retry button
+    calls it again.
+  - `ChunkCard` gains a `tutorAvailable: Bool?` prop. When false:
+    - "Get AI feedback" button is **disabled** and relabeled to
+      "Tutor offline" with a `wifi.slash` icon
+    - `askFeedback` short-circuits: no network call, ChunkLocalState
+      immediately renders a fallback verdict box with the offline
+      detail
+  - If a feedback response comes back with `ollama_unavailable=true`,
+    `TeachMeView` flips `tutorAvailable = false` and updates the banner
+    mid-session.
+
+### Tests (10 new)
+
+| Test | What |
+|---|---|
+| `test_is_ollama_available_returns_true_when_reachable` | ping OK |
+| `test_is_ollama_available_returns_false_on_connection_refused` | ping → refused |
+| `test_is_ollama_available_returns_false_on_timeout` | ping → timeout |
+| `test_is_ollama_available_returns_false_on_5xx` | ping → 503 |
+| `test_grade_single_raises_OllamaUnavailableError_on_connect_error` | grading → ConnectError → wrapped |
+| `test_grade_single_raises_OllamaUnavailableError_on_timeout` | grading → TimeoutException → wrapped |
+| `test_feedback_endpoint_returns_clean_response_when_ollama_down` | 200 not 500; verdict=missed; ollama_unavailable=true |
+| `test_feedback_endpoint_uses_specific_message_for_timeout` | message says "taking too long" |
+| `test_feedback_endpoint_does_not_persist_when_ollama_down` | no PocketProgress row written |
+| `test_grade_batch_returns_per_item_fallback_on_ollama_down` | one fallback dict per input |
+
+Also fixed one pre-existing test (`test_grade_batch_returns_one_per_input`)
+that was breaking under the new `status_code >= 400` check — added
+`mock_resp.status_code = 200`.
+
+**638/638 tests pass** (was 628).
+
+### Verified end-to-end with Ollama down
+
+```bash
+POCKET_DEV_AUTH=1 OLLAMA_BASE_URL=http://localhost:1 uvicorn app.main:app ...
+```
+
+- `GET /api/health` → 200 with `ollama.available=false`
+- `POST /m/chunk/{id}/feedback` → 200 with `verdict=missed`,
+  `explanation="AI tutor is offline. Make sure Ollama is running..."`,
+  `ollama_unavailable=true`
+- iOS app shows the orange banner + disables the feedback button
+
+### Why we don't persist on Ollama-down
+
+If we persisted `verdict=missed` with the offline explanation, the
+student would see the same "offline" verdict forever (until they
+re-graded). Persisting nothing means: open the app, see the orange
+banner, fix Ollama, tap retry → everything works normally again.
+
+### Not changed
+
+- Tutor's `generate_chunks` (the `/m/teach/{video_id}` endpoint) was
+  already resilient — it catches all exceptions and returns a
+  `TutorResult` with `error=...` and `chunks=[]`, which the iOS app
+  already renders as an error message.
