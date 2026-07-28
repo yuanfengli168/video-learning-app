@@ -323,10 +323,23 @@ def _call_ollama_grading(prompt: str) -> dict:
 
 
 def grade_single(user_answer: str, canonical_answer: str) -> dict:
-    """Grade one student answer. Returns {verdict, explanation} or {error}."""
+    """Grade one student answer. Returns {verdict, explanation} or {error}.
+
+    If the student didn't write anything, short-circuit with `missed` and
+    a clear "no answer" explanation (no need to call Ollama). If Ollama
+    returns an empty explanation for a non-trivial answer, fall back to a
+    verdict-specific stock message so the UI never shows a blank box.
+    """
+    user_clean = (user_answer or "").strip()
+    if not user_clean:
+        return {
+            "verdict": VERDICT_MISSED,
+            "explanation": "No answer provided. Type what you remember, then try again.",
+        }
+
     prompt = GRADING_USER_TEMPLATE.format(
         canonical=canonical_answer or "(no canonical answer provided)",
-        user=user_answer or "",
+        user=user_clean,
     )
     try:
         out = _call_ollama_grading(prompt)
@@ -334,9 +347,21 @@ def grade_single(user_answer: str, canonical_answer: str) -> dict:
         if verdict not in VALID_VERDICTS:
             verdict = VERDICT_MISSED
         explanation = str(out.get("explanation", "")).strip()[:500]
+        if not explanation:
+            # Fallback explanations so the UI never shows a blank box.
+            explanation = _FALLBACK_EXPLANATION.get(verdict, _FALLBACK_EXPLANATION[VERDICT_MISSED])
         return {"verdict": verdict, "explanation": explanation}
     except Exception as e:  # noqa: BLE001
         return {"error": str(e), "verdict": VERDICT_MISSED, "explanation": "Grading failed."}
+
+
+# Fallback explanations used when Ollama returns a verdict but no explanation
+# (or returns an empty string). Keeps the iOS feedback box from showing blank.
+_FALLBACK_EXPLANATION: dict[str, str] = {
+    VERDICT_GOT_IT: "You got it — your answer captures the key idea.",
+    VERDICT_PARTIAL: "Partially — you got the gist but missed a key part. Read the teach text again.",
+    VERDICT_MISSED: "Missed — your answer doesn't match what the video taught. Read the chunk again and try once more.",
+}
 
 
 def grade_batch(items: list[dict]) -> list[dict]:

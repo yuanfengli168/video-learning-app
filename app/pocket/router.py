@@ -283,6 +283,12 @@ def chunk_feedback(
     """Grade the student's typed answer against the canonical chunk answer.
 
     Persists the verdict + explanation to PocketProgress.
+
+    The "canonical answer" is derived from the chunk: we combine the tutor's
+    `teach_text` (the explanation the student was supposed to learn) with
+    the `check_question` (so the grader knows what was being asked). If
+    the caller sent their own canonical_answer in the body (future use),
+    prefer it.
     """
     chunk = db.execute(
         select(PocketChunk).where(PocketChunk.id == chunk_id)
@@ -290,9 +296,20 @@ def chunk_feedback(
     if chunk is None:
         raise HTTPException(status_code=404, detail=f"Chunk {chunk_id} not found")
 
+    if body.canonical_answer:
+        canonical = body.canonical_answer
+    else:
+        # Build a canonical from what's actually in the chunk. teach_text is
+        # the lesson (which contains the answer); check_question frames what
+        # we asked the student. Together they give the grader full context.
+        canonical = (
+            f"Question asked: {chunk.check_question}\n"
+            f"What the tutor said: {chunk.teach_text}"
+        )
+
     result = tutor.grade_single(
         user_answer=body.user_answer,
-        canonical_answer=body.canonical_answer or chunk.check_question,
+        canonical_answer=canonical,
     )
 
     existing = db.execute(

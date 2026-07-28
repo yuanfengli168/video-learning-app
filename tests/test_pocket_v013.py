@@ -61,12 +61,13 @@ def _make_video(db):
     return v
 
 
-def _make_chunk(db, video, index=0, transcript_quote="", check_question="Q?"):
+def _make_chunk(db, video, index=0, transcript_quote="", check_question="Q?",
+                teach_text="A mini-lesson."):
     ch = PocketChunk(
         video_id=video.id, index=index, start_ts=0, end_ts=60,
         duration_label="5min", concept_title="C",
         transcript_quote=transcript_quote,
-        teach_text="A mini-lesson.", check_question=check_question,
+        teach_text=teach_text, check_question=check_question,
     )
     db.add(ch); db.commit(); db.refresh(ch)
     return ch
@@ -185,6 +186,87 @@ def test_feedback_endpoint_grades_and_persists(auth_client, db_session, monkeypa
     assert progress.last_ai_verdict == "partial"
     assert "missed X" in progress.last_ai_explanation
     assert progress.user_answer == "It's about X."
+
+
+def test_feedback_endpoint_falls_back_to_teach_text(auth_client, db_session, monkeypatch):
+    """When caller omits canonical_answer, endpoint derives it from teach_text +
+    check_question so the grader has full context.
+
+    Regression test for v0.1.3 bug where the endpoint was passing the
+    check_question (a question, not an answer) as the canonical_answer,
+    which confused Ollama into returning verdict=missed with empty
+    explanation.
+    """
+    # Capture the prompt that grade_single builds; verify it contains
+    # both the check_question and the teach_text.
+    captured = {"prompt": None}
+
+    def fake_ollama(prompt):
+        captured["prompt"] = prompt
+        return {"verdict": "got_it", "explanation": "Good job."}
+
+    # Patch _call_ollama_grading (not grade_single) so the early-return
+    # for empty answers and the fallback-explanation logic inside
+    # grade_single still run.
+    monkeypatch.setattr(tutor, "_call_ollama_grading", fake_ollama)
+
+    v = _make_video(db_session)
+    ch = _make_chunk(
+        db_session, v,
+        check_question="What was verified?",
+        teach_text="The video verified that AI opponent could play chess.",
+    )
+    # No canonical_answer in body — endpoint must derive from chunk
+    r = auth_client.post(f"/m/chunk/{ch.id}/feedback", json={
+        "user_answer": "AI can play chess.",
+    })
+    assert r.status_code == 200, r.text
+    # The canonical section of the prompt should contain BOTH the
+    # question framing AND the teach text, not just the question.
+    assert captured["prompt"] is not None
+    assert "What was verified?" in captured["prompt"]
+    assert "AI opponent could play chess" in captured["prompt"]
+
+
+def test_feedback_empty_answer_does_not_call_ollama(auth_client, db_session, monkeypatch):
+    """Empty / whitespace-only user_answer short-circuits with a clear
+    'no answer' explanation instead of wasting an Ollama call."""
+    called = {"count": 0}
+
+    def fake_ollama(prompt):
+        called["count"] += 1
+        return {"verdict": "got_it", "explanation": "should not be called"}
+
+    monkeypatch.setattr(tutor, "_call_ollama_grading", fake_ollama)
+
+    v = _make_video(db_session)
+    ch = _make_chunk(db_session, v, check_question="Q?")
+    r = auth_client.post(f"/m/chunk/{ch.id}/feedback", json={"user_answer": "   "})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["verdict"] == "missed"
+    assert "No answer" in body["explanation"]
+    assert called["count"] == 0
+
+
+def test_feedback_empty_ollama_explanation_falls_back(auth_client, db_session, monkeypatch):
+    """If Ollama returns a verdict but no explanation (broken model output),
+    the endpoint substitutes a verdict-specific fallback so the UI never
+    shows a blank feedback box."""
+    def fake_ollama(prompt):
+        # Ollama bug: returns verdict but empty explanation
+        return {"verdict": "partial", "explanation": ""}
+
+    monkeypatch.setattr(tutor, "_call_ollama_grading", fake_ollama)
+
+    v = _make_video(db_session)
+    ch = _make_chunk(db_session, v, check_question="Q?")
+    r = auth_client.post(f"/m/chunk/{ch.id}/feedback", json={"user_answer": "x"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["verdict"] == "partial"
+    assert body["explanation"]  # NOT empty — must have a fallback
+    assert "Partially" in body["explanation"] or "gist" in body["explanation"]
 
 
 def test_feedback_endpoint_404_on_unknown_chunk(auth_client, db_session):
