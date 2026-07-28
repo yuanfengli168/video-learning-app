@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		18F6CB8AE335270C3B7B9C1C /* OllamaStatusBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C76CA05DE22116A724673BE2 /* OllamaStatusBanner.swift */; };
 		3252C06CD9332420FAE7B7CC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4871AC707290FE6227484A0 /* RootView.swift */; };
 		3D9E7CB8E4A607FD82195DC5 /* VideoDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518F63D8F71631B54788E25E /* VideoDetailView.swift */; };
 		3ED7C703931F7700D79AA492 /* SnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBDECA90A2167B222C96A81E /* SnapshotStore.swift */; };
@@ -14,8 +15,8 @@
 		5E7A5654E21889A1AE044A93 /* TeachMeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C737077227DFA3C6D1C5896 /* TeachMeView.swift */; };
 		60293B25A0E9DB9FCEFF9381 /* FavoritesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705492CA166C752993F37524 /* FavoritesView.swift */; };
 		9CE4D7A8D5FA17A7D08AB5CF /* SnapshotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D92C5E7F1D81BE9ACA9EC8C /* SnapshotModels.swift */; };
-		9F8241074311E5E970C6CFD3 /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_CB134161-8A31-4497-A98E-3AF0B39861C5" /* PocketMVPApp.swift */; };
 		A186E18F7157FF2BA68C39D3 /* SyncStatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9519E40D8FCD0FC441AFF52A /* SyncStatusDot.swift */; };
+		A65ACC8F524C03372C56C3B8 /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_DEAD9A41-94F6-4734-8F60-97452E87A373" /* PocketMVPApp.swift */; };
 		BB91DD8E47DA73F0B9AA8B59 /* SnapshotResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0176715A8F2B3F3CA0A22A /* SnapshotResult.swift */; };
 		C55362DBCD869010413F7ED7 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5058F3F9585EEE0F3B1DDEEE /* AppConfig.swift */; };
 		D1CECDC6070BC111C2B1824A /* TeachModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780ADCD27C1D9F02D9C115F0 /* TeachModels.swift */; };
@@ -37,11 +38,12 @@
 		7DB242225C416217BFDAC55E /* PocketMVP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PocketMVP.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9519E40D8FCD0FC441AFF52A /* SyncStatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusDot.swift; sourceTree = "<group>"; };
 		AD0176715A8F2B3F3CA0A22A /* SnapshotResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotResult.swift; sourceTree = "<group>"; };
+		C76CA05DE22116A724673BE2 /* OllamaStatusBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaStatusBanner.swift; sourceTree = "<group>"; };
 		D001608A7C4ED30748A0294D /* ReviewMyAnswersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewMyAnswersView.swift; sourceTree = "<group>"; };
 		D4871AC707290FE6227484A0 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		DBDECA90A2167B222C96A81E /* SnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStore.swift; sourceTree = "<group>"; };
 		F7AAD31248B5DD18FF4E34DC /* CourseListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourseListView.swift; sourceTree = "<group>"; };
-		"TEMP_CB134161-8A31-4497-A98E-3AF0B39861C5" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
+		"TEMP_DEAD9A41-94F6-4734-8F60-97452E87A373" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -96,6 +98,7 @@
 			children = (
 				F7AAD31248B5DD18FF4E34DC /* CourseListView.swift */,
 				705492CA166C752993F37524 /* FavoritesView.swift */,
+				C76CA05DE22116A724673BE2 /* OllamaStatusBanner.swift */,
 				D001608A7C4ED30748A0294D /* ReviewMyAnswersView.swift */,
 				D4871AC707290FE6227484A0 /* RootView.swift */,
 				100FBE34887662D5E8EF6039 /* SectionListView.swift */,
@@ -115,10 +118,10 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		"TEMP_5F2C9444-3429-489C-BB72-F874AB7F1D7C" /* . */ = {
+		"TEMP_574E3703-D3CE-4C23-BACB-AB5BACA15C2A" /* . */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_CB134161-8A31-4497-A98E-3AF0B39861C5" /* PocketMVPApp.swift */,
+				"TEMP_DEAD9A41-94F6-4734-8F60-97452E87A373" /* PocketMVPApp.swift */,
 				60C512AA12E4DA2EEB7CDF42 /* Config */,
 				1524F80D83B4949F19309230 /* Models */,
 				481B24658F7A769C70724E65 /* PocketMVP */,
@@ -192,7 +195,8 @@
 				C55362DBCD869010413F7ED7 /* AppConfig.swift in Sources */,
 				40A6B6551B5AB299D7BA88F1 /* CourseListView.swift in Sources */,
 				60293B25A0E9DB9FCEFF9381 /* FavoritesView.swift in Sources */,
-				9F8241074311E5E970C6CFD3 /* PocketMVPApp.swift in Sources */,
+				18F6CB8AE335270C3B7B9C1C /* OllamaStatusBanner.swift in Sources */,
+				A65ACC8F524C03372C56C3B8 /* PocketMVPApp.swift in Sources */,
 				DDE7137A36FC7123260D3545 /* ReviewMyAnswersView.swift in Sources */,
 				3252C06CD9332420FAE7B7CC /* RootView.swift in Sources */,
 				F7FED12DC36721512633D146 /* SectionListView.swift in Sources */,

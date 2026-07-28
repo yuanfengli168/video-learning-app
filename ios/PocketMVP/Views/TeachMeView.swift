@@ -38,10 +38,22 @@ struct TeachMeView: View {
     @State private var completedChunks: Set<Int> = []
     @State private var chunkStates: [String: ChunkLocalState] = [:]
     @State private var showFavoritesOnly: Bool = false
+    // Ollama availability: nil = not yet checked, true = available, false = offline.
+    @State private var tutorAvailable: Bool? = nil
+    @State private var tutorDetail: String = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                // Tutor offline banner — shown only after we've actually checked.
+                if tutorAvailable == false {
+                    OllamaStatusBanner(
+                        detail: tutorDetail,
+                        onRetry: { Task { await checkTutorStatus() } }
+                    )
+                    .padding(.top, 4)
+                }
+
                 header
 
                 if isLoading {
@@ -82,6 +94,10 @@ struct TeachMeView: View {
             }
             // Hydrate chunkStates from the per-video detail (answers + favorites + verdicts)
             await loadLocalStateFromServer()
+            // Check tutor availability for the offline banner
+            if !AppConfig.useSampleData {
+                await checkTutorStatus()
+            }
         }
     }
 
@@ -176,6 +192,7 @@ struct TeachMeView: View {
                         state: state(for: chunk),
                         isDone: completedChunks.contains(chunk.index),
                         isLastSeen: store.progress[video.id]?.lastSeenChunk == chunk.index,
+                        tutorAvailable: tutorAvailable,
                         onAskFeedback: { Task { await askFeedback(chunk) } },
                         onMarkDone: { Task { await markDone(chunk) } },
                         onToggleFavorite: { Task { await toggleFavorite(chunk) } }
@@ -291,6 +308,16 @@ struct TeachMeView: View {
             s.feedbackError = "Type your answer first, then ask for feedback."
             return
         }
+        // Don't even try when we know Ollama is offline — fail fast with
+        // the banner's message so the student knows why nothing happened.
+        if tutorAvailable == false {
+            s.feedback = FeedbackResponse(
+                chunkId: chunk.id,
+                verdict: .missed,
+                explanation: "AI tutor is offline. \(tutorDetail). Try again in a moment."
+            )
+            return
+        }
         s.feedbackLoading = true
         s.feedbackError = nil
         defer { s.feedbackLoading = false }
@@ -300,6 +327,11 @@ struct TeachMeView: View {
                 userAnswer: s.answer
             )
             s.feedback = resp
+            // If the backend reported ollama_unavailable, refresh status.
+            if resp.ollamaUnavailable == true {
+                tutorAvailable = false
+                tutorDetail = "Backend reported tutor offline"
+            }
         } catch {
             s.feedbackError = error.localizedDescription
         }
@@ -316,6 +348,29 @@ struct TeachMeView: View {
             s.isFavorite = resp.isFavorite
         } catch {
             s.feedbackError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Sample data (offline UI dev)
+
+    private func checkTutorStatus() async {
+        /// Ping /api/health to learn whether Ollama is reachable. Used to
+        /// drive the "AI tutor offline" banner and disable the feedback
+        /// button. A nil response means the entire backend is unreachable
+        /// (network down, server not running) — we treat that the same
+        /// as Ollama being offline so the UI stays consistent.
+        if AppConfig.useSampleData {
+            tutorAvailable = true
+            tutorDetail = "sample data mode"
+            return
+        }
+        let health = await APIClient.shared.fetchHealth()
+        if let h = health {
+            tutorAvailable = h.ollama.available
+            tutorDetail = h.ollama.detail
+        } else {
+            tutorAvailable = false
+            tutorDetail = "Backend unreachable"
         }
     }
 
@@ -349,6 +404,10 @@ struct ChunkCard: View {
     @ObservedObject var state: ChunkLocalState
     let isDone: Bool
     let isLastSeen: Bool
+    /// When false (Ollama offline), the "Get AI feedback" button is
+    /// disabled so the student doesn't waste a network call. The button
+    /// label changes to "Tutor offline" so it's clear why.
+    let tutorAvailable: Bool?
     let onAskFeedback: () -> Void
     let onMarkDone: () -> Void
     let onToggleFavorite: () -> Void
@@ -431,21 +490,26 @@ struct ChunkCard: View {
 
             // Actions
             HStack(spacing: 8) {
+                let tutorOffline = (tutorAvailable == false)
                 Button(action: onAskFeedback) {
                     HStack(spacing: 4) {
                         if state.feedbackLoading {
                             ProgressView().scaleEffect(0.8)
+                        } else if tutorOffline {
+                            Image(systemName: "wifi.slash")
                         } else {
                             Image(systemName: "sparkles")
                         }
-                        Text(state.feedback == nil ? "Get AI feedback" : "Re-grade")
+                        Text(tutorOffline
+                             ? "Tutor offline"
+                             : (state.feedback == nil ? "Get AI feedback" : "Re-grade"))
                     }
                     .font(.subheadline)
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .tint(.purple)
-                .disabled(state.feedbackLoading)
+                .tint(tutorOffline ? .gray : .purple)
+                .disabled(state.feedbackLoading || tutorOffline)
 
                 Button(action: onMarkDone) {
                     HStack(spacing: 4) {

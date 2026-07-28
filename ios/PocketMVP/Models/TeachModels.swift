@@ -147,10 +147,23 @@ struct FeedbackResponse: Codable {
     let chunkId: String
     let verdict: AIVerdict
     let explanation: String
+    /// True when the AI tutor (Ollama) is offline. When true, the
+    /// explanation is a friendly fallback message instead of an AI
+    /// verdict. The iOS UI uses this to refresh the "tutor offline"
+    /// banner and disable the feedback button until Ollama is back.
+    let ollamaUnavailable: Bool?
 
     enum CodingKeys: String, CodingKey {
         case chunkId = "chunk_id"
         case verdict, explanation
+        case ollamaUnavailable = "ollama_unavailable"
+    }
+
+    init(chunkId: String, verdict: AIVerdict, explanation: String, ollamaUnavailable: Bool? = nil) {
+        self.chunkId = chunkId
+        self.verdict = verdict
+        self.explanation = explanation
+        self.ollamaUnavailable = ollamaUnavailable
     }
 }
 

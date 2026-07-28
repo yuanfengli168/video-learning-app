@@ -163,6 +163,24 @@ final class APIClient {
         return try await get(url: url, as: ProgressSnapshot.self)
     }
 
+    /// GET /api/health — used by the iOS app to detect whether the AI
+    /// tutor (Ollama) is reachable. Returns nil on any network error so
+    /// the caller can treat the API as "offline" without crashing.
+    func fetchHealth() async -> HealthStatus? {
+        let url = AppConfig.baseURL.appendingPathComponent("/api/health")
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        Self.applyDevAuth(to: &req)
+        do {
+            let (data, resp) = try await session.data(for: req)
+            try Self.assertOK(resp, data: data)
+            return try decoder.decode(HealthStatus.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Internal
 
     private func get<T: Decodable>(url: URL, as type: T.Type) async throws -> T {
