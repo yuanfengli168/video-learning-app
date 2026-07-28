@@ -110,6 +110,12 @@ class FeedbackResponse(BaseModel):
     chunk_id: str | None = None
     verdict: Literal["got_it", "partial", "missed"]
     explanation: str
+    # v0.1.3 hardening: when the AI tutor (Ollama) is unreachable, the
+    # router returns 200 with verdict=missed + a helpful explanation +
+    # ollama_unavailable=True so the iOS UI can show a "Tutor offline"
+    # banner and disable the button. The student's typed answer is NOT
+    # persisted in this case so they can retry once Ollama is back.
+    ollama_unavailable: bool = False
 
 
 class BatchFeedbackItem(BaseModel):

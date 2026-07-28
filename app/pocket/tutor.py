@@ -23,6 +23,22 @@ from typing import Any
 import httpx
 
 from app.config import settings
+
+
+logger = logging.getLogger(__name__)
+
+
+class OllamaUnavailableError(Exception):
+    """Raised when Ollama can't be reached, times out, or returns a 5xx.
+
+    The router catches this and returns a clean JSON response so the iOS
+    UI shows a helpful message instead of a 500.
+    """
+
+    def __init__(self, kind: str, detail: str = "") -> None:
+        self.kind = kind  # "unreachable" | "timeout" | "http_5xx"
+        self.detail = detail
+        super().__init__(f"Ollama {kind}: {detail}".strip(": "))
 from app.pocket.schemas import ChunkOut
 
 log = logging.getLogger(__name__)
@@ -129,10 +145,37 @@ def _ollama_model() -> str:
     return getattr(settings, "ollama_model", None) or "llama3.1"
 
 
+def is_ollama_available(timeout_s: float = 2.0) -> tuple[bool, str]:
+    """Lightweight ping to Ollama's `/api/tags` endpoint.
+
+    Returns (ok, detail). Used by the iOS app on startup to decide whether
+    to show a "Tutor offline" banner. Cheap (~50ms locally) so safe to
+    call frequently if needed.
+
+    ok=True: Ollama is reachable (any 2xx response counts).
+    ok=False: connection refused / timeout / non-2xx.
+    """
+    url = f"{_ollama_url()}/api/tags"
+    try:
+        with httpx.Client(timeout=timeout_s) as client:
+            r = client.get(url)
+        if r.status_code >= 200 and r.status_code < 300:
+            return True, f"HTTP {r.status_code}"
+        return False, f"HTTP {r.status_code}"
+    except httpx.ConnectError as e:
+        return False, f"unreachable: {e}"
+    except httpx.TimeoutException as e:
+        return False, f"timeout: {e}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"error: {e}"
+
+
 def _call_ollama(prompt: str, timeout_s: float = 120.0) -> str:
     """POST to /api/generate, return the raw text response.
 
     Uses non-streaming mode for simplicity. v0.2 can switch to streaming.
+
+    Raises OllamaUnavailableError on connection failure, timeout, or 5xx.
     """
     url = f"{_ollama_url()}/api/generate"
     payload = {
@@ -145,10 +188,30 @@ def _call_ollama(prompt: str, timeout_s: float = 120.0) -> str:
             "num_predict": 4096,
         },
     }
-    with httpx.Client(timeout=timeout_s) as client:
-        r = client.post(url, json=payload)
-        r.raise_for_status()
+    try:
+        with httpx.Client(timeout=timeout_s) as client:
+            r = client.post(url, json=payload)
+    except httpx.ConnectError as e:
+        logger.warning("Ollama unreachable at %s: %s", url, e)
+        raise OllamaUnavailableError("unreachable", str(e)) from e
+    except httpx.TimeoutException as e:
+        logger.warning("Ollama timed out after %ss: %s", timeout_s, e)
+        raise OllamaUnavailableError("timeout", str(e)) from e
+
+    if r.status_code >= 500:
+        logger.warning("Ollama returned %s: %s", r.status_code, r.text[:200])
+        raise OllamaUnavailableError("http_5xx", f"HTTP {r.status_code}")
+
+    # 4xx (other than our bad prompt) also indicates a problem with Ollama
+    if r.status_code >= 400:
+        logger.warning("Ollama returned %s: %s", r.status_code, r.text[:200])
+        raise OllamaUnavailableError("http_5xx", f"HTTP {r.status_code}")
+
+    try:
         data = r.json()
+    except json.JSONDecodeError as e:
+        raise OllamaUnavailableError("http_5xx", f"non-JSON response: {e}") from e
+
     return data.get("response", "")
 
 
@@ -291,7 +354,11 @@ Return STRICT JSON (no prose, no markdown fence):
 
 
 def _call_ollama_grading(prompt: str) -> dict:
-    """One Ollama call for grading. Returns parsed JSON dict."""
+    """One Ollama call for grading. Returns parsed JSON dict.
+
+    Raises OllamaUnavailableError on connection failure, timeout, or 5xx.
+    Returns {} on parse failure (Ollama reachable but bad output).
+    """
     url = f"{_ollama_url()}/api/generate"
     payload = {
         "model": _ollama_model(),
@@ -303,10 +370,25 @@ def _call_ollama_grading(prompt: str) -> dict:
             "num_predict": 256,    # short — we only need verdict + 1-2 sentences
         },
     }
-    with httpx.Client(timeout=60.0) as client:
-        r = client.post(url, json=payload)
-        r.raise_for_status()
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            r = client.post(url, json=payload)
+    except httpx.ConnectError as e:
+        logger.warning("Ollama unreachable for grading: %s", e)
+        raise OllamaUnavailableError("unreachable", str(e)) from e
+    except httpx.TimeoutException as e:
+        logger.warning("Ollama timed out for grading: %s", e)
+        raise OllamaUnavailableError("timeout", str(e)) from e
+
+    if r.status_code >= 400:
+        logger.warning("Ollama grading returned %s: %s", r.status_code, r.text[:200])
+        raise OllamaUnavailableError("http_5xx", f"HTTP {r.status_code}")
+
+    try:
         data = r.json()
+    except json.JSONDecodeError as e:
+        raise OllamaUnavailableError("http_5xx", f"non-JSON response: {e}") from e
+
     text = data.get("response", "").strip()
     # Strip markdown fence if present
     if text.startswith("```"):
@@ -351,6 +433,10 @@ def grade_single(user_answer: str, canonical_answer: str) -> dict:
             # Fallback explanations so the UI never shows a blank box.
             explanation = _FALLBACK_EXPLANATION.get(verdict, _FALLBACK_EXPLANATION[VERDICT_MISSED])
         return {"verdict": verdict, "explanation": explanation}
+    except OllamaUnavailableError:
+        # Let the router handle this — it returns a 200 with a helpful
+        # explanation + ollama_unavailable=true flag.
+        raise
     except Exception as e:  # noqa: BLE001
         return {"error": str(e), "verdict": VERDICT_MISSED, "explanation": "Grading failed."}
 
@@ -423,9 +509,26 @@ def grade_batch(items: list[dict]) -> list[dict]:
                 if v not in VALID_VERDICTS:
                     v = VERDICT_MISSED
                 e = str(arr[i].get("explanation", "")).strip()[:500]
+                if not e:
+                    e = _FALLBACK_EXPLANATION.get(v, _FALLBACK_EXPLANATION[VERDICT_MISSED])
                 results.append({"verdict": v, "explanation": e})
             else:
                 results.append({"verdict": VERDICT_MISSED, "explanation": "Grading failed for this item."})
         return results
+    except OllamaUnavailableError as e:
+        # Whole batch fails the same way — return the specific message.
+        logger.warning("grade_batch: Ollama %s: %s", e.kind, e.detail)
+        msg = _OLLAMA_DOWN_BATCH_EXPLANATION.get(
+            e.kind,
+            "AI tutor is currently unavailable. Your answers are saved — try again later.",
+        )
+        return [{"verdict": VERDICT_MISSED, "explanation": msg} for _ in items]
     except Exception as e:  # noqa: BLE001
         return [{"verdict": VERDICT_MISSED, "explanation": f"Batch grading failed: {e}"} for _ in items]
+
+
+_OLLAMA_DOWN_BATCH_EXPLANATION: dict[str, str] = {
+    "unreachable": "AI tutor offline. Make sure Ollama is running, then retry.",
+    "timeout":     "AI tutor timed out. Retry in a moment.",
+    "http_5xx":    "AI tutor error. Retry in a moment.",
+}

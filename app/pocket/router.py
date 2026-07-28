@@ -45,8 +45,18 @@ from app.pocket.schemas import (
 
 router = APIRouter(tags=["pocket"])
 
+import logging
+logger = logging.getLogger(__name__)
 
-# ── /m/snapshot ────────────────────────────────────────────────
+
+# Friendly explanations when Ollama is down. Keyed by OllamaUnavailableError.kind
+# so the iOS UI can show a specific message ("Check Ollama is running" vs
+# "Ollama is slow right now").
+_OLLAMA_DOWN_EXPLANATION: dict[str, str] = {
+    "unreachable": "AI tutor is offline. Make sure Ollama is running on your Mac, then try again. Your answer is saved.",
+    "timeout":     "AI tutor is taking too long. Try again in a moment. Your answer is saved.",
+    "http_5xx":    "AI tutor had an error. Try again in a moment. Your answer is saved.",
+}
 
 import hashlib
 
@@ -307,10 +317,28 @@ def chunk_feedback(
             f"What the tutor said: {chunk.teach_text}"
         )
 
-    result = tutor.grade_single(
-        user_answer=body.user_answer,
-        canonical_answer=canonical,
-    )
+    try:
+        result = tutor.grade_single(
+            user_answer=body.user_answer,
+            canonical_answer=canonical,
+        )
+    except tutor.OllamaUnavailableError as e:
+        # Ollama is down / unreachable / 5xx — return a clean response
+        # so the iOS UI can show a helpful message instead of a 500.
+        # Persist nothing; the student can retry later.
+        logger.warning(
+            "chunk_feedback: Ollama %s for chunk %s: %s",
+            e.kind, chunk_id, e.detail,
+        )
+        return FeedbackResponse(
+            chunk_id=chunk_id,
+            verdict=tutor.VERDICT_MISSED,
+            explanation=_OLLAMA_DOWN_EXPLANATION.get(
+                e.kind,
+                "AI tutor is currently unavailable. Your answer is saved — try again in a moment.",
+            ),
+            ollama_unavailable=True,
+        ).model_dump()
 
     existing = db.execute(
         select(PocketProgress).where(

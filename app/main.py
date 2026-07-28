@@ -22,6 +22,7 @@ from app.routers import videos as videos_router
 from app.auth.session import router as session_router
 # MVP: pocket v0.1 — mobile companion sub-app, mounted at /m/*
 from app.pocket import router as pocket_router
+from app.pocket.tutor import is_ollama_available
 
 
 @asynccontextmanager
@@ -168,5 +169,20 @@ app.include_router(pocket_router, prefix="/m")
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok", "app": settings.app_name}
+    """Health check endpoint.
+
+    Always returns 200 if the FastAPI app itself is running. The Ollama
+    status is reported as a nested field — the iOS app reads it to decide
+    whether to show a "Tutor offline" banner. Ollama being down does NOT
+    fail the health check (the rest of the app still works).
+    """
+    ollama_ok, ollama_detail = is_ollama_available()
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "ollama": {
+            "available": ollama_ok,
+            "detail": ollama_detail,
+            "model": settings.ollama_model,
+        },
+    }

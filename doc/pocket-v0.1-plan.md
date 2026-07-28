@@ -537,3 +537,78 @@ all answers with their grades.
   fix in all 3 pocket test fixtures makes the suite order-
   independent. No changes to `test_pocket_dev_auth.py` itself.
 
+
+## v0.1.3 hotfix — AI feedback box is no longer empty
+
+**Commit:** `39413ad` on `mvp-mobile-pocket-v0.1` (still tagged `pocket-v0.1.3-real-teaching`)
+**Date:** 2026-07-28
+
+### Bug
+User typed "Ai fighting function I believe like whether AI can attack
+user on chess etc" for chunk #5 ("游戏对弈功能测试"), tapped "Get AI
+feedback", got back `verdict: missed` with an **empty explanation**. The
+verdict showed but the box body was blank.
+
+Two causes, two fixes.
+
+### Bug 1: endpoint was passing the question, not the answer
+
+`POST /m/chunk/{id}/feedback` was passing `chunk.check_question` as the
+**canonical_answer** for the grader. But `check_question` is a prompt to
+the student (e.g. `"视频最后演示者测试了游戏的什么功能？"`) — not an
+answer. With nothing real to compare against, Ollama returned empty
+strings or unhelpful "missed" verdicts.
+
+**Fix:** when the caller omits `canonical_answer`, build it from the
+chunk as:
+
+```
+Question asked: <check_question>
+What the tutor said: <teach_text>
+```
+
+`teach_text` IS the actual lesson (and therefore the actual answer), so
+the grader now has full context.
+
+### Bug 2: Ollama-empty explanations broke the UI
+
+`tutor.grade_single` returned `{"verdict": ..., "explanation": ""}`
+whenever Ollama produced an empty output. iOS rendered the verdict with
+no body. (Note: `llama3.1` on the dev Mac is broken — returns empty for
+everything. The app config defaults to `glm-5.2:cloud` which works
+fine, but the fallback explanations protect against future model
+regressions too.)
+
+**Fix:** two new behaviors in `grade_single`:
+- **Empty user_answer short-circuits** — don't waste an Ollama call.
+  Returns `"No answer provided. Type what you remember, then try again."`
+- **Empty Ollama explanations get a verdict-specific fallback** — a
+  `_FALLBACK_EXPLANATION` dict per verdict keeps the iOS feedback box
+  from showing blank.
+
+### Tests
+3 new regression tests in `tests/test_pocket_v013.py`:
+- `test_feedback_endpoint_falls_back_to_teach_text` — verifies the
+  derived canonical_answer contains both `check_question` and
+  `teach_text`
+- `test_feedback_empty_answer_does_not_call_ollama` — verifies the
+  short-circuit doesn't waste an Ollama call
+- `test_feedback_empty_ollama_explanation_falls_back` — verifies
+  Ollama-empty explanations get a verdict-specific fallback
+
+**628/628 tests pass** (was 625 before).
+
+### Verified end-to-end
+Re-graded chunk 3 ("游戏对弈功能测试") with the user's actual answer:
+
+```json
+{
+  "verdict": "got_it",
+  "explanation": "The student correctly identified that the final test
+  focused on the AI opponent's fighting functionality, including
+  whether the AI could attack the player's chess pieces. This matches
+  the canonical answer's description of testing AI response,
+  intelligent movement, and capturing operations during an actual
+  match."
+}
+```
