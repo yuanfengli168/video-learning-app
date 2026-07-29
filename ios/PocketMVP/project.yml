@@ -41,6 +41,16 @@ targets:
         excludes:
           - "Resources/sample_snapshot.json"
           - "project.yml"
+          # Xcode build output + SPM bare git clones of package
+          # dependencies. If included, xcodegen recursively scans them
+          # and adds every `hooks/update.sample` Git template file as a
+          # "resource" — and there are MANY of them with identical
+          # filenames, which Xcode rejects as duplicate output files.
+          # v0.2: build/ is a real directory at project root (Xcode's
+          # default CONFIGURATION_BUILD_DIR). SourcePackages/ is where
+          # SPM caches the raw .git dirs of dependencies.
+          - "build/"
+          - "PocketMVP.xcodeproj/"
     dependencies:
       - package: Firebase
         product: FirebaseAuth
@@ -65,16 +75,16 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         # Google Sign-In: URL scheme that GoogleSignIn uses to bounce
-        # back to the app after the OAuth flow. Must match the
-        # REVERSED_CLIENT_ID value from Firebase Console → GoogleService-Info.plist.
-        # For the dev project (video-learning-app-3cf41) the reversed
-        # client id is: com.googleusercontent.apps.637126854377-...
-        # We register the standard scheme here; GIDSignIn dynamically
-        # constructs the full URL on first launch.
+        # back to the app after the OAuth flow. MUST match the
+        # REVERSED_CLIENT_ID value from Firebase Console → GoogleService-Info.plist
+        # (e.g. com.googleusercontent.apps.637126854377-XXXXXXXXX).
+        # If this is wrong, GIDSignIn's OAuth callback fails silently
+        # and the Safari sheet dismisses — looking like a "crash" but
+        # the app just bounces back to LoginView. See LoginView.swift.
         CFBundleURLTypes:
           - CFBundleURLName: com.google.GIDURLScheme
             CFBundleURLSchemes:
-              - com.shoothigh.pocketmvp
+              - com.googleusercontent.apps.637126854377-rs1oqqq74q3r12qs9ifjqamcs4j14thg
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.shoothigh.pocketmvp

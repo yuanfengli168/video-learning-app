@@ -30,5 +30,5 @@ enum FirebaseAppConfig {
     /// repo — see ios/PocketMVP/.gitignore). Each developer downloads
     /// their own copy from Firebase Console and flips this flag when
     /// they have it.
-    static let skipConfigure: Bool = true
+    static let skipConfigure: Bool = false
 }
