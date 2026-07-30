@@ -10,11 +10,16 @@ import Foundation
 enum AppConfig {
     static let baseURL: URL = URL(string: "https://localhost:8443")!
 
-    /// Polling interval for tutor job status.
-    static let teachStatusPollInterval: TimeInterval = 2.0
+    /// Polling interval for tutor job status. We poll (instead of using
+    /// SSE) because the async job model is straightforward and adding
+    /// SSE would complicate the deployment (proxy buffering, etc).
+    static let teachStatusPollInterval: TimeInterval = 5.0
 
-    /// Max polls before giving up and showing a "still working" UI.
-    static let teachStatusMaxPolls: Int = 60  // 60 * 2s = 2 min
+    /// Max polls before giving up. A 2-hour video can take 20-40 min to
+    /// chunk through Ollama (10-30 chunks × ~1 min/chunk). 30 min × 60
+    /// polls / 5 s = 360 polls. We pick a comfortable margin so the
+    /// spinner doesn't time out for legitimately long videos.
+    static let teachStatusMaxPolls: Int = 720  // 720 * 5s = 60 min
 
     /// When true, the app reads `sample_snapshot.json` from the bundle
     /// instead of calling the API. Lets us develop the UI without the

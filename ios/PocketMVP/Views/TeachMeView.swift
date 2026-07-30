@@ -258,6 +258,7 @@ struct TeachMeView: View {
         guard let jobId = currentJobId else { return }
         isLoading = true
         defer { isLoading = false }
+        let startedAt = Date()
         for _ in 0..<AppConfig.teachStatusMaxPolls {
             do {
                 let resp = try await APIClient.shared.teachStatus(videoId: video.id, jobId: jobId)
@@ -277,7 +278,12 @@ struct TeachMeView: View {
             try? await Task.sleep(nanoseconds: UInt64(AppConfig.teachStatusPollInterval * 1_000_000_000))
             pollCount += 1
         }
-        errorMessage = "Tutor is taking longer than expected. Try again later."
+        // Polling exhausted (default 60 min for a 2-hour video). The
+        // backend job may still be running — the user can wait, or
+        // navigate away and come back later (the job persists server-
+        // side and the chunks are cached on completion).
+        let elapsed = Int(Date().timeIntervalSince(startedAt) / 60)
+        errorMessage = "Tutor is still working after \(elapsed) min. You can wait, or come back later — the lesson will be ready when you return."
     }
 
     private func markDone(_ chunk: Chunk) async {
