@@ -756,3 +756,89 @@ banner, fix Ollama, tap retry → everything works normally again.
   already resilient — it catches all exceptions and returns a
   `TutorResult` with `error=...` and `chunks=[]`, which the iOS app
   already renders as an error message.
+
+---
+
+## v0.2 — Course Materials (PDF / .md / .txt / .zip as LLM context)
+
+> **Status:** Shipped (5 commits, 726 backend tests pass, iOS build green)
+> **Full design doc:** [`doc/MVP0.2-materials.md`](MVP0.2-materials.md)
+
+This is the next major feature after v0.2's Firebase auth. It lets the user
+attach reference materials to videos and have the AI tutor read them as
+additional context when generating chunks.
+
+### The one-paragraph pitch
+
+The user uploads PDFs / .md / .txt / .zip on the Mac web app, then
+chooses which ones the tutor should see for each video. The iOS app is
+a strict read-only mirror — no upload, no edit. The tutor's prompt now
+includes a `USER-UPLOADED MATERIALS` section after the transcript /
+summary / quiz / flashcards / mindmap blocks.
+
+### What's in scope
+
+- Backend: 2 new models, 8 new endpoints, pypdf extraction, prompt
+  integration with 50K-per-material / 200K-total caps
+- Mac web UI: per-section upload card + per-video picker tab + inline
+  text viewer
+- iOS: read-only MaterialsPanel + MaterialViewerSheet + "📄 N" badge
+  on the Teach me button
+- 30 new tests (25 functional + 5 iOS contract)
+
+### What's out of scope (parked)
+
+- RAG / vector search (v0.3+ if material libraries grow)
+- iOS upload UI (Mac is the authoritative authoring surface)
+- Material previews (PDFKit adds ~5MB to the binary; the extracted text
+  is what the LLM reads anyway)
+
+### Why Mac-only authoring
+
+- Files on phones are fiddly (no progress UI, small viewport)
+- The "which PDF belongs with which video" decision benefits from a
+  real screen + keyboard
+- iOS stays a focused, fast learner surface
+
+### Why per-video selection (not per-section)
+
+- A section can span many videos covering different sub-topics
+- A reference PDF might be relevant to one video and noise for another
+- Per-video lets the user be precise; per-section would be too coarse
+
+### Why inline materials in the prompt (not RAG)
+
+- MVP cost discipline: the Ollama context window (1M with
+  `glm-5.2:cloud`) easily fits 200K chars of materials + the
+  60K-char transcript + the existing summary
+- Citation transparency: the user sees exactly which files are in
+  scope via the Mac picker
+- Truncation is honest: when the cap is exceeded, the oldest-selected
+  materials are kept and the UI badge tells the user
+
+### Risk → mitigation
+
+| Risk | Mitigation |
+|------|-----------|
+| Large PDF crashes extractor | `MAX_EXTRACTED_CHARS_PER_FILE = 500_000` cap |
+| User uploads 100 PDFs (5 GB) | `materials_max_total_bytes_per_user = 200 MB` → 413 |
+| Tutor prompt overruns Ollama context | `MAX_CHARS_TOTAL_MATERIALS = 200_000` + truncation metadata |
+| iOS offline → stale `selected_materials` | `/m/snapshot` picks up changes on next sync |
+| iOS app shipped before backend deploy | `Video.init(from:)` uses `decodeIfPresent` → defaults to `[]` |
+| `pypdf` schema drift | Pinned `pypdf>=5.0.0`; contract test catches breaks |
+
+### Commits
+
+1. `e79ca56` — backend models, endpoints, extraction, tutor integration
+2. `f50ac7e` — Mac web UI for upload + per-video picker
+3. (iOS) — iOS read-only mirror + selection sync
+4. `2d45ba8` — test suite + iOS manual verification
+5. (docs) — `doc/MVP0.2-materials.md` + CHANGELOG entry
+
+### Test status
+
+- 726 of 727 backend tests pass (the 1 failure is **pre-existing** —
+  `test_whisper_picker::test_transcribe_endpoint_accepts_smart_turbo_pick`,
+  mlx-whisper vs faster-whisper backend selection; same failure existed
+  before this MVP started)
+- iOS BUILD SUCCEEDED on iPhone 17 sim; no crashes on launch

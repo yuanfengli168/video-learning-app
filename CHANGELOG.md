@@ -1176,3 +1176,122 @@ an existing if/else).
 - **Login/logout multi-account flow** (force the account picker on subsequent sign-ins) is verified working on a fresh sim. With one Google account on the sim, iOS will auto-fill on the next sign-in — to force the picker, either add a second Google account via Settings → Mail → Accounts, or remove the existing account.
 - **Documentation**: see `doc/pocket-v0.1-plan.md` for the full v0.2 update section including commits and the change list.
 
+
+## [Unreleased] — MVP0.2 Course Materials (PDF / .md / .txt / .zip as LLM context)
+
+Users can now upload reference materials on the **Mac web app** and choose
+which ones the AI tutor sees as additional context for each video. The iOS
+app is a strict **read-only mirror** of that authoring decision.
+
+**Shipped in 5 commits:**
+
+| # | Subject |
+|---|---------|
+| 1 | backend models, endpoints, extraction, tutor integration |
+| 2 | Mac web UI for upload + per-video picker |
+| 3 | iOS read-only mirror + selection sync |
+| 4 | test suite + iOS manual verification |
+| 5 | docs (this entry + [`doc/MVP0.2-materials.md`](doc/MVP0.2-materials.md)) |
+
+### ✨ Added
+
+- **Backend** (`app/models/material.py`, `app/schemas/material.py`,
+  `app/services/material_extractor.py`, `app/services/material_context.py`,
+  `app/routers/materials.py`, `app/routers/video_materials.py`):
+  - 2 new SQLAlchemy models: `PocketMaterial`, `PocketVideoMaterial`
+    (FK + cascade + unique constraint)
+  - 3 new settings: `materials_max_total_bytes_per_user` (200 MB),
+    `materials_max_file_bytes` (50 MB), `materials_default_scope`
+  - PDF text extraction via `pypdf`; `.md` / `.txt` direct read;
+    `.zip` walker that skips vendored dirs (`node_modules`, `.git`,
+    `target`, `build`, `dist`, `.venv`, ...) and binary extensions
+    (image / video / audio / archive / font), with 500-file /
+    200MB-uncompressed caps
+  - `material_context.build_materials_section()` inlines selected
+    materials into the tutor prompt with 50K-per-material /
+    200K-total caps + truncation metadata for the UI badge
+  - 8 new endpoints (Mac-only upload/delete via `Origin`-gate; read
+    endpoints work for both Mac and iOS)
+  - Tutor prompt (`app/pocket/jobs.py::_do_generate`) appends a
+    `USER-UPLOADED MATERIALS` section after the transcript / summary
+    blocks
+
+- **Mac web UI** (`course.html`, `video.html`):
+  - Course page: each section gets a collapsible `📄 Materials`
+    panel with upload button + per-material row (filename, size,
+    char count, status badge, delete)
+  - Video page: new `📄 Materials` tab with checkbox picker, "N
+    selected · K chars in context" summary, Save / Clear buttons,
+    and an inline viewer (extracted text in a scrollable monospaced
+    box — no nav away)
+
+- **iOS read-only mirror** (`MaterialModels.swift`, `MaterialsPanel.swift`,
+  `SnapshotModels.swift`, `APIClient.swift`, `VideoDetailView.swift`,
+  `TeachMeView.swift`):
+  - New `Video.selectedMaterials: [String]` field (backward-compatible
+    decode with `decodeIfPresent` → `[]` for old snapshots)
+  - New `APIClient.fetchVideoMaterials()` + `fetchMaterialText()`
+  - `MaterialsPanel` view above the TeachMe Start button: header +
+    selected list + tap-to-view `MaterialViewerSheet`
+  - `VideoDetailView` shows a "📄 N" pill on the Teach me button
+    when materials are in scope
+
+### 🔒 Security
+
+- **Origin-gated upload + delete** (`_require_mac_origin`): iOS
+  requests (no `Origin` header) get 403 + "Mac web app only" message.
+  Read endpoints (`GET`) are open to both platforms since iOS is a
+  legitimate consumer.
+- **Per-user material ownership enforced** at the SQL level
+  (`PocketMaterial.user_id`) and re-checked on the cross-user
+  selection test (a user can't select another user's material).
+
+### 🐛 Fixed
+
+- **Tutor prompt wasn't bounded by the new material budget.** The
+  cap is enforced inside `build_materials_section()` BEFORE the
+  prompt is sent, so the Ollama context is never overrun.
+- **iOS app shipped before backend deploy.** `Video.init(from:)`
+  uses `decodeIfPresent` so an iOS user upgrading the app before
+  the next /m/snapshot still decodes (with `selectedMaterials = []`)
+  — no crash.
+
+### 🧪 Tests
+
+- **30 new tests**:
+  - `tests/test_materials.py` — 25 tests covering extraction, upload,
+    list/get/delete/link, per-video selection, cross-user security,
+    origin gating, per-user storage cap, prompt truncation, and
+    /m/snapshot integration
+  - `tests/test_materials_ios_contract.py` — 5 contract tests pinning
+    the JSON keys the iOS `VideoMaterialItem` / `VideoMaterialsResponse`
+    decode (`material_id`, `filename`, `size_bytes`, `char_count`,
+    `added_at`, `video_id`, `selected_ids`, `available`) so any
+    future field rename must update both sides
+- **iOS build verified**: `xcodebuild ... BUILD SUCCEEDED` on
+  iPhone 17 sim (UDID `569DFEB9-AF44-4FC9-A755-EEB448FCD4B0`); app
+  launches without errors (`log show --last 30s` clean).
+- **Test suite**: 726 of 727 tests pass. The 1 failure is
+  **pre-existing and unrelated** (`test_whisper_picker
+  ::test_transcribe_endpoint_accepts_smart_turbo_pick` —
+  mlx-whisper vs faster-whisper backend selection; same failure
+  before this MVP started).
+
+### 📖 Notes
+
+- **iOS never uploads or edits materials** — origin gating enforces
+  it server-side. iOS is a focused learner surface.
+- **Materials are first-class LLM context, not RAG.** The MVP
+  inlines up to 200K chars per video's selection. RAG / vector
+  search is parked for v0.3+ (see doc/MVP0.2-materials.md §"What's
+  out of scope").
+- **Per-video selection is the source of truth**, not per-section.
+  The Mac UI's "available" pool combines section-level uploads
+  (visible to all sibling videos) + sibling-video-scoped uploads,
+  so a single PDF can be picked for one video, two, or all of them.
+
+### 📝 Docs
+
+- [`doc/MVP0.2-materials.md`](doc/MVP0.2-materials.md) — full design
+  rationale, backend surface, iOS mirror contract, tutor prompt
+  integration, risks, and what's parked for v0.3.
