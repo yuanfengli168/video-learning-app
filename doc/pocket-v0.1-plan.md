@@ -250,7 +250,25 @@ Return STRICT JSON (no prose, no markdown fence):
 - **27/27 tests green** (was 24 in v0.1).
 
 ### Why v0.1.1 exists separately
-v0.1 was a clean vertical slice but couldn't be smoke-tested with real data because the iOS sim had no auth mechanism. v0.1.1 adds the **dev-only** auth bypass so we can verify the full data path on the sim, with zero risk of accidental production use (env var gate). v0.2 will replace this with real Firebase auth.
+v0.1 was a clean vertical slice but couldn't be smoke-tested with real data because the iOS sim had no auth mechanism. v0.1.1 adds the **dev-only** auth bypass so we can verify the full data path on the sim, with zero risk of accidental production use (env var gate).
+
+### v0.2 update — real Firebase auth (DONE)
+**Tag:** `pocket-v0.2-firebase-auth` (pending; work landed on `mvp-mobile-pocket-v0.1`)
+
+The v0.1.1 dev bypass is **still available** as a fallback (gated by `POCKET_DEV_AUTH=1` env var) for offline UI development, but the default path is now real Firebase auth:
+
+- **Backend** (`app/pocket/dev_auth.py`): `get_current_user_dev_or_real` resolves in this order:
+  1. `POCKET_DEV_AUTH=1` + `X-Dev-User-Id` header → trust the header (dev path, unchanged)
+  2. `Authorization: Bearer <firebase_id_token>` → verify via Firebase Admin SDK
+  3. Otherwise → 401 with the new error message `"Send Authorization: Bearer <firebase_id_token>"`
+- **Backend tests**: `tests/test_pocket_firebase_auth.py` (7 tests) — Bearer token accepted, invalid token rejected, data segregated per Firebase UID (UID_A vs UID_B)
+- **iOS** (`FirebaseAuthService.swift`): full Google + email/password sign-in, ID token saved to Keychain, `disconnect()` on sign-out to force the account picker on next sign-in, 30s timeout in `performSignIn` so the spinner can't get stuck, detailed `os.Logger` output for diagnosis
+- **iOS** (`APIClient.swift`): prefers Bearer token from Keychain over the dev `X-Dev-User-Id` header
+- **iOS URL scheme**: `CFBundleURLSchemes` in `project.yml` now uses the real `REVERSED_CLIENT_ID` from `GoogleService-Info.plist` (was the wrong bundle ID in v0.1.x — caused silent OAuth dismiss). After upgrading, **must `simctl uninstall` then `simctl install`** to refresh Launch Services' URL scheme registration.
+- **GoogleService-Info.plist**: real iOS plist now on disk (downloaded from Firebase Console), gitignored (open-source repo)
+- **Suppress false-positive sync errors**: `RootView.onChange(scenePhase)` + `SnapshotStore.loadInitial()` only trigger sync when `auth.currentUser != nil` — otherwise the unauthenticated app would 401 and surface a "Sync error" alert on LoginView.
+
+End-to-end verified on the iOS simulator: signed in with `jackyopenclaw@gmail.com`, CourseListView loaded, backend logs showed `GET /m/snapshot 200` with the Bearer token verified, data is scoped to that Firebase UID.
 
 ### Verified end-to-end (post v0.1.1)
 - iOS sim → `https://localhost:8443/m/snapshot` with `X-Dev-User-Id: ltLtLQzr3nOr2hQKdeTxYnIOYYN2`
@@ -518,11 +536,12 @@ all answers with their grades.
 
 ### Not changed
 
-- Auth model (still dev header `X-Dev-User-Id` + `POCKET_DEV_AUTH=1`)
 - Snapshot model (courses / sections / videos unchanged)
 - Ollama proxy pattern (iOS still knows nothing about Ollama — all
   calls go through the FastAPI backend)
-- Real Firebase auth on iOS (still planned for v0.2 or later)
+- Real Firebase auth on iOS — **shipped in v0.2**, see update above
+- Dev-only auth bypass (`X-Dev-User-Id` + `POCKET_DEV_AUTH=1`) — kept
+  as a fallback for offline UI dev, no longer the default path
 
 ### Known issues / next steps
 

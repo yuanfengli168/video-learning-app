@@ -1146,3 +1146,33 @@ an existing if/else).
 - **Total: ~250 lines of code changed, 0 new tests** (the existing 17 plugin tests still pass; the 633-test suite is green).
 
 [2.1.0.4]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.3..HEAD
+
+## [Unreleased] — Pocket v0.2 (Firebase auth on iOS)
+
+🎉 **Pocket now supports real Firebase auth on iOS.** The v0.1.1 dev-only auth bypass (`X-Dev-User-Id` + `POCKET_DEV_AUTH=1`) is still available as a fallback for offline UI development, but the default path is now real Firebase Bearer token auth.
+
+### ✨ Added
+
+- **Real Firebase Bearer auth on the pocket backend** (`app/pocket/dev_auth.py`). Resolution order: (1) `POCKET_DEV_AUTH=1` + `X-Dev-User-Id` header, (2) `Authorization: Bearer <firebase_id_token>` → verify via Firebase Admin SDK, (3) 401.
+- **iOS Google sign-in** (`FirebaseAuthService.swift`): native GIDSignIn SDK flow with `ASWebAuthenticationSession`, ID token saved to Keychain.
+- **iOS email/password sign-in + sign-up**: mirrors the web app's tabs.
+- **`KeychainTokenStore`**: persists the Firebase ID token across launches. `APIClient` prefers the Bearer token over the dev header.
+- **7 backend tests** for the Bearer path (`tests/test_pocket_firebase_auth.py`): Bearer token accepted, invalid token rejected, data segregated per Firebase UID (UID_A vs UID_B).
+- **iOS URL scheme fix**: `CFBundleURLSchemes` now uses the real `REVERSED_CLIENT_ID` from `GoogleService-Info.plist` (was incorrectly set to the bundle ID, causing silent OAuth dismiss).
+- **`GoogleService-Info.plist`** (real iOS one, downloaded from Firebase Console) is on disk + gitignored (open-source repo).
+- **`os.Logger` instrumentation** in `FirebaseAuthService` for debugging auth flows (subsystem `com.shoothigh.pocketmvp`, category `auth`).
+- **30-second timeout** in `performSignIn` — the spinner can never get permanently stuck.
+
+### 🐛 Fixed
+
+- **Silent OAuth dismiss** (`GIDSignIn` callback never fires): was caused by `CFBundleURLSchemes` set to the bundle ID instead of `REVERSED_CLIENT_ID`. iOS couldn't route the OAuth callback back to PocketMVP, so the consent sheet dismissed with no UI feedback.
+- **Stale Launch Services registration**: after changing the URL scheme in `project.yml`, you must `xcrun simctl uninstall` then `xcrun simctl install` (not just `install`) for iOS to re-register the new scheme.
+- **Premature "Sync error" alert on LoginView**: the app called `APIClient.fetchSnapshot()` on launch with no Bearer token, falling back to `X-Dev-User-Id`, which the prod-mode backend rejected. Now sync only runs when `auth.currentUser != nil`.
+- **Spurious auto sign-in on next "Continue with Google"**: `signOut()` now calls `GIDSignIn.sharedInstance.disconnect()` in addition to `signOut()`, revoking the OAuth grant so iOS shows the account picker.
+
+### 📖 Notes
+
+- **Dev bypass is still available**: `POCKET_DEV_AUTH=1` on the backend + `AppConfig.devUserId` in the iOS app enables the old `X-Dev-User-Id` flow for offline UI development. The default (no env var) is real Firebase.
+- **Login/logout multi-account flow** (force the account picker on subsequent sign-ins) is verified working on a fresh sim. With one Google account on the sim, iOS will auto-fill on the next sign-in — to force the picker, either add a second Google account via Settings → Mail → Accounts, or remove the existing account.
+- **Documentation**: see `doc/pocket-v0.1-plan.md` for the full v0.2 update section including commits and the change list.
+
