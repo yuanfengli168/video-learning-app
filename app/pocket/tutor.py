@@ -125,8 +125,17 @@ def _format_user_prompt(
     return base + materials_section
 
 
-def _format_user_prompt_minimal(transcript: str, summary: str, materials_section: str = "") -> str:
-    """Fallback: transcript + this video's summary only. No quiz/flashcards/mindmap."""
+def _format_user_prompt_minimal(
+    transcript: str, summary: str, materials_section: str = "",
+) -> str:
+    """Fallback: transcript + this video's summary only. No quiz/flashcards/mindmap.
+
+    MVP0.2 followup: the previous version still attached the full
+    materials_section, which on a 5-material video is 200K chars on its own
+    and pushed the prompt past the timeout. Now we *also* size-cap the
+    materials so the minimal fallback stays within ~80K chars total
+    (transcript 60K + summary 20K + materials truncated to fit).
+    """
     base = USER_TEMPLATE.format(
         transcript=transcript[:60_000],
         summary=summary[:20_000],
@@ -134,6 +143,16 @@ def _format_user_prompt_minimal(transcript: str, summary: str, materials_section
         flashcards="(not provided)",
         mindmap="(not provided)",
     )
+    # We have ~80K chars of headroom used by transcript+summary. If the
+    # materials section is larger than 40K, truncate it with a warning.
+    MAX_MATERIALS_CHARS_MINIMAL = 40_000
+    if materials_section and len(materials_section) > MAX_MATERIALS_CHARS_MINIMAL:
+        truncated = (
+            materials_section[:MAX_MATERIALS_CHARS_MINIMAL]
+            + f"\n\n[... materials truncated to {MAX_MATERIALS_CHARS_MINIMAL:,} chars "
+            f"for the minimal fallback prompt; original was {len(materials_section):,} chars ...]"
+        )
+        return base + truncated
     return base + materials_section
 
 
@@ -173,13 +192,22 @@ def is_ollama_available(timeout_s: float = 2.0) -> tuple[bool, str]:
         return False, f"error: {e}"
 
 
-def _call_ollama(prompt: str, timeout_s: float = 120.0) -> str:
+def _call_ollama(prompt: str, timeout_s: float | None = None) -> str:
     """POST to /api/generate, return the raw text response.
 
     Uses non-streaming mode for simplicity. v0.2 can switch to streaming.
 
     Raises OllamaUnavailableError on connection failure, timeout, or 5xx.
+
+    The default timeout is `settings.ollama_pocket_tutor_timeout_seconds`
+    (600s). The chunk-generation prompt can be 200K chars (≈100K tokens)
+    because of the materials section; on Apple Silicon with
+    `glm-5.2:cloud` that takes ~120-180s to prefill + generate.
+    Callers can override `timeout_s` for unit tests.
     """
+    if timeout_s is None:
+        from app.config import settings
+        timeout_s = settings.ollama_pocket_tutor_timeout_seconds
     url = f"{_ollama_url()}/api/generate"
     payload = {
         "model": _ollama_model(),
@@ -375,7 +403,10 @@ def _call_ollama_grading(prompt: str) -> dict:
         },
     }
     try:
-        with httpx.Client(timeout=60.0) as client:
+        # Grading prompt is short (the question + a chunk) so a 60s
+        # timeout is plenty. Configurable via settings.ollama_pocket_grading_timeout_seconds.
+        from app.config import settings
+        with httpx.Client(timeout=settings.ollama_pocket_grading_timeout_seconds) as client:
             r = client.post(url, json=payload)
     except httpx.ConnectError as e:
         logger.warning("Ollama unreachable for grading: %s", e)

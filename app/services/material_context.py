@@ -52,10 +52,20 @@ class MaterialContext:
     prompt_section: str
 
     # Metadata for UI display ("📄 2 materials in context")
-    materials: list[dict]  # [{filename, char_count, included: bool}]
+    materials: list[dict]  # [{filename, char_count, included: bool, method}]
 
     # Truncation warning for the UI
     truncated: bool
+
+    # MVP0.2 followup: warning surfaced when a selected material
+    # required OCR (extraction_method in {"vision","ollama_vision",
+    # "tesseract"}) but the tutor model is text-only. Most users
+    # never see this (the OCR chain extracts usable text), but if
+    # the OCR chain produced only garbage (e.g. all paths failed
+    # silently), the UI shows this so the user knows to switch
+    # to a vision-capable tutor LLM (llava, qwen2-vl, kimi-k3,
+    # etc.) for full visual reasoning over the PDF.
+    vision_required_hint: str | None = None
 
 
 def build_materials_section(
@@ -102,6 +112,7 @@ def build_materials_section(
     metadata: list[dict] = []
     total_chars = 0
     truncated = False
+    ocr_materials_used = 0  # for the vision-required hint
 
     for mat in ordered:
         if mat.status != "ready" or not mat.extracted_text:
@@ -110,6 +121,7 @@ def build_materials_section(
                 "filename": mat.filename,
                 "char_count": 0,
                 "included": False,
+                "method": mat.extraction_method,
                 "reason": mat.error_message or f"status: {mat.status}",
             })
             continue
@@ -123,6 +135,7 @@ def build_materials_section(
                 "filename": mat.filename,
                 "char_count": included_chars,
                 "included": False,
+                "method": mat.extraction_method,
                 "reason": "total context cap reached",
             })
             continue
@@ -135,10 +148,13 @@ def build_materials_section(
             )
         parts.append(f"\n--- {mat.filename} ---\n{truncated_text}")
         total_chars += included_chars
+        if mat.extraction_method in ("vision", "ollama_vision", "tesseract"):
+            ocr_materials_used += 1
         metadata.append({
             "filename": mat.filename,
             "char_count": included_chars,
             "included": True,
+            "method": mat.extraction_method,
         })
 
     if not parts:
@@ -150,8 +166,38 @@ def build_materials_section(
         "context alongside the video transcript. If the materials mention a "
         "concept that's NOT in the transcript, surface it in your teaching.\n"
     )
+
+    # MVP0.2 followup: if all selected materials required OCR (no
+    # native text), and the tutor is text-only, compute a hint the
+    # UI can surface. We never inject this into the prompt — the
+    # tutor is reading the OCR'd text, which is fine. The hint is
+    # informational ("for visual reasoning over the original PDF,
+    # use a vision-capable model") and aimed at the human user.
+    vision_hint = None
+    if ocr_materials_used and len(parts) == ocr_materials_used:
+        try:
+            from app.config import settings
+            from app.services.model_capabilities import probe_model_capabilities
+            caps = probe_model_capabilities(settings.ollama_model)
+            if not caps.is_vision:
+                methods = sorted({
+                    m.get("method") for m in metadata
+                    if m.get("method") in ("vision", "ollama_vision", "tesseract")
+                })
+                vision_hint = (
+                    f"{ocr_materials_used} selected material(s) required OCR "
+                    f"(extracted via {', '.join(methods)}). Your tutor model "
+                    f"`{settings.ollama_model}` is text-only — it reads the "
+                    f"OCR'd text. For visual reasoning over the original PDF "
+                    f"layout (tables, figures), switch to a vision-capable "
+                    f"model (llava, qwen2-vl, kimi-k3)."
+                )
+        except Exception:
+            pass  # best-effort hint; never fail the prompt build
+
     return MaterialContext(
         prompt_section=header + "\n".join(parts),
         materials=metadata,
         truncated=truncated,
+        vision_required_hint=vision_hint,
     )

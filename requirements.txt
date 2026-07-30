@@ -20,6 +20,12 @@ faster-whisper>=1.1.0
 
 # MVP0.2 materials feature: PDF text extraction
 pypdf>=5.0.0
+# MVP0.2 followup: OCR fallback chain (macOS Vision via Swift CLI,
+# Ollama vision via httpx, Tesseract via pytesseract + Pillow for
+# rendering PNGs from PDF pages — we use Apple PDFKit via PyObjC for
+# rendering instead of pdf2image + poppler so the deps stay minimal).
+pytesseract>=0.3.10
+Pillow>=10.0.0
 
 # LLM
 ollama>=0.4.4

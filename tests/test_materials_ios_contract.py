@@ -109,7 +109,14 @@ def test_ios_video_materials_response_matches_swift_codingkeys(client, db_sessio
     # Each item in 'available' has the keys the iOS Swift struct expects
     assert len(data["available"]) == 1
     item = data["available"][0]
-    assert set(item.keys()) == {"material_id", "filename", "size_bytes", "char_count", "added_at"}
+    # MVP0.2 followup: extraction_method was added so the iOS picker
+    # can show an "OCR" badge for materials that required OCR.
+    # It's optional in the Swift struct (extractionMethod: String?)
+    # so existing keys must still match.
+    assert set(item.keys()) == {
+        "material_id", "filename", "size_bytes", "char_count", "added_at",
+        "extraction_method",
+    }
     assert item["material_id"] == m1
     assert item["filename"] == "c1.md"
     assert isinstance(item["size_bytes"], int)
@@ -118,6 +125,12 @@ def test_ios_video_materials_response_matches_swift_codingkeys(client, db_sessio
     # — backend returns datetime.isoformat() which Swift interprets as a Double seconds-since-2001
     # only if the format matches. For now we just assert it's a non-empty string.
     assert isinstance(item["added_at"], str) and len(item["added_at"]) > 0
+    # extraction_method is "pypdf" for any material that went through
+    # the extractor with a successful read path (.md / .txt / native-PDF).
+    # See app/services/material_extractor.py:extract() — the method tag
+    # is "pypdf" for non-OCR paths. OCR-tagged materials would have
+    # "vision" / "ollama_vision" / "tesseract" here.
+    assert item["extraction_method"] == "pypdf"
 
 
 def test_ios_video_materials_response_empty_selected(client, db_session):

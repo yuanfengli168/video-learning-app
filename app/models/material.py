@@ -78,6 +78,16 @@ class PocketMaterial(Base):
     extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     char_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # MVP0.2 followup: provenance of how the text was extracted. Drives
+    # the UI badge color + the "Switch to a vision-capable tutor" hint
+    # when text is image-only. NULL = legacy row from before this column
+    # existed (treated as "pypdf" — the prior behavior).
+    #
+    # Valid values: "pypdf" | "vision" | "ollama_vision" | "tesseract"
+    # Stored as VARCHAR (SQLite doesn't honor CHECK in older versions).
+    extraction_method: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

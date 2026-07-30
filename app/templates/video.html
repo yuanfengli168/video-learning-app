@@ -465,6 +465,18 @@
                             Pick which reference materials the tutor should use as context for this video.
                             <span id="mat-selection-summary" class="block mt-1 text-[11px] text-gray-400"></span>
                         </p>
+                        <!-- MVP0.2 followup: yellow banner shown when the user
+                             has selected materials that required OCR (image-only
+                             PDFs scanned by Vision / Ollama / Tesseract) and
+                             the active tutor model is text-only. The tutor can
+                             still read the OCR'd text, but for visual reasoning
+                             over the original PDF layout (figures, tables) the
+                             user should switch to a vision-capable model on
+                             the course page. Hidden by default; the JS in
+                             renderMaterialsPicker() shows it when needed. -->
+                        <div id="mat-vision-warning" class="hidden p-2 rounded border border-yellow-300 bg-yellow-50 dark:bg-yellow-900/20 dark:border-yellow-700 text-[11px] text-yellow-800 dark:text-yellow-300">
+                            <strong>OCR + text-only tutor:</strong> one or more selected materials required OCR (no native text layer). The tutor will read the OCR'd text, but for visual reasoning over the original PDF layout, switch to a vision-capable model (llava, qwen2-vl, kimi-k3) on the course page.
+                        </div>
                         <!-- MVP0.2 followup: inline upload on the video page.
                              Uploads get auto-tagged with this video's
                              section_id + video_id, so the new material
@@ -626,11 +638,29 @@ function renderMaterialsPicker(selectedIds, available) {
     const listEl = document.getElementById('mat-picker-list');
     const badgeEl = document.getElementById('mat-selected-badge');
     const summaryEl = document.getElementById('mat-selection-summary');
+    const visionWarnEl = document.getElementById('mat-vision-warning');
 
     const selectedSet = new Set(selectedIds);
-    const totalChars = available
-        .filter(m => selectedSet.has(m.material_id))
+    const selectedMaterials = available.filter(m => selectedSet.has(m.material_id));
+    const totalChars = selectedMaterials
         .reduce((sum, m) => sum + (m.char_count || 0), 0);
+    // MVP0.2 followup: show the OCR+text-only warning when the user
+    // has at least one selected material that required OCR. The
+    // backend has already extracted usable text via the OCR chain,
+    // so the tutor WILL be able to read it — the warning is just to
+    // remind the user that visuals (figures, tables) won't be the
+    // original PDF layout, just the OCR'd text equivalent.
+    const hasOcrMaterial = selectedMaterials.some(
+        m => m.extraction_method &&
+             m.extraction_method !== 'pypdf'
+    );
+    if (visionWarnEl) {
+        if (hasOcrMaterial) {
+            visionWarnEl.classList.remove('hidden');
+        } else {
+            visionWarnEl.classList.add('hidden');
+        }
+    }
 
     if (badgeEl) {
         if (selectedIds.length > 0) {
@@ -664,6 +694,19 @@ function renderMaterialsPicker(selectedIds, available) {
         const statusBadge = m.char_count > 0
             ? `<span class="text-[10px] text-gray-400">${(m.size_bytes / 1024).toFixed(0)} KB · ${m.char_count.toLocaleString()} chars</span>`
             : `<span class="text-[10px] text-red-500">extraction failed</span>`;
+        // MVP0.2 followup: surface OCR provenance so the user knows
+        // whether the text came from a native PDF layer or one of the
+        // OCR fallbacks (Vision / Ollama-vision / Tesseract). Shows a
+        // small yellow badge with a tooltip describing the method.
+        const ocrLabel = {
+            'vision': '🍎 Vision',
+            'ollama_vision': '👁 Ollama',
+            'tesseract': '🔤 Tesseract',
+        }[m.extraction_method];
+        const ocrBadge = ocrLabel
+            ? `<span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+                     title="Text extracted via OCR (${m.extraction_method}). The PDF has no native text layer — this may be slightly less accurate than native text.">${ocrLabel}</span>`
+            : '';
         return `
             <label class="flex items-start gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer"
                    data-material-id="${m.material_id}">
@@ -672,7 +715,7 @@ function renderMaterialsPicker(selectedIds, available) {
                        onchange="onMaterialToggle('${m.material_id}', this.checked)"
                        class="mt-0.5 flex-shrink-0">
                 <span class="flex-1 min-w-0">
-                    <span class="block text-sm truncate" title="${esc(m.filename)}">📄 ${esc(m.filename)}</span>
+                    <span class="block text-sm truncate" title="${esc(m.filename)}">📄 ${esc(m.filename)}${ocrBadge}</span>
                     ${statusBadge}
                 </span>
                 <button type="button"

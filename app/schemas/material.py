@@ -37,6 +37,10 @@ class MaterialOut(BaseModel):
     status: MaterialStatus
     char_count: int | None
     error_message: str | None = None
+    # MVP0.2 followup: provenance. One of "pypdf", "vision" (macOS Vision
+    # framework), "ollama_vision" (llava etc), "tesseract", or None (legacy
+    # row from before this column existed).
+    extraction_method: str | None = None
 
     created_at: datetime
     updated_at: datetime
@@ -60,6 +64,10 @@ class MaterialUploadOut(BaseModel):
     status: MaterialStatus
     char_count: int | None
     error_message: str | None = None
+    # MVP0.2 followup: provenance of how the text was extracted. One
+    # of "pypdf", "vision" (macOS Vision OCR), "ollama_vision",
+    # "tesseract", or None (legacy / unsupported format).
+    extraction_method: str | None = None
 
 
 class MaterialTextOut(BaseModel):
@@ -82,6 +90,13 @@ class VideoMaterialLink(BaseModel):
     size_bytes: int
     char_count: int | None
     added_at: datetime
+    # MVP0.2 followup: which extraction method was used to read this
+    # material. Lets the Mac UI show a small "OCR" badge so the user
+    # knows the text came from a scan rather than the native text
+    # layer. Values: "pypdf" (native), "vision", "ollama_vision",
+    # "tesseract" (OCR fallbacks), None for non-PDFs and for
+    # PDF/text extraction that pypdf handled natively.
+    extraction_method: str | None = None
 
 
 class VideoMaterialsSetIn(BaseModel):

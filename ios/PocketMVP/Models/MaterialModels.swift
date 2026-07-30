@@ -28,6 +28,11 @@ struct VideoMaterialItem: Codable, Identifiable, Hashable {
     let sizeBytes: Int
     let charCount: Int?
     let addedAt: Date
+    /// MVP0.2 followup: how the backend extracted text from this material.
+    /// "pypdf" = native PDF text layer; "vision" / "ollama_vision" /
+    /// "tesseract" = OCR fallback because the PDF had no native text.
+    /// nil = non-PDF (Markdown / TXT / ZIP) where extraction was trivial.
+    let extractionMethod: String?
 
     enum CodingKeys: String, CodingKey {
         case materialId = "material_id"
@@ -35,6 +40,7 @@ struct VideoMaterialItem: Codable, Identifiable, Hashable {
         case sizeBytes = "size_bytes"
         case charCount = "char_count"
         case addedAt = "added_at"
+        case extractionMethod = "extraction_method"
     }
 
     /// Stable Identifiable id for SwiftUI ForEach.
@@ -45,6 +51,13 @@ struct VideoMaterialItem: Codable, Identifiable, Hashable {
         if sizeBytes < 1024 { return "\(sizeBytes) B" }
         if sizeBytes < 1024 * 1024 { return "\(sizeBytes / 1024) KB" }
         return String(format: "%.1f MB", Double(sizeBytes) / 1024.0 / 1024.0)
+    }
+
+    /// True when the text was OCR'd from a scanned/image-only PDF.
+    /// Used to show a small "OCR" badge in the iOS Materials picker.
+    var isOcrExtracted: Bool {
+        guard let m = extractionMethod else { return false }
+        return m != "pypdf"
     }
 }
 

@@ -1295,3 +1295,109 @@ app is a strict **read-only mirror** of that authoring decision.
 - [`doc/MVP0.2-materials.md`](doc/MVP0.2-materials.md) — full design
   rationale, backend surface, iOS mirror contract, tutor prompt
   integration, risks, and what's parked for v0.3.
+
+## [Unreleased] — MVP0.2 followup #1: OCR for image-only PDFs + chat timeout fix
+
+Two user feedback items after the 5-commit MVP0.2 ship:
+
+1. **Image-only PDFs returned 0 chars** from `pypdf` (e.g. scanned
+   documents, jsPDF exports, image-only PDF receipts). The tutor
+   silently had no material context. **Fixed** with a 3-tier OCR
+   chain: macOS Vision (Swift CLI) → Ollama vision → Tesseract.
+2. **`/video/{video_id}` timed out** at 120s when a user has many
+   selected materials (5 ZIPs = 1.67M chars → 220K-char prompt).
+   **Fixed** with a configurable timeout (300s chat / 600s pocket
+   tutor) and a materials-aware minimal-fallback that caps the
+   pocket-tutor prompt at ~200K chars even when materials are huge.
+
+### ✨ Added
+
+- **3-tier OCR pipeline** (`app/services/pdf_ocr.py`):
+  - **macOS Vision** (fastest, ~1–3s/page on Apple Silicon Neural
+    Engine) via a Swift CLI (`bin/material_ocr.swift` → `bin/material_ocr`)
+    that wraps PDFKit + `VNRecognizeTextRequest`. Handles Chinese
+    and English out of the box (Vision Live Text covers 60+ languages).
+  - **Ollama vision** (slower, ~5–10s/page) via `llava:13b` — used
+    when Vision is unavailable (Linux deploy) or the PDF is too
+    large for Vision's 50-page cap.
+  - **Tesseract** (slowest, ~10–30s/page) via `pytesseract` with
+    `chi_sim+eng` langs. Final fallback.
+  - The orchestrator tries each layer in order, returns the first
+    non-empty result. Per-page rendering uses PyObjC's auto-bound
+    `PDFPage.thumbnailOfSize_forBox_()` (no CGContext sigh; the
+    Swift CLI handles the macOS Vision path because PyObjC can't
+    bind opaque C functions like `translateCTM_`).
+- **Model capability probe** (`app/services/model_capabilities.py`):
+  - Queries Ollama's `/api/show` for the `capabilities` array;
+    caches results 5 min per model name
+  - `is_vision` flag is the truth — we don't assume MOE/non-MOE
+    determines vision support (qwen2.5:14b is non-MOE but text-only;
+    llava:13b is MOE and vision-capable)
+  - `find_available_vision_model()` iterates `/api/tags` for the
+    OCR chain's last-resort fallback when the primary tutor is text-only
+- **Settings** (`app/config.py`):
+  - `materials_ocr_enabled` (default True)
+  - `materials_ocr_macos_vision_max_pages` (50)
+  - `materials_ocr_ollama_vision_model` (`llava:13b`)
+  - `materials_ocr_tesseract_lang` (`chi_sim+eng`)
+  - `materials_ocr_timeout_seconds` (600)
+  - `ollama_chat_timeout_seconds` (300, was hardcoded 120)
+  - `ollama_pocket_tutor_timeout_seconds` (600, was hardcoded 120)
+  - `ollama_pocket_grading_timeout_seconds` (60)
+- **Mac UI** (`templates/video.html`):
+  - **OCR provenance badge** in the materials picker: small yellow
+    pill next to the filename showing `🍎 Vision` / `👁 Ollama` /
+    `🔤 Tesseract` with a tooltip explaining what OCR is.
+  - **Vision-required warning banner**: when the user has selected
+    at least one OCR'd material, a yellow banner appears reminding
+    them to switch to a vision-capable tutor for visual reasoning
+    over the original PDF layout.
+- **iOS** (`MaterialModels.swift`):
+  - `VideoMaterialItem` gains `extractionMethod: String?` (optional,
+    additive — old iOS snapshots still decode) and a `isOcrExtracted`
+    helper for the Materials picker UI to show an OCR badge.
+
+### 🔒 Security
+
+- All new OCR endpoints run inside the existing material-extraction
+  pipeline, which uses the same per-user storage cap and origin-gated
+  upload path. No new attack surface.
+- The Swift CLI (`bin/material_ocr`) is **invoked with a fully
+  qualified path** (no PATH lookups) and **hardcoded args** to
+  prevent any shell-injection possibility. The output is parsed
+  as JSON and rejected if `ok=false`.
+
+### 🐛 Fixed
+
+- **`/video/{video_id}` timed out** at 120s for users with many
+  selected materials. The pocket tutor's `PROMPT_CHAR_LIMIT = 200_000`
+  fallback was firing, but the minimal fallback still carried the
+  full materials section (200K chars on its own), pushing the
+  prompt past 218K chars. Now the minimal fallback **also caps
+  materials at 40K chars** with a truncation marker, so the prompt
+  stays within ~93K chars (fits in 60s of prefill + 30s generation).
+- All hardcoded `timeout=120.0` constants in `chat_with_ollama()`
+  and `_call_ollama()` are now configurable via settings and bumped
+  to 300s / 600s respectively.
+
+### 🧪 Tests
+
+- **16 new tests** (all passing):
+  - `tests/test_model_capabilities.py` — 10 tests covering vision
+    detection, text-only fallback, probe failure modes, cache TTL,
+    and `find_available_vision_model`
+  - `tests/test_ocr_extraction_chain.py` — 6 contract tests
+    verifying the extractor's method-selection logic (pypdf vs
+    OCR fallback) using a synthetic image-only PDF
+  - `tests/test_pocket_tutor.py` — 5 new tests for the
+    materials-truncation fix in `_format_user_prompt_minimal()` and
+    the configured timeout in `_call_ollama()`
+- **Test suite**: 748 of 749 tests pass. The 1 failure is
+  the **pre-existing unrelated** whisper test.
+
+### 📝 Docs
+
+- [`doc/ocr-strategy.md`](doc/ocr-strategy.md) — full architecture
+  diagram, layer-by-layer behaviour, when each layer is selected,
+  the Swift CLI build process, the macOS-Vision-vs-PyObjC rationale,
+  and how to add a new OCR backend.

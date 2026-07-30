@@ -86,6 +86,7 @@ def get_video_materials(
             size_bytes=r.size_bytes,
             char_count=r.char_count,
             added_at=r.created_at,
+            extraction_method=r.extraction_method,  # MVP0.2 followup
         )
         for r in available_rows
     ]

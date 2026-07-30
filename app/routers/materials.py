@@ -242,15 +242,28 @@ async def upload_material(
     # here (no async background job) to keep MVP0.2 simple — uploads
     # from the Mac are bounded by the 50 MB cap and 60s extraction
     # budget, both enforced at this layer.
+    #
+    # MVP0.2 followup: extract() now returns (text, method). For image-only
+    # PDFs the OCR chain (macOS Vision → Ollama vision → Tesseract) runs
+    # inside _extract_pdf; on success the method is "vision" /
+    # "ollama_vision" / "tesseract", which the UI surfaces as a
+    # colored badge so the user knows the text came from OCR.
     try:
-        text = extract(file.filename, data)
-        if text is None:
+        text, method = extract(file.filename, data)
+        if text is None and method is None:
             material.status = "failed"
             material.error_message = "Unsupported file format"
+        elif text is None:
+            material.status = "failed"
+            material.error_message = (
+                "PDF has no extractable text layer, and all OCR paths failed. "
+                "Re-upload as .md/.txt, or run OCR externally before uploading."
+            )
         else:
             material.extracted_text = text
             material.char_count = len(text)
             material.status = "ready"
+            material.extraction_method = method
     except Exception as exc:
         log.warning("Extraction failed for %s: %s", file.filename, exc)
         material.status = "failed"
@@ -268,6 +281,7 @@ async def upload_material(
         status=material.status,
         char_count=material.char_count,
         error_message=material.error_message,
+        extraction_method=material.extraction_method,
     )
 
 

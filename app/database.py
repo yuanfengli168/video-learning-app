@@ -231,6 +231,17 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "transcript_quote",
         "ALTER TABLE pocket_chunks ADD COLUMN transcript_quote TEXT DEFAULT ''",
     ),
+    # MVP0.2 followup: provenance of how a material's text was extracted.
+    # Drives the UI badge color (green for pypdf, amber for OCR) and the
+    # "Switch to a vision-capable tutor" hint when a material required OCR
+    # but the user's primary tutor LLM is text-only. NULL means legacy row
+    # (interpreted as "pypdf" by the UI). Values: "pypdf" | "vision" |
+    # "ollama_vision" | "tesseract".
+    (
+        "pocket_materials",
+        "extraction_method",
+        "ALTER TABLE pocket_materials ADD COLUMN extraction_method VARCHAR(32)",
+    ),
 ]
 
 

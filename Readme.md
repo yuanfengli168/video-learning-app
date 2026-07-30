@@ -46,6 +46,8 @@ See [`doc/HowToStart.md`](doc/HowToStart.md) for the full guide (troubleshooting
 *   **Transcript Viewer:** Timestamped transcript with click-to-seek video player integration, keyword search with live highlighting, and prev/next match navigation.
 *   **Whisper Model Selection:** Choose between `tiny`, `base`, `small`, `medium` on the web UI. Models auto-download.
 *   **Session-based Auth:** Firebase ID tokens are exchanged for httpOnly session cookies — no tokens in JavaScript.
+*   **Course Materials (PDF / .md / .txt / .zip):** Upload reference materials on the Mac web app and select which ones the AI tutor sees as additional context for each video. The iOS app is a read-only mirror of that selection. See [`doc/MVP0.2-materials.md`](doc/MVP0.2-materials.md).
+*   **OCR for image-only PDFs:** When a PDF has no native text layer (scanned documents, jsPDF exports), the extractor automatically falls back to a 3-tier OCR chain: macOS Vision (`VNRecognizeTextRequest` via Swift CLI) → Ollama vision (`llava:13b`) → Tesseract. Each material reports which method was used. See [`doc/ocr-strategy.md`](doc/ocr-strategy.md).
 
 ## Quick Start
 ```bash

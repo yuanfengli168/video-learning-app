@@ -288,7 +288,12 @@ def chat_with_ollama(
             "stream": False,
             "messages": full_messages,
         },
-        timeout=120.0,
+        # MVP0.2 followup: bumped from hardcoded 120s to a
+        # configurable setting. For a video-scope chat with 5
+        # selected materials the prompt can be 220K chars (≈110K
+        # Chinese tokens); prefill alone takes ~50s on Apple Silicon
+        # with `glm-5.2:cloud`.
+        timeout=settings.ollama_chat_timeout_seconds,
     )
     response.raise_for_status()
 

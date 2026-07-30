@@ -5,7 +5,7 @@ Ollama is fully mocked — we never require a live Ollama to run the test suite.
 
 import json
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -117,6 +117,97 @@ def test_generate_chunks_happy_path():
     assert result.error is None
     assert len(result.chunks) == 1
     assert result.chunks[0].concept_title == "X"
+
+
+# ── minimal-fallback truncation (MVP0.2 followup) ────────────────
+# When the user has many selected materials, the materials section
+# can be 200K chars on its own. The previous minimal-fallback bug
+# (manualTodo [jul30] #1 — video f1610715 timed out at 120s) kept
+# the full materials section and pushed the prompt past the timeout.
+# Now the minimal fallback caps materials at 40K chars and shows a
+# truncation notice so the LLM knows the materials were sliced.
+
+def test_format_minimal_prompt_truncates_oversized_materials():
+    """A 200K-char materials section gets truncated to ≤40K + notice."""
+    big_materials = "X" * 200_000
+    out = tutor._format_user_prompt_minimal(
+        transcript="t", summary="s", materials_section=big_materials
+    )
+    # The full big_materials string must NOT appear verbatim — it would
+    # push the prompt past the timeout.
+    assert "X" * 200_000 not in out
+    # Truncation marker must be present.
+    assert "materials truncated" in out
+    # Result must fit within the 200K PROMPT_CHAR_LIMIT budget.
+    assert len(out) < tutor.PROMPT_CHAR_LIMIT
+
+
+def test_format_minimal_prompt_keeps_small_materials_intact():
+    """A 1K-char materials section is preserved verbatim (no false truncation)."""
+    small_materials = "header\n--- file.pdf ---\nshort content"
+    out = tutor._format_user_prompt_minimal(
+        transcript="t", summary="s", materials_section=small_materials
+    )
+    assert small_materials in out
+    assert "materials truncated" not in out
+
+
+def test_format_minimal_prompt_handles_no_materials():
+    """Missing materials section is fine (graceful empty)."""
+    out = tutor._format_user_prompt_minimal(
+        transcript="t", summary="s", materials_section=""
+    )
+    assert "t" in out          # transcript still present
+    assert "s" in out          # summary still present
+    assert "truncated" not in out
+
+
+def test_generate_chunks_uses_truncated_minimal_when_prompt_oversized():
+    """End-to-end: 200K materials + 50K transcript → minimal fallback fires,
+    Ollama receives a prompt that fits within the 200K cap."""
+    raw = json.dumps([
+        {"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+         "concept_title": "X", "teach_text": "y", "check_question": "?"}
+    ])
+    big_materials = "M" * 200_000
+    with patch.object(tutor, "_call_ollama", return_value=raw) as mock_call:
+        result = tutor.generate_chunks(
+            transcript="t" * 50_000,
+            summary="s" * 5_000,
+            quiz="q",
+            flashcards="f",
+            mindmap="m",
+            materials_section=big_materials,
+        )
+    assert result.error is None
+    assert result.used_fallback is True
+    # Verify the call to Ollama used a small prompt (not the 270K-char one)
+    call_args = mock_call.call_args
+    actual_prompt = call_args[0][0]
+    assert len(actual_prompt) < tutor.PROMPT_CHAR_LIMIT, (
+        f"prompt len {len(actual_prompt):,} still exceeds {tutor.PROMPT_CHAR_LIMIT:,}"
+    )
+
+
+def test_call_ollama_uses_configured_timeout_default():
+    """When the caller does not pass timeout_s, we pull from settings."""
+    # The default in settings is 600s. We patch settings to a known
+    # value and verify _call_ollama respects it.
+    from app.config import settings
+    with patch.object(settings, "ollama_pocket_tutor_timeout_seconds", 42.0):
+        with patch("httpx.Client") as mock_client:
+            ctx = MagicMock()
+            ctx.__enter__.return_value.post.return_value.json.return_value = {
+                "response": "ok"
+            }
+            ctx.__enter__.return_value.post.return_value.status_code = 200
+            ctx.__enter__.return_value.post.return_value.text = "ok"
+            mock_client.return_value = ctx
+
+            tutor._call_ollama("test prompt")
+
+    # httpx.Client must have been constructed with timeout=42.0
+    assert mock_client.call_args.kwargs.get("timeout") == 42.0
 
 
 # ── router: /m/teach/* flow ─────────────────────────────────────

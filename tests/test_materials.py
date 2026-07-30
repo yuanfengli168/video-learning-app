@@ -105,24 +105,38 @@ def test_detect_kind_classifies_supported_extensions():
     assert detect_kind("a.png") == "unknown"
 
 
+def _extract_text(filename: str, data: bytes) -> str | None:
+    """Helper: call extract() and return just the text part.
+
+    extract() now returns (text, method) where method is the
+    provenance ('pypdf', 'vision', 'ollama_vision', 'tesseract', or
+    None for unsupported formats). Tests that don't care about
+    provenance use this helper to keep assertions terse.
+    """
+    result = extract(filename, data)
+    if isinstance(result, tuple):
+        return result[0]
+    return result
+
+
 def test_extract_markdown_returns_content():
-    text = extract("notes.md", b"# Title\n\n- one\n- two")
+    text = _extract_text("notes.md", b"# Title\n\n- one\n- two")
     assert text is not None
     assert "Title" in text
     assert "one" in text
 
 
 def test_extract_text_returns_content():
-    text = extract("readme.txt", b"Hello world\nLine 2")
+    text = _extract_text("readme.txt", b"Hello world\nLine 2")
     assert text is not None
     assert "Hello" in text
 
 
 def test_extract_pdf_returns_string_or_raises_with_clear_error():
     """PDFs may either extract successfully (returns str) OR have no
-    extractable text layer (raises RuntimeError with a clear message
-    so the router marks status='failed'). Both are valid outcomes —
-    the new contract is "never silently return empty for a PDF".
+    extractable text layer (returns None after the OCR chain
+    exhausts). The new contract is "never silently return empty
+    for a PDF".
     """
     minimal_pdf = (
         b"%PDF-1.1\n%\xe2\xe3\xcf\xd3\n"
@@ -132,18 +146,22 @@ def test_extract_pdf_returns_string_or_raises_with_clear_error():
         b"xref\n0 4\n0000000000 65535 f\n"
         b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n0\n%%EOF\n"
     )
-    try:
-        result = extract("a.pdf", minimal_pdf)
-        # If extraction succeeds, it must be a string (possibly empty)
-        assert isinstance(result, str)
-    except RuntimeError as exc:
-        # If extraction fails, the error message must mention the
-        # "no extractable text" cause so the user understands why
-        assert "no extractable text" in str(exc).lower()
+    result = extract("a.pdf", minimal_pdf)
+    # extract returns (text, method) for PDF
+    text, method = result
+    if text is None:
+        # OCR chain exhausted — acceptable; just verify method is None
+        assert method is None
+    else:
+        # Got text — method must be one of the recognized values
+        assert method in ("pypdf", "vision", "ollama_vision", "tesseract")
 
 
 def test_extract_unknown_returns_none():
-    assert extract("image.png", b"\x89PNG\r\n\x1a\n") is None
+    result = extract("image.png", b"\x89PNG\r\n\x1a\n")
+    text, method = result
+    assert text is None
+    assert method is None
 
 
 def test_extract_zip_text_files():
@@ -153,10 +171,11 @@ def test_extract_zip_text_files():
         zf.writestr("src/main.md", "# Heading\n\nBody")
         zf.writestr("notes.txt", "Plain notes")
     data = buf.getvalue()
-    result = extract("bundle.zip", data)
-    assert result is not None
-    assert "Heading" in result
-    assert "Plain notes" in result
+    text, method = extract("bundle.zip", data)
+    assert text is not None
+    assert "Heading" in text
+    assert "Plain notes" in text
+    assert method == "pypdf"
 
 
 def test_extract_zip_skips_binary_files():
@@ -165,9 +184,14 @@ def test_extract_zip_skips_binary_files():
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("logo.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
     data = buf.getvalue()
-    result = extract("bundle.zip", data)
-    # either a friendly empty message or None
-    assert result is None or "no readable text" in result.lower()
+    text, method = extract("bundle.zip", data)
+    # Either a friendly empty message (status='ready') or None (failed).
+    # In either case method should be "pypdf" (zip walked but found nothing).
+    assert method == "pypdf"
+    if text is None:
+        pass  # acceptable — extract() can return (None, "pypdf")
+    else:
+        assert "no readable text" in text.lower()
 
 
 # ────────────────────────────────────────────────────────────────────

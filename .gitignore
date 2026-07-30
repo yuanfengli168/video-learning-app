@@ -71,3 +71,7 @@ certs/
 ios/PocketMVP/build/
 ios/PocketMVP/PocketMVP.xcodeproj/xcuserdata/
 ios/PocketMVP/PocketMVP.xcodeproj/project.xcworkspace/xcuserdata/
+
+# MVP0.2 followup: macOS Vision OCR binary (built locally from bin/material_ocr.swift)
+bin/material_ocr
+bin/material_ocr.dSYM/

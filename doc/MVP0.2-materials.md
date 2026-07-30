@@ -216,6 +216,9 @@ struct VideoMaterialItem: Codable, Identifiable, Hashable {
     let sizeBytes: Int
     let charCount: Int?
     let addedAt: Date
+    // MVP0.2 followup #1: optional OCR provenance (additive — old
+    // iOS snapshots still decode). See doc/ocr-strategy.md.
+    let extractionMethod: String?
 }
 struct VideoMaterialsResponse: Codable {
     let videoId: String
