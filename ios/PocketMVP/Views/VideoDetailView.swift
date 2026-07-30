@@ -49,15 +49,30 @@ struct VideoDetailView: View {
 
             Divider()
 
-            // Bottom: "Teach me" button
+            // Bottom: "Teach me" button (with optional materials badge — MVP0.2)
             NavigationLink(destination: TeachMeView(video: video)) {
-                Label("Teach me", systemImage: "graduationcap.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.accentColor)
-                    .foregroundColor(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                HStack(spacing: 8) {
+                    Label("Teach me", systemImage: "graduationcap.fill")
+                        .font(.headline)
+                    if !video.selectedMaterials.isEmpty {
+                        // Pill: "📄 N" so the user knows materials are in scope
+                        // without having to open the TeachMe view.
+                        HStack(spacing: 2) {
+                            Image(systemName: "doc.text.fill").font(.caption)
+                            Text("\(video.selectedMaterials.count)")
+                                .font(.caption).bold()
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.white.opacity(0.25))
+                        .clipShape(Capsule())
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.accentColor)
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .padding()
 
@@ -222,6 +237,7 @@ struct EmptyState: View {
             flashcards: "[]",
             quiz: "[]",
             mindmap: "# Mindmap",
+            selectedMaterials: [],
             updatedAt: Date()
         ))
     }

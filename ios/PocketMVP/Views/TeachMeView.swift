@@ -56,6 +56,12 @@ struct TeachMeView: View {
 
                 header
 
+                // MVP0.2: Materials panel (read-only mirror of Mac-side selection)
+                MaterialsPanel(
+                    videoId: video.id,
+                    initialSelectedIds: video.selectedMaterials,
+                )
+
                 if isLoading {
                     loadingView
                 } else if let err = errorMessage {
@@ -603,6 +609,7 @@ struct FeedbackBox: View {
         TeachMeView(video: Video(
             id: "v1", sectionId: "s1", title: "Sample", orderIndex: 0,
             summary: "", transcript: "", flashcards: "[]", quiz: "[]", mindmap: "",
+            selectedMaterials: [],
             updatedAt: Date()
         ))
         .environmentObject(SnapshotStore())

@@ -163,6 +163,33 @@ final class APIClient {
         return try await get(url: url, as: ProgressSnapshot.self)
     }
 
+    // ── MVP0.2: Materials (read-only mirror of Mac web app) ──
+
+    /// GET /api/videos/{id}/materials — full pool of materials available
+    /// for this video + the user's Mac-side selection.
+    func fetchVideoMaterials(videoId: String) async throws -> VideoMaterialsResponse {
+        let url = AppConfig.baseURL.appendingPathComponent("/api/videos/\(videoId)/materials")
+        return try await get(url: url, as: VideoMaterialsResponse.self)
+    }
+
+    /// GET /api/materials/{id}/text — extracted plain text. Used by the
+    /// in-app material viewer (no need to leave the app to read a PDF's
+    /// text). Returns the text body (Content-Type: text/plain).
+    func fetchMaterialText(materialId: String) async throws -> String {
+        let url = AppConfig.baseURL.appendingPathComponent("/api/materials/\(materialId)/text")
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        Self.applyDevAuth(to: &req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        try Self.assertOK(resp, data: data)
+        // The endpoint returns text/plain; the body is the text itself.
+        // Use lossy conversion to handle non-UTF8 bytes gracefully (the
+        // backend caps content via material_extractor.py but PDFs can
+        // occasionally produce weird encodings).
+        return String(data: data, encoding: .utf8)
+            ?? String(decoding: data, as: UTF8.self)
+    }
+
     /// GET /api/health — used by the iOS app to detect whether the AI
     /// tutor (Ollama) is reachable. Returns nil on any network error so
     /// the caller can treat the API as "offline" without crashing.
