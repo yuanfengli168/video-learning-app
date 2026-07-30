@@ -1401,3 +1401,68 @@ Two user feedback items after the 5-commit MVP0.2 ship:
   diagram, layer-by-layer behaviour, when each layer is selected,
   the Swift CLI build process, the macOS-Vision-vs-PyObjC rationale,
   and how to add a new OCR backend.
+
+## [Unreleased] — MVP0.2 followup #2: Pocket tutor language alignment
+
+After the OCR + timeout fix shipped, users with Chinese videos
++ large Chinese materials noticed the iOS pocket tutor
+(TeachMe) was answering in English instead of matching the
+transcript. Root cause: the pocket tutor's `SYSTEM_PROMPT` is
+English-only (the Discuss tab in `chat.py` has a language
+directive but the pocket tutor never got one). The LLM defaulted
+to English because the system prompt's language was the only
+signal it had — the transcript was 100% Chinese but the LLM
+locked onto the system prompt's English.
+
+### 🐛 Fixed
+
+- **Pocket tutor now matches the transcript's language**
+  (`app/pocket/tutor.py`):
+  - `generate_chunks()` accepts a new `language: str | None`
+    parameter, threaded through both prompt formatters
+  - New `_language_directive()` helper builds a strong directive
+    like `LANGUAGE: Respond in zh. Match the language of the
+    transcript and the user's selected materials.` injected at
+    the **top of the user prompt** (placement matters — prompt
+    attention is highest at the start)
+  - `SYSTEM_PROMPT` gained rule 6: "LANGUAGE: respond in the
+    language explicitly named in the user prompt's LANGUAGE
+    directive. That directive is the source of truth — NOT the
+    language of this system prompt."
+  - `app/pocket/jobs.py` threads `v.language` (from
+    `videos.language`, set by Whisper auto-detect or the user's
+    manual language dropdown) into the call. Defaults to `"en"`
+    when `language` is None (legacy / not yet detected) per
+    user instruction 2026-07-30 — no auto-detection yet.
+
+### 🧪 Tests
+
+- **5 new tests** in `tests/test_pocket_tutor.py` pinning the
+  LANGUAGE directive:
+  - `test_language_directive_present_in_full_prompt` —
+    Chinese directive injected at the top
+  - `test_language_directive_defaults_to_english_when_none` —
+    fallback to "en" when `language=None`
+  - `test_language_directive_present_in_minimal_fallback_prompt` —
+    also injected in the truncated fallback (the path the
+    f1610715-… video actually takes)
+  - `test_language_directive_handles_empty_string` — empty
+    string defaults to "en"
+  - `test_language_directive_passes_japanese_verbatim` —
+    non-zh/en codes pass through unchanged
+
+- **Test suite**: 753 of 754 tests pass. The 1 failure is
+  the pre-existing unrelated whisper test.
+
+### 📝 Notes
+
+- **Why placed at the top?** When the LANGUAGE directive is at
+  the bottom (like the existing chat.py rule), the LLM has
+  already committed to the system prompt's language by the time
+  it reads the directive. Top-of-user-prompt placement forces
+  it to establish the language before processing the transcript.
+- **Why not auto-detect from transcript text?** Per user
+  instruction 2026-07-30, default to `en` when language is None
+  for now. Users can fix legacy videos via the existing language
+  dropdown on the video page; auto-detection is parked for
+  followup #3.

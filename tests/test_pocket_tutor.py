@@ -272,7 +272,7 @@ def test_teach_creates_job_and_status_returns_pending_then_ready(auth_client, db
     fake_chunks = [{"id": "c1", "video_id": v.id, "index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
                     "concept_title": "C", "teach_text": "T", "check_question": "?"}]
 
-    def fake_generate(transcript, summary, quiz, flashcards, mindmap, materials_section=""):
+    def fake_generate(transcript, summary, quiz, flashcards, mindmap, materials_section="", language=None):
         return tutor.TutorResult(
             chunks=[tutor.ChunkOut.model_validate(fake_chunks[0])],
             used_fallback=False,
@@ -376,3 +376,81 @@ def test_progress_empty_for_new_video(auth_client, db_session):
 def test_mark_chunk_done_unknown_404(auth_client, db_session):
     r = auth_client.post("/m/chunk/no-such-chunk/done")
     assert r.status_code == 404
+
+
+# ── Anti-drift language directive (MVP0.2 followup #2) ─────────
+# Without this, the pocket tutor ignores the transcript's language
+# and answers in English (the SYSTEM_PROMPT's language). The fix
+# is a strong LANGUAGE directive at the top of the user prompt,
+# injected with the video.language code (Whisper-style: 'zh', 'en',
+# etc.). When language is None, defaults to 'en' per user
+# instruction 2026-07-30.
+
+def test_language_directive_present_in_full_prompt():
+    """When language='zh', the prompt must contain 'Respond in zh'."""
+    raw = json.dumps([
+        {"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+         "concept_title": "X", "teach_text": "y", "check_question": "?"}
+    ])
+    with patch.object(tutor, "_call_ollama", return_value=raw) as mock_call:
+        result = tutor.generate_chunks(
+            transcript="t", summary="s", quiz="q", flashcards="f", mindmap="m",
+            materials_section="", language="zh",
+        )
+    assert result.error is None
+    actual_prompt = mock_call.call_args[0][0]
+    assert "LANGUAGE: Respond in zh" in actual_prompt
+    # The directive must be at the TOP of the user prompt (after
+    # SYSTEM_PROMPT) — prompt attention matters.
+    assert actual_prompt.index("LANGUAGE:") < actual_prompt.index("Transcript")
+
+
+def test_language_directive_defaults_to_english_when_none():
+    """When language is None, we default to 'en' (per user instruction)."""
+    raw = json.dumps([
+        {"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+         "concept_title": "X", "teach_text": "y", "check_question": "?"}
+    ])
+    with patch.object(tutor, "_call_ollama", return_value=raw) as mock_call:
+        result = tutor.generate_chunks(
+            transcript="t", summary="s", quiz="q", flashcards="f", mindmap="m",
+            materials_section="", language=None,
+        )
+    actual_prompt = mock_call.call_args[0][0]
+    assert "LANGUAGE: Respond in en" in actual_prompt
+
+
+def test_language_directive_present_in_minimal_fallback_prompt():
+    """The minimal fallback also gets the LANGUAGE directive."""
+    raw = json.dumps([
+        {"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+         "concept_title": "X", "teach_text": "y", "check_question": "?"}
+    ])
+    big_materials = "M" * 200_000  # triggers fallback
+    with patch.object(tutor, "_call_ollama", return_value=raw) as mock_call:
+        result = tutor.generate_chunks(
+            transcript="t" * 50_000, summary="s" * 5_000,
+            quiz="q", flashcards="f", mindmap="m",
+            materials_section=big_materials, language="zh",
+        )
+    assert result.used_fallback is True
+    actual_prompt = mock_call.call_args[0][0]
+    assert "LANGUAGE: Respond in zh" in actual_prompt
+    # Truncation marker should also be present
+    assert "materials truncated" in actual_prompt
+
+
+def test_language_directive_handles_empty_string():
+    """Empty language string (legacy/blank) defaults to 'en', not 'None'."""
+    directive = tutor._language_directive("")
+    assert "Respond in en" in directive
+    assert "None" not in directive
+
+    directive = tutor._language_directive("   ")
+    assert "Respond in en" in directive
+
+
+def test_language_directive_passes_japanese_verbatim():
+    """Non-zh, non-en codes are passed through as-is (the model knows them)."""
+    directive = tutor._language_directive("ja")
+    assert "Respond in ja" in directive

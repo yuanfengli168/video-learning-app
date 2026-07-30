@@ -144,6 +144,13 @@ def _do_generate(user_id: str, video_id: str) -> list[dict[str, Any]] | None:
             flashcards=assets.get("flashcards", ""),
             mindmap=assets.get("mindmap", ""),
             materials_section=materials_ctx.prompt_section,
+            # MVP0.2 followup #2 (anti-drift language): pass the
+            # video's detected language so the tutor generates Chinese
+            # chunks for a Chinese video. Default to 'en' when the
+            # language is unknown (legacy / not yet detected) — per
+            # user instruction 2026-07-30 we don't auto-detect from
+            # the transcript text yet.
+            language=v.language or "en",
         )
 
         if result.error:

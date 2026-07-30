@@ -66,7 +66,11 @@ SYSTEM_PROMPT = (
     "language, give examples if the materials have them, and explain WHY not just WHAT.\n"
     "5. Citation/source discipline: only say things present in the transcript, summary, "
     "quiz, flashcards, or mindmap. If you would be tempted to say something not in the "
-    "materials, don't say it."
+    "materials, don't say it.\n"
+    "6. LANGUAGE: respond in the language explicitly named in the user prompt's "
+    "LANGUAGE directive. That directive is the source of truth — NOT the language "
+    "of this system prompt. Technical terms (API names, library names, code, "
+    "identifiers) stay in their original form regardless of the response language."
 )
 
 USER_TEMPLATE = """Transcript (the full video, with [seconds] timestamps):
@@ -114,6 +118,7 @@ class TutorResult:
 def _format_user_prompt(
     transcript: str, summary: str, quiz: str, flashcards: str, mindmap: str,
     materials_section: str = "",
+    language: str | None = None,
 ) -> str:
     base = USER_TEMPLATE.format(
         transcript=transcript[:60_000],   # cap transcript at 60k chars
@@ -122,11 +127,39 @@ def _format_user_prompt(
         flashcards=flashcards[:20_000],
         mindmap=mindmap[:20_000],
     )
-    return base + materials_section
+    # MVP0.2 followup #2 (anti-drift language): inject a strong
+    # LANGUAGE directive at the TOP of the user prompt so the LLM
+    # matches the transcript's language. Placed at the top because
+    # prompt attention matters — late directives get ignored when the
+    # model has already committed to the system prompt's language.
+    # Defaults to "en" when video.language is None (legacy / unset).
+    directive = _language_directive(language)
+    return directive + "\n\n" + base + materials_section
+
+
+def _language_directive(language: str | None) -> str:
+    """Build a short LANGUAGE directive for the user prompt.
+
+    Defaults to English when `language` is None or empty. Whisper
+    language codes are passed through as-is (e.g. 'zh', 'ja', 'en');
+    the model knows what to do with them. The directive is also
+    strengthened with the look-and-feel of the transcript so the
+    fallback `en` case is at least informed by the actual content.
+    """
+    code = (language or "").strip().lower() or "en"
+    return (
+        f"LANGUAGE: Respond in {code}. Match the language of the transcript "
+        f"and the user's selected materials. Do NOT translate proper nouns, "
+        f"API names, library names, code, or technical identifiers — keep "
+        f"those in their original form. If the transcript is mostly English, "
+        f"respond in English. If it's mostly Chinese, respond in Chinese. "
+        f"This directive overrides the language of the system prompt."
+    )
 
 
 def _format_user_prompt_minimal(
     transcript: str, summary: str, materials_section: str = "",
+    language: str | None = None,
 ) -> str:
     """Fallback: transcript + this video's summary only. No quiz/flashcards/mindmap.
 
@@ -135,6 +168,10 @@ def _format_user_prompt_minimal(
     and pushed the prompt past the timeout. Now we *also* size-cap the
     materials so the minimal fallback stays within ~80K chars total
     (transcript 60K + summary 20K + materials truncated to fit).
+
+    MVP0.2 followup #2 (anti-drift language): also inject the LANGUAGE
+    directive at the top so the minimal fallback respects the video's
+    language too.
     """
     base = USER_TEMPLATE.format(
         transcript=transcript[:60_000],
@@ -143,6 +180,7 @@ def _format_user_prompt_minimal(
         flashcards="(not provided)",
         mindmap="(not provided)",
     )
+    directive = _language_directive(language)
     # We have ~80K chars of headroom used by transcript+summary. If the
     # materials section is larger than 40K, truncate it with a warning.
     MAX_MATERIALS_CHARS_MINIMAL = 40_000
@@ -152,8 +190,8 @@ def _format_user_prompt_minimal(
             + f"\n\n[... materials truncated to {MAX_MATERIALS_CHARS_MINIMAL:,} chars "
             f"for the minimal fallback prompt; original was {len(materials_section):,} chars ...]"
         )
-        return base + truncated
-    return base + materials_section
+        return directive + "\n\n" + base + truncated
+    return directive + "\n\n" + base + materials_section
 
 
 def _ollama_url() -> str:
@@ -308,19 +346,32 @@ def generate_chunks(
     flashcards: str,
     mindmap: str,
     materials_section: str = "",
+    language: str | None = None,
 ) -> TutorResult:
     """Generate teachable chunks for a video. Synchronous; called via to_thread.
+
+    Args:
+        language: Whisper-style language code (e.g. 'zh', 'en') from
+            `videos.language`. When None we default to 'en' (per
+            user instruction 2026-07-30). The directive is injected at
+            the top of the user prompt so the tutor matches the
+            transcript's language.
 
     Auto-fallback: if the full-context prompt exceeds PROMPT_CHAR_LIMIT, the
     quiz/flashcards/mindmap slots are dropped and only transcript+summary are sent.
     """
     start = time.monotonic()
-    full_prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt(transcript, summary, quiz, flashcards, mindmap, materials_section)
+    full_prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt(
+        transcript, summary, quiz, flashcards, mindmap, materials_section,
+        language=language,
+    )
     used_fallback = False
 
     if len(full_prompt) > PROMPT_CHAR_LIMIT:
         log.info("pocket.tutor: prompt too large (%d chars), using minimal fallback", len(full_prompt))
-        prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt_minimal(transcript, summary, materials_section)
+        prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt_minimal(
+            transcript, summary, materials_section, language=language,
+        )
         used_fallback = True
     else:
         prompt = full_prompt
