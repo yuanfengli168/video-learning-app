@@ -77,7 +77,24 @@ struct TeachMeView: View {
         .navigationTitle("Teach me")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                // MVP0.2 followup: "🔄 Regenerate" button — lets the user
+                // re-run the tutor after adding/changing materials on the
+                // Mac. Without this, the cached chunks from the previous
+                // teach job would keep showing and the user would have to
+                // manually clear them. We just wipe the local chunk list
+                // and call startTeach() — the backend's PocketChunk cache
+                // is overwritten when the new job completes.
+                if !chunks.isEmpty {
+                    Button {
+                        Task { await regenerateChunks() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(.indigo)
+                    }
+                    .accessibilityLabel("Regenerate teaching chunks")
+                    .disabled(isLoading)
+                }
                 if !chunks.isEmpty {
                     Button {
                         showFavoritesOnly.toggle()
@@ -258,6 +275,27 @@ struct TeachMeView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// MVP0.2 followup: clear the cached chunks and start a fresh tutor
+    /// job. Used after the user adds/changes materials on the Mac and
+    /// wants the tutor to read them on next generation.
+    ///
+    /// The backend's PocketChunk table for this video gets overwritten
+    /// when the new job completes (see app/pocket/jobs.py —
+    /// `db.query(PocketChunk).filter(PocketChunk.video_id == video_id).delete()`
+    /// at the start of `_do_generate`). On the iOS side, the chunk
+    /// cache is server-driven (APIClient.cachedChunks), so clearing
+    /// local state + re-running startTeach() is sufficient.
+    private func regenerateChunks() async {
+        // Reset everything to "fresh teach" state
+        chunks = []
+        completedChunks = []
+        chunkStates = [:]
+        currentJobId = nil
+        jobStatus = .pending
+        // Now actually start the new teach job
+        await startTeach()
     }
 
     private func pollUntilDone() async {
