@@ -84,6 +84,35 @@
                             + Upload Video
                         </button>
                     </div>
+
+                    <!-- MVP0.2: Materials panel (PDF / .md / .txt / .zip).
+                         Reference materials the LLM uses as context for each
+                         video in this section. Mac-only authoring surface;
+                         iOS is read-only. -->
+                    <details class="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/30">
+                        <summary class="cursor-pointer px-3 py-2 flex items-center justify-between text-sm font-medium text-gray-700 dark:text-gray-300 select-none">
+                            <span>📄 Materials
+                                <span id="mat-count-{{ section.id }}" class="text-xs text-gray-400 font-normal">(0)</span>
+                            </span>
+                            <span class="text-xs text-gray-400" onclick="event.stopPropagation()">
+                                PDF · Markdown · TXT · ZIP
+                            </span>
+                        </summary>
+                        <div class="px-3 py-2 border-t border-gray-200 dark:border-gray-700">
+                            <input type="file"
+                                   id="mat-upload-{{ section.id }}"
+                                   class="hidden"
+                                   accept=".pdf,.md,.markdown,.txt,.zip"
+                                   onchange="uploadMaterial('{{ section.id }}', this)">
+                            <button onclick="document.getElementById('mat-upload-{{ section.id }}').click()"
+                                    class="w-full py-1.5 border border-dashed border-gray-300 dark:border-gray-600 rounded text-xs text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
+                                + Upload material
+                            </button>
+                            <div id="mat-list-{{ section.id }}" class="mt-2 space-y-1 text-xs">
+                                <p class="text-gray-400 py-2">Loading…</p>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
         </div>
@@ -437,6 +466,109 @@ document.addEventListener('keydown', (e) => {
             hideDeleteSectionModal();
         }
     }
+});
+
+// ── MVP0.2: Materials panel ───────────────────────────────────────────
+// Per-section list of uploaded materials + upload button. We load the
+// list once on page load (the section body is collapsed by default;
+// re-load on demand if the user expands for the first time).
+
+async function loadMaterials(sectionId) {
+    const listEl = document.getElementById(`mat-list-${sectionId}`);
+    const countEl = document.getElementById(`mat-count-${sectionId}`);
+    if (!listEl) return;
+    try {
+        const resp = await fetch(`/api/materials?section_id=${encodeURIComponent(sectionId)}`);
+        const { ok, data } = await safeJsonParse(resp);
+        if (!ok) {
+            listEl.innerHTML = '<p class="text-red-500 py-2">Failed to load.</p>';
+            return;
+        }
+        const items = data || [];
+        countEl.textContent = `(${items.length})`;
+        if (items.length === 0) {
+            listEl.innerHTML = '<p class="text-gray-400 py-2">No materials yet.</p>';
+            return;
+        }
+        listEl.innerHTML = items.map(m => {
+            const statusBadge = m.status === 'ready'
+                ? '<span class="px-1.5 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 text-[10px]">ready</span>'
+                : m.status === 'failed'
+                    ? `<span class="px-1.5 py-0.5 rounded bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 text-[10px]" title="${m.error_message || ''}">failed</span>`
+                    : `<span class="px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300 text-[10px]">${m.status}</span>`;
+            const sizeKb = m.size_bytes < 1024 * 1024
+                ? `${Math.round(m.size_bytes / 1024)} KB`
+                : `${(m.size_bytes / 1024 / 1024).toFixed(1)} MB`;
+            const chars = m.char_count ? ` · ${m.char_count.toLocaleString()} chars` : '';
+            // Escape filename to prevent XSS
+            const safeName = m.filename.replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+            return `
+                <div class="flex items-center justify-between gap-2 py-1 px-2 rounded hover:bg-white dark:hover:bg-gray-800" data-material-id="${m.id}">
+                    <span class="truncate flex items-center gap-1 min-w-0">
+                        <span>📄</span>
+                        <span class="truncate" title="${safeName}">${safeName}</span>
+                    </span>
+                    <span class="flex items-center gap-2 flex-shrink-0">
+                        <span class="text-[10px] text-gray-400">${sizeKb}${chars}</span>
+                        ${statusBadge}
+                        <button onclick="deleteMaterial('${m.id}', '${sectionId}')"
+                                class="text-red-500 hover:text-red-700 text-xs"
+                                title="Delete this material">🗑️</button>
+                    </span>
+                </div>`;
+        }).join('');
+    } catch (e) {
+        listEl.innerHTML = '<p class="text-red-500 py-2">Network error.</p>';
+    }
+}
+
+async function uploadMaterial(sectionId, input) {
+    const file = (input.files || [])[0];
+    if (!file) return;
+    const listEl = document.getElementById(`mat-list-${sectionId}`);
+    listEl.innerHTML = '<p class="text-gray-400 py-2">Uploading…</p>';
+    const form = new FormData();
+    form.append('file', file);
+    form.append('section_id', sectionId);
+    try {
+        const resp = await fetch('/api/materials', { method: 'POST', body: form });
+        const { ok, data } = await safeJsonParse(resp);
+        if (!ok) {
+            alert('Upload failed: ' + (data.detail || 'Unknown error'));
+            await loadMaterials(sectionId);
+            return;
+        }
+        if (data.status === 'failed') {
+            alert('Uploaded but extraction failed: ' + (data.error_message || ''));
+        }
+        input.value = '';  // reset so re-uploading same file works
+        await loadMaterials(sectionId);
+    } catch (e) {
+        alert('Upload failed: ' + e.message);
+        await loadMaterials(sectionId);
+    }
+}
+
+async function deleteMaterial(materialId, sectionId) {
+    if (!confirm('Delete this material? It will be removed from every video that uses it.')) return;
+    try {
+        const resp = await fetch(`/api/materials/${materialId}`, { method: 'DELETE' });
+        const { ok, data } = await safeJsonParse(resp);
+        if (!ok) {
+            alert('Delete failed: ' + (data.detail || 'Unknown error'));
+            return;
+        }
+        await loadMaterials(sectionId);
+    } catch (e) {
+        alert('Delete failed: ' + e.message);
+    }
+}
+
+// Load all materials panels on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const sectionIds = Array.from(document.querySelectorAll('[id^="mat-count-"]'))
+        .map(el => el.id.replace('mat-count-', ''));
+    for (const sid of sectionIds) loadMaterials(sid);
 });
 </script>
 {% endblock %}

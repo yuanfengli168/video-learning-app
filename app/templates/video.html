@@ -207,6 +207,10 @@
                 <button onclick="switchTab('mindmap')" id="tab-mindmap" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Mindmap</button>
                 <button onclick="switchTab('discuss')" id="tab-discuss" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">💬 Discuss</button>
                 <button onclick="switchTab('tools')" id="tab-tools" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">🛠️ Tools</button>
+                <button onclick="switchTab('materials')" id="tab-materials" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+                    📄 Materials
+                    <span id="mat-selected-badge" class="ml-1 text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hidden">0</span>
+                </button>
             </div>
 
             <!-- Tab content -->
@@ -450,6 +454,43 @@
                         {% endif %}
                     </div>
                 </div>
+
+                <!-- MVP0.2: Materials tab — pick which uploaded materials
+                     the LLM should see when teaching this video. Shows
+                     the full pool of available materials (section + sibling
+                     videos) and the user's current selection. -->
+                <div id="content-materials" class="hidden">
+                    <div class="space-y-3">
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                            Pick which reference materials the tutor should use as context for this video.
+                            Upload new ones from the
+                            <a href="/course/{{ video.section.course_id }}" class="text-indigo-600 dark:text-indigo-400 hover:underline">course page</a>.
+                            <span id="mat-selection-summary" class="block mt-1 text-[11px] text-gray-400"></span>
+                        </p>
+                        <div id="mat-picker-list" class="space-y-1 max-h-96 overflow-y-auto">
+                            <p class="text-gray-400 py-2">Loading…</p>
+                        </div>
+                        <div class="flex items-center justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
+                            <button onclick="saveMaterialSelection()" id="mat-save-btn"
+                                    class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:bg-gray-300">
+                                💾 Save selection
+                            </button>
+                            <button onclick="clearMaterialSelection()" class="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+                                Clear
+                            </button>
+                        </div>
+                        <!-- Selected-material viewer (collapsed by default).
+                             Shows extracted text in a scrollable box for
+                             quick review without leaving the page. -->
+                        <div id="mat-viewer" class="hidden mt-3 p-3 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900/40">
+                            <div class="flex items-center justify-between mb-2">
+                                <span id="mat-viewer-name" class="text-xs font-medium truncate"></span>
+                                <button onclick="closeMaterialViewer()" class="text-xs text-gray-400 hover:text-gray-600">✕</button>
+                            </div>
+                            <pre id="mat-viewer-body" class="text-xs whitespace-pre-wrap break-words max-h-72 overflow-y-auto text-gray-700 dark:text-gray-300"></pre>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -514,7 +555,7 @@ function switchTab(tab) {
     // MVP2.1.0.3: 'tools' was missing from the forEach — same
     // regression shape as the 2.0.7 fix. The test now asserts
     // 'all six' (regression-test for future tab additions).
-    ['summary', 'flashcards', 'quiz', 'mindmap', 'discuss', 'tools'].forEach(t => {
+    ['summary', 'flashcards', 'quiz', 'mindmap', 'discuss', 'tools', 'materials'].forEach(t => {
         document.getElementById('content-' + t).classList.add('hidden');
         const btn = document.getElementById('tab-' + t);
         btn.classList.remove('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
@@ -531,6 +572,188 @@ function switchTab(tab) {
     if (tab === 'quiz' && !contentCache.quiz) loadQuiz();
     if (tab === 'mindmap' && !contentCache.mindmap) loadMindmap();
     if (tab === 'discuss' && !discussSessionId) startDiscussSession();
+    if (tab === 'materials' && !contentCache.materials) loadMaterialsForVideo();
+}
+
+// ── MVP0.2: Materials tab ─────────────────────────────────────────────
+// Per-video picker: shows the full pool of available materials for this
+// video (from the section + sibling videos) and the user's current
+// selection. Toggling a checkbox + clicking Save persists the new
+// selection via PUT /api/videos/{id}/materials.
+
+let materialsSelectionDirty = false;  // unsaved changes warning
+
+async function loadMaterialsForVideo() {
+    const listEl = document.getElementById('mat-picker-list');
+    const badgeEl = document.getElementById('mat-selected-badge');
+    if (!listEl) return;
+    listEl.innerHTML = '<p class="text-gray-400 py-2">Loading…</p>';
+    try {
+        const resp = await fetch(`/api/videos/${encodeURIComponent(videoId)}/materials`);
+        const { ok, data } = await safeJsonParse(resp);
+        if (!ok) {
+            listEl.innerHTML = '<p class="text-red-500 py-2">Failed to load.</p>';
+            return;
+        }
+        renderMaterialsPicker(data.selected_ids || [], data.available || []);
+        contentCache.materials = true;
+    } catch (e) {
+        listEl.innerHTML = '<p class="text-red-500 py-2">Network error.</p>';
+    }
+}
+
+function renderMaterialsPicker(selectedIds, available) {
+    const listEl = document.getElementById('mat-picker-list');
+    const badgeEl = document.getElementById('mat-selected-badge');
+    const summaryEl = document.getElementById('mat-selection-summary');
+
+    const selectedSet = new Set(selectedIds);
+    const totalChars = available
+        .filter(m => selectedSet.has(m.material_id))
+        .reduce((sum, m) => sum + (m.char_count || 0), 0);
+
+    if (badgeEl) {
+        if (selectedIds.length > 0) {
+            badgeEl.textContent = selectedIds.length;
+            badgeEl.classList.remove('hidden');
+        } else {
+            badgeEl.classList.add('hidden');
+        }
+    }
+    if (summaryEl) {
+        summaryEl.textContent = selectedIds.length === 0
+            ? 'No materials selected — tutor will only use the video transcript.'
+            : `${selectedIds.length} material(s) selected · ${totalChars.toLocaleString()} chars in context.`;
+    }
+
+    if (!available || available.length === 0) {
+        listEl.innerHTML = `
+            <p class="text-gray-400 py-3 text-sm">
+                No materials available for this video yet.
+                Upload some on the
+                <a href="/course/${videoId ? '' : ''}" class="text-indigo-600 dark:text-indigo-400 hover:underline">course page</a>.
+            </p>`;
+        return;
+    }
+
+    // Escape helper for filenames
+    const esc = (s) => String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+
+    listEl.innerHTML = available.map(m => {
+        const checked = selectedSet.has(m.material_id) ? 'checked' : '';
+        const statusBadge = m.char_count > 0
+            ? `<span class="text-[10px] text-gray-400">${(m.size_bytes / 1024).toFixed(0)} KB · ${m.char_count.toLocaleString()} chars</span>`
+            : `<span class="text-[10px] text-red-500">extraction failed</span>`;
+        return `
+            <label class="flex items-start gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer"
+                   data-material-id="${m.material_id}">
+                <input type="checkbox"
+                       ${checked}
+                       onchange="onMaterialToggle('${m.material_id}', this.checked)"
+                       class="mt-0.5 flex-shrink-0">
+                <span class="flex-1 min-w-0">
+                    <span class="block text-sm truncate" title="${esc(m.filename)}">📄 ${esc(m.filename)}</span>
+                    ${statusBadge}
+                </span>
+                <button type="button"
+                        onclick="event.preventDefault(); viewMaterial('${m.material_id}')"
+                        class="flex-shrink-0 text-xs text-indigo-600 dark:text-indigo-400 hover:underline">
+                    View
+                </button>
+            </label>`;
+    }).join('');
+
+    // Reset dirty flag — we just rendered the saved state
+    materialsSelectionDirty = false;
+}
+
+function onMaterialToggle(materialId, isChecked) {
+    materialsSelectionDirty = true;
+    // Live-update the summary line without waiting for save
+    const listEl = document.getElementById('mat-picker-list');
+    const checkedBoxes = listEl.querySelectorAll('input[type="checkbox"]:checked');
+    const badgeEl = document.getElementById('mat-selected-badge');
+    const summaryEl = document.getElementById('mat-selection-summary');
+    const n = checkedBoxes.length;
+    if (badgeEl) {
+        if (n > 0) {
+            badgeEl.textContent = n;
+            badgeEl.classList.remove('hidden');
+        } else {
+            badgeEl.classList.add('hidden');
+        }
+    }
+    if (summaryEl) {
+        summaryEl.textContent = n === 0
+            ? 'No materials selected — tutor will only use the video transcript.'
+            : `${n} material(s) selected (unsaved).`;
+    }
+}
+
+async function saveMaterialSelection() {
+    const btn = document.getElementById('mat-save-btn');
+    const listEl = document.getElementById('mat-picker-list');
+    const checkedIds = Array.from(listEl.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(cb => cb.closest('[data-material-id]').dataset.materialId);
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+        const resp = await fetch(`/api/videos/${encodeURIComponent(videoId)}/materials`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({material_ids: checkedIds}),
+        });
+        const { ok, data } = await safeJsonParse(resp);
+        if (!ok) {
+            alert('Save failed: ' + (data.detail || 'Unknown error'));
+            return;
+        }
+        materialsSelectionDirty = false;
+        // Refresh to get accurate char counts from server
+        await loadMaterialsForVideo();
+    } catch (e) {
+        alert('Save failed: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '💾 Save selection';
+    }
+}
+
+function clearMaterialSelection() {
+    const listEl = document.getElementById('mat-picker-list');
+    listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = false;
+    });
+    onMaterialToggle(null, false);  // update badge + summary
+}
+
+async function viewMaterial(materialId) {
+    const viewer = document.getElementById('mat-viewer');
+    const nameEl = document.getElementById('mat-viewer-name');
+    const bodyEl = document.getElementById('mat-viewer-body');
+    nameEl.textContent = 'Loading…';
+    bodyEl.textContent = '';
+    viewer.classList.remove('hidden');
+    try {
+        const resp = await fetch(`/api/materials/${encodeURIComponent(materialId)}/text`);
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({detail: 'Failed to load'}));
+            bodyEl.textContent = err.detail || 'Failed to load.';
+            return;
+        }
+        const text = await resp.text();
+        // Find the filename from the picker row
+        const row = document.querySelector(`#mat-picker-list [data-material-id="${materialId}"]`);
+        const fname = row ? row.querySelector('.block')?.textContent?.replace(/^📄\s*/, '') : '';
+        nameEl.textContent = fname || materialId;
+        bodyEl.textContent = text;
+    } catch (e) {
+        bodyEl.textContent = 'Network error: ' + e.message;
+    }
+}
+
+function closeMaterialViewer() {
+    document.getElementById('mat-viewer').classList.add('hidden');
 }
 
 // ── Section-videos panel (MVP2.0.8) ──
