@@ -181,7 +181,7 @@ def test_teach_creates_job_and_status_returns_pending_then_ready(auth_client, db
     fake_chunks = [{"id": "c1", "video_id": v.id, "index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
                     "concept_title": "C", "teach_text": "T", "check_question": "?"}]
 
-    def fake_generate(transcript, summary, quiz, flashcards, mindmap):
+    def fake_generate(transcript, summary, quiz, flashcards, mindmap, materials_section=""):
         return tutor.TutorResult(
             chunks=[tutor.ChunkOut.model_validate(fake_chunks[0])],
             used_fallback=False,

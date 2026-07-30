@@ -18,6 +18,9 @@ firebase-admin>=6.2.0
 # Transcription
 faster-whisper>=1.1.0
 
+# MVP0.2 materials feature: PDF text extraction
+pypdf>=5.0.0
+
 # LLM
 ollama>=0.4.4
 httpx>=0.27.0,<0.28.0

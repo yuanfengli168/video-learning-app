@@ -80,6 +80,7 @@ def init_db() -> None:
         asset,
         chat,
         course,
+        material,
         plugin_run,
         section,
         video,

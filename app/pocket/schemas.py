@@ -37,6 +37,10 @@ class VideoOut(BaseModel):
     flashcards: str = ""           # JSON string; iOS decodes
     quiz: str = ""                 # JSON string; iOS decodes
     mindmap: str = ""
+    # MVP0.2: list of PocketMaterial IDs the user has selected for this video
+    # as LLM context. Order matches user's Mac-side selection order. Empty
+    # list = no materials in context (default).
+    selected_materials: list[str] = Field(default_factory=list)
     updated_at: datetime
 
 

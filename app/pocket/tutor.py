@@ -112,26 +112,29 @@ class TutorResult:
 
 
 def _format_user_prompt(
-    transcript: str, summary: str, quiz: str, flashcards: str, mindmap: str
+    transcript: str, summary: str, quiz: str, flashcards: str, mindmap: str,
+    materials_section: str = "",
 ) -> str:
-    return USER_TEMPLATE.format(
+    base = USER_TEMPLATE.format(
         transcript=transcript[:60_000],   # cap transcript at 60k chars
         summary=summary[:20_000],
         quiz=quiz[:20_000],
         flashcards=flashcards[:20_000],
         mindmap=mindmap[:20_000],
     )
+    return base + materials_section
 
 
-def _format_user_prompt_minimal(transcript: str, summary: str) -> str:
+def _format_user_prompt_minimal(transcript: str, summary: str, materials_section: str = "") -> str:
     """Fallback: transcript + this video's summary only. No quiz/flashcards/mindmap."""
-    return USER_TEMPLATE.format(
+    base = USER_TEMPLATE.format(
         transcript=transcript[:60_000],
         summary=summary[:20_000],
         quiz="(not provided)",
         flashcards="(not provided)",
         mindmap="(not provided)",
     )
+    return base + materials_section
 
 
 def _ollama_url() -> str:
@@ -276,6 +279,7 @@ def generate_chunks(
     quiz: str,
     flashcards: str,
     mindmap: str,
+    materials_section: str = "",
 ) -> TutorResult:
     """Generate teachable chunks for a video. Synchronous; called via to_thread.
 
@@ -283,12 +287,12 @@ def generate_chunks(
     quiz/flashcards/mindmap slots are dropped and only transcript+summary are sent.
     """
     start = time.monotonic()
-    full_prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt(transcript, summary, quiz, flashcards, mindmap)
+    full_prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt(transcript, summary, quiz, flashcards, mindmap, materials_section)
     used_fallback = False
 
     if len(full_prompt) > PROMPT_CHAR_LIMIT:
         log.info("pocket.tutor: prompt too large (%d chars), using minimal fallback", len(full_prompt))
-        prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt_minimal(transcript, summary)
+        prompt = SYSTEM_PROMPT + "\n\n" + _format_user_prompt_minimal(transcript, summary, materials_section)
         used_fallback = True
     else:
         prompt = full_prompt

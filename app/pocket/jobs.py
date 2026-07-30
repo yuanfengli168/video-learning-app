@@ -25,6 +25,7 @@ import app.database as _app_database
 from app.models import Asset, Video
 from app.pocket import tutor
 from app.pocket.models import PocketChunk
+from app.services.material_context import build_materials_section
 
 log = logging.getLogger(__name__)
 
@@ -133,12 +134,16 @@ def _do_generate(user_id: str, video_id: str) -> list[dict[str, Any]] | None:
         # Re-use the same transcript-flattening that sync.py does
         transcript = _flatten_transcript(assets.get("transcript", ""))
 
+        # MVP0.2: load user-selected materials for this video
+        materials_ctx = build_materials_section(db, video_id, user_id=user_id)
+
         result = tutor.generate_chunks(
             transcript=transcript,
             summary=assets.get("summary", ""),
             quiz=assets.get("quiz", ""),
             flashcards=assets.get("flashcards", ""),
             mindmap=assets.get("mindmap", ""),
+            materials_section=materials_ctx.prompt_section,
         )
 
         if result.error:

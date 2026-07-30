@@ -17,7 +17,9 @@ from app.routers import chat as chat_router
 from app.routers import courses as courses_router
 from app.routers import frontend as frontend_router
 from app.routers import generation as generation_router
+from app.routers import materials as materials_router
 from app.routers import plugins as plugins_router
+from app.routers import video_materials as video_materials_router
 from app.routers import videos as videos_router
 from app.auth.session import router as session_router
 # MVP: pocket v0.1 — mobile companion sub-app, mounted at /m/*
@@ -163,6 +165,9 @@ app.include_router(generation_router.router)
 app.include_router(chat_router.router)
 app.include_router(plugins_router.router)
 app.include_router(frontend_router.router)
+# MVP0.2: course materials (PDF / .md / .txt / .zip uploads)
+app.include_router(materials_router.router)
+app.include_router(video_materials_router.router)
 # MVP: pocket v0.1 — mobile companion sub-app at /m/*
 app.include_router(pocket_router, prefix="/m")
 

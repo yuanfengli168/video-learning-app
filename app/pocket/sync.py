@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Asset, Course, Section, Video
+from app.models import Asset, Course, PocketVideoMaterial, Section, Video
 from app.models.video import natural_sort_key
 from app.pocket.models import PocketSyncLog
 
@@ -125,7 +125,7 @@ def _serialize_section(s: Section) -> dict[str, Any]:
     }
 
 
-def _serialize_video(v: Video, assets: dict[str, str], effective_updated_at) -> dict[str, Any]:
+def _serialize_video(v: Video, assets: dict[str, str], effective_updated_at, selected_material_ids: list[str]) -> dict[str, Any]:
     # effective_updated_at is max(video.updated_at, max(asset.updated_at)) — so
     # regenerated summaries / new flashcards / corrected transcripts all bump
     # the video's sync timestamp and the iOS app re-fetches on next sync.
@@ -139,6 +139,10 @@ def _serialize_video(v: Video, assets: dict[str, str], effective_updated_at) -> 
         "flashcards": assets["flashcards"],
         "quiz": assets["quiz"],
         "mindmap": assets["mindmap"],
+        # MVP0.2: list of material IDs the user has selected for this video.
+        # iOS uses this to render the "Materials in context" badge and the
+        # MaterialsPickerView. Order matches user's selection order on Mac.
+        "selected_materials": selected_material_ids,
         "updated_at": _iso(effective_updated_at),
     }
 
@@ -193,6 +197,18 @@ def build_snapshot(db: Session, user_id: str, since: str | None = None) -> dict[
     if section_ids:
         q_videos = select(Video).where(Video.section_id.in_(section_ids))
         videos = db.execute(q_videos).scalars().all()
+        # MVP0.2: bulk-load the user's selected materials for these videos in
+        # one query so we don't N+1 the selection lookup.
+        video_id_list = [v.id for v in videos]
+        selected_map: dict[str, list[str]] = {vid: [] for vid in video_id_list}
+        if video_id_list:
+            sel_rows = db.execute(
+                select(PocketVideoMaterial.video_id, PocketVideoMaterial.material_id, PocketVideoMaterial.created_at)
+                .where(PocketVideoMaterial.video_id.in_(video_id_list))
+                .order_by(PocketVideoMaterial.created_at.asc())
+            ).all()
+            for row in sel_rows:
+                selected_map.setdefault(row.video_id, []).append(row.material_id)
         for v in videos:
             assets, max_asset_dt = _video_assets(db, v.id)
             # Effective timestamp: max of the video record and any of its assets
@@ -202,7 +218,7 @@ def build_snapshot(db: Session, user_id: str, since: str | None = None) -> dict[
             # Apply `since` filter on the effective timestamp
             if since_dt and effective_dt and effective_dt <= since_dt:
                 continue
-            video_dicts.append(_serialize_video(v, assets, effective_dt))
+            video_dicts.append(_serialize_video(v, assets, effective_dt, selected_map.get(v.id, [])))
         # natural-sort by title so iOS display is stable
         video_dicts.sort(key=lambda d: natural_sort_key(d["title"]))
 

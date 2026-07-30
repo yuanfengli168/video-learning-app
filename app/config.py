@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     # speakers can hover around 0.55).
     language_detect_speech_threshold: float = 0.5
 
+    # ── MVP0.2: course materials (PDF / .md / .txt / .zip uploads) ──
+    # Per-user storage cap for uploaded materials. Tested with small PDFs
+    # (~2 MB) and .zip of small code repos (~500 KB); 200 MB = ~100
+    # typical PDFs, plenty for a personal study tool.
+    materials_max_total_bytes_per_user: int = 200 * 1024 * 1024  # 200 MB
+    # Single-file upload limit. 50 MB covers most textbooks and code
+    # repos; anything bigger should be split or done via cloud sync (later).
+    materials_max_file_bytes: int = 50 * 1024 * 1024  # 50 MB
+    # Default visibility scope when uploading from a section page.
+    # "section" = visible to all videos in the section (default for MVP0.2).
+    # "course"  = visible to all videos in the course (deferred — config
+    # support only, no UI in MVP0.2).
+    materials_default_scope: str = "section"
+
     @property
     def upload_path(self) -> Path:
         p = Path(self.upload_dir)
