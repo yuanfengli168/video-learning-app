@@ -120,6 +120,8 @@ The transcript below has each line prefixed with `[M:SS]` markers
 (e.g. `[0:30] Hello world`). Quote from these lines directly and
 cite the corresponding `[M:SS]` marker in your answer:
 {transcript}
+
+{materials_section}
 """
 
 
@@ -134,6 +136,7 @@ def build_video_system_prompt(
     mindmap: str = "",
     quiz: str = "",
     transcript: str = "",
+    materials_section: str = "",
 ) -> str:
     """Build the system prompt for a video-scope chat session.
 
@@ -146,6 +149,11 @@ def build_video_system_prompt(
         quiz: pre-rendered quiz Q&A text (may be empty)
         transcript: full transcript with timestamps in `[mm:ss] text`
             format. If very long, consider truncating before calling.
+        materials_section: MVP0.2 — pre-formatted block of the user's
+            selected materials (PDF / .md / .txt / .zip extracted text).
+            Empty string if no materials are selected. When non-empty
+            it's appended after the transcript so the LLM treats
+            uploaded materials as additional authoritative context.
 
     Returns:
         A formatted system prompt string ready to send to Ollama.
@@ -163,6 +171,7 @@ def build_video_system_prompt(
         mindmap=mindmap,
         quiz=quiz,
         transcript=transcript,
+        materials_section=materials_section or "",
     )
 
 

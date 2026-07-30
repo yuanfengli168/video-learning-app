@@ -463,10 +463,30 @@
                     <div class="space-y-3">
                         <p class="text-xs text-gray-500 dark:text-gray-400">
                             Pick which reference materials the tutor should use as context for this video.
-                            Upload new ones from the
-                            <a href="/course/{{ video.section.course_id }}" class="text-indigo-600 dark:text-indigo-400 hover:underline">course page</a>.
                             <span id="mat-selection-summary" class="block mt-1 text-[11px] text-gray-400"></span>
                         </p>
+                        <!-- MVP0.2 followup: inline upload on the video page.
+                             Uploads get auto-tagged with this video's
+                             section_id + video_id, so the new material
+                             shows up immediately in the picker (and is
+                             auto-selected below). Saves the user a trip
+                             back to the course page just to upload a PDF
+                             they want to read alongside this one video. -->
+                        <div class="flex items-center gap-2 p-2 rounded border border-dashed border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900/30">
+                            <input type="file"
+                                   id="mat-upload-video-{{ video.id }}"
+                                   class="hidden"
+                                   accept=".pdf,.md,.markdown,.txt,.zip"
+                                   multiple
+                                   onchange="uploadMaterialForVideo('{{ video.id }}', '{{ video.section_id }}', this)">
+                            <button onclick="document.getElementById('mat-upload-video-{{ video.id }}').click()"
+                                    class="flex-shrink-0 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs text-gray-600 dark:text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
+                                + Upload here
+                            </button>
+                            <span class="text-xs text-gray-400">
+                                PDF · Markdown · TXT · ZIP — auto-tagged to this video
+                            </span>
+                        </div>
                         <div id="mat-picker-list" class="space-y-1 max-h-96 overflow-y-auto">
                             <p class="text-gray-400 py-2">Loading…</p>
                         </div>
@@ -754,6 +774,64 @@ async function viewMaterial(materialId) {
 
 function closeMaterialViewer() {
     document.getElementById('mat-viewer').classList.add('hidden');
+}
+
+// MVP0.2 followup: inline upload on the video page (mirrors the
+// course-page uploadMaterial logic but tags with both section_id and
+// video_id, and auto-ticks the new material in the picker so it goes
+// into the LLM context on next Save).
+async function uploadMaterialForVideo(videoId, sectionId, input) {
+    const files = Array.from(input.files || []);
+    if (files.length === 0) return;
+    const listEl = document.getElementById('mat-picker-list');
+    listEl.innerHTML = `<p class="text-gray-400 py-2">Uploading ${files.length} file(s)…</p>`;
+
+    const results = { uploaded: 0, failed: 0, errors: [], newIds: [] };
+    for (const file of files) {
+        const form = new FormData();
+        form.append('file', file);
+        form.append('section_id', sectionId);
+        form.append('video_id', videoId);  // auto-selects on upload
+        try {
+            const resp = await fetch('/api/materials', { method: 'POST', body: form });
+            const { ok, data } = await safeJsonParse(resp);
+            if (!ok) {
+                results.failed += 1;
+                results.errors.push(`${file.name}: ${data.detail || 'Unknown error'}`);
+                continue;
+            }
+            if (data.status === 'failed') {
+                results.failed += 1;
+                results.errors.push(`${file.name}: ${data.error_message || 'extraction failed'}`);
+            } else {
+                results.uploaded += 1;
+                results.newIds.push(data.id);
+            }
+        } catch (e) {
+            results.failed += 1;
+            results.errors.push(`${file.name}: ${e.message}`);
+        }
+    }
+
+    input.value = '';
+    await loadMaterialsForVideo();  // refreshes picker with new files
+
+    // After refresh, the new materials are auto-selected (because we
+    // sent video_id on upload), but they need Save to persist. Show a
+    // hint so the user knows.
+    if (results.uploaded > 0) {
+        const selSummary = document.getElementById('mat-selection-summary');
+        if (selSummary) {
+            selSummary.textContent = `${results.newIds.length} new file(s) auto-selected — click 💾 Save to add to context.`;
+            selSummary.classList.remove('text-gray-400');
+            selSummary.classList.add('text-amber-600', 'dark:text-amber-400');
+        }
+        materialsSelectionDirty = true;
+    }
+    if (results.failed > 0) {
+        alert(`Upload failed for ${results.failed} file(s):\n\n` +
+              results.errors.join('\n'));
+    }
 }
 
 // ── Section-videos panel (MVP2.0.8) ──

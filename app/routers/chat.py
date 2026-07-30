@@ -20,6 +20,7 @@ from app.services.chat import (
     render_quiz_for_chat,
     transcript_to_chat_text,
 )
+from app.services.material_context import build_materials_section
 from app.services.transcription import json_to_transcript
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -262,7 +263,7 @@ def _maybe_log_transcript_parse_error(
     )
 
 
-def _build_video_chat_context(db: Session, video: Video) -> str:
+def _build_video_chat_context(db: Session, video: Video, user_id: str) -> str:
     """Pull the video's transcript + summary + mindmap + quiz and
     format them into the LLM system prompt for a video-scope chat.
 
@@ -319,12 +320,19 @@ def _build_video_chat_context(db: Session, video: Video) -> str:
     quiz_asset = by_type.get("quiz")
     quiz = render_quiz_for_chat(quiz_asset.content) if quiz_asset else ""
 
+    # MVP0.2: include user-selected materials in the prompt so the LLM
+    # can answer questions using uploaded PDFs / .md / .txt as context.
+    # Same builder the iOS pocket tutor uses, so both surfaces get the
+    # same material excerpt (selection + truncation + cap).
+    materials_ctx = build_materials_section(db, video.id, user_id=user_id)
+
     return build_video_system_prompt(
         video_title=video.title,
         summary=summary,
         mindmap=mindmap,
         quiz=quiz,
         transcript=transcript_text,
+        materials_section=materials_ctx.prompt_section,
     )
 
 
@@ -359,7 +367,7 @@ async def create_video_chat_session(
         raise HTTPException(status_code=403, detail="Not your video")
 
     # Build the LLM context from the video's existing materials
-    system_prompt = _build_video_chat_context(db, video)
+    system_prompt = _build_video_chat_context(db, video, user_id=user.get("uid", ""))
 
     session = ChatSession(
         user_id=user.get("uid", ""),

@@ -625,7 +625,7 @@ def test_video_chat_context_includes_transcript_with_proper_shape(client: TestCl
         # Reload via SQLAlchemy to bypass identity map
         from app.models import Video
         video = db.get(Video, video_id)
-        prompt = _build_video_chat_context(db, video)
+        prompt = _build_video_chat_context(db, video, user_id=FAKE_USER["uid"])
 
     # The transcript must be present in the prompt as actual
     # timestamped lines, not as the fallback message.
@@ -668,9 +668,55 @@ def test_video_chat_context_logs_transcript_parse_failure(client: TestClient):
             ))
         db.commit()
         video = db.get(Video, video_id)
-        prompt = _build_video_chat_context(db, video)
+        prompt = _build_video_chat_context(db, video, user_id=FAKE_USER["uid"])
 
     # The fallback message must be in the prompt so the LLM can
     # tell the user "re-transcribe the video".
     assert "could not be parsed" in prompt
     assert "re-transcribe" in prompt.lower()
+
+
+def test_video_chat_context_includes_user_materials(client: TestClient):
+    """MVP0.2: when a user has selected materials for this video,
+    the chat prompt should include their extracted text — so the LLM
+    can answer questions using uploaded PDFs / .md / .txt as
+    context, just like the iOS pocket tutor does.
+
+    Mirrors the same contract as test_materials.py
+    ::test_pocket_sync_includes_selected_materials but verifies the
+    server-side wiring (router → build_materials_section → prompt).
+    """
+    from app.database import SessionLocal
+    from app.models import Video
+    from app.routers.chat import _build_video_chat_context
+
+    video_id = _setup_video(client)
+
+    # Upload a material and select it for this video
+    with _mock_auth():
+        up = client.post(
+            "/api/materials",
+            files={"file": ("notes.md", io.BytesIO(b"# Physics Notes\n\nF = ma"), "text/markdown")},
+            data={"section_id": _get_section_for_video(client, video_id), "video_id": video_id},
+            headers={"Authorization": "Bearer fake-token", "Origin": "https://localhost:8443"},
+        )
+        material_id = up.json()["id"]
+        assert up.status_code == 201, up.text
+
+    # Build the chat context for this video
+    with SessionLocal() as db:
+        video = db.get(Video, video_id)
+        prompt = _build_video_chat_context(db, video, user_id=FAKE_USER["uid"])
+
+    # The materials section should be present with the user's content
+    assert "USER-UPLOADED MATERIALS" in prompt
+    assert "Physics Notes" in prompt
+    assert "F = ma" in prompt
+
+
+def _get_section_for_video(client: TestClient, video_id: str) -> str:
+    """Helper: look up the section_id for a video via the test DB."""
+    from app.database import SessionLocal
+    from app.models import Video
+    with SessionLocal() as db:
+        return db.get(Video, video_id).section_id

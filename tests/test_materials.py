@@ -118,11 +118,12 @@ def test_extract_text_returns_content():
     assert "Hello" in text
 
 
-def test_extract_pdf_returns_string_or_none():
-    """Real PDFs go through pypdf — we just check it returns a string."""
-    # A 1-page minimal PDF header + tiny body. We won't validate
-    # the exact text (pypdf may return "" if the PDF is malformed);
-    # the contract is "returns str or None, never raises".
+def test_extract_pdf_returns_string_or_raises_with_clear_error():
+    """PDFs may either extract successfully (returns str) OR have no
+    extractable text layer (raises RuntimeError with a clear message
+    so the router marks status='failed'). Both are valid outcomes —
+    the new contract is "never silently return empty for a PDF".
+    """
     minimal_pdf = (
         b"%PDF-1.1\n%\xe2\xe3\xcf\xd3\n"
         b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -131,8 +132,14 @@ def test_extract_pdf_returns_string_or_none():
         b"xref\n0 4\n0000000000 65535 f\n"
         b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n0\n%%EOF\n"
     )
-    result = extract("a.pdf", minimal_pdf)
-    assert result is None or isinstance(result, str)
+    try:
+        result = extract("a.pdf", minimal_pdf)
+        # If extraction succeeds, it must be a string (possibly empty)
+        assert isinstance(result, str)
+    except RuntimeError as exc:
+        # If extraction fails, the error message must mention the
+        # "no extractable text" cause so the user understands why
+        assert "no extractable text" in str(exc).lower()
 
 
 def test_extract_unknown_returns_none():

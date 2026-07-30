@@ -103,10 +103,11 @@
                                    id="mat-upload-{{ section.id }}"
                                    class="hidden"
                                    accept=".pdf,.md,.markdown,.txt,.zip"
+                                   multiple
                                    onchange="uploadMaterial('{{ section.id }}', this)">
                             <button onclick="document.getElementById('mat-upload-{{ section.id }}').click()"
                                     class="w-full py-1.5 border border-dashed border-gray-300 dark:border-gray-600 rounded text-xs text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
-                                + Upload material
+                                + Upload material(s)
                             </button>
                             <div id="mat-list-{{ section.id }}" class="mt-2 space-y-1 text-xs">
                                 <p class="text-gray-400 py-2">Loading…</p>
@@ -523,30 +524,58 @@ async function loadMaterials(sectionId) {
 }
 
 async function uploadMaterial(sectionId, input) {
-    const file = (input.files || [])[0];
-    if (!file) return;
+    const files = Array.from(input.files || []);
+    if (files.length === 0) return;
     const listEl = document.getElementById(`mat-list-${sectionId}`);
-    listEl.innerHTML = '<p class="text-gray-400 py-2">Uploading…</p>';
-    const form = new FormData();
-    form.append('file', file);
-    form.append('section_id', sectionId);
-    try {
-        const resp = await fetch('/api/materials', { method: 'POST', body: form });
-        const { ok, data } = await safeJsonParse(resp);
-        if (!ok) {
-            alert('Upload failed: ' + (data.detail || 'Unknown error'));
-            await loadMaterials(sectionId);
-            return;
+    listEl.innerHTML = `<p class="text-gray-400 py-2">Uploading ${files.length} file(s)…</p>`;
+
+    // Upload one at a time so per-file failures don't kill the batch.
+    // The backend is sync (extracts text before returning 201), so
+    // parallel uploads would saturate the server; sequential is fine
+    // for the typical 1-5 file use case. If you ever upload 20+ PDFs,
+    // switch to Promise.allSettled + a "still uploading N of M" UI.
+    const results = { uploaded: 0, failed: 0, errors: [] };
+    for (const file of files) {
+        const form = new FormData();
+        form.append('file', file);
+        form.append('section_id', sectionId);
+        try {
+            const resp = await fetch('/api/materials', { method: 'POST', body: form });
+            const { ok, data } = await safeJsonParse(resp);
+            if (!ok) {
+                results.failed += 1;
+                results.errors.push(`${file.name}: ${data.detail || 'Unknown error'}`);
+                continue;
+            }
+            if (data.status === 'failed') {
+                // Uploaded but extraction couldn't make sense of the file
+                // (e.g. image-only PDF). Count as failed but tell the user
+                // why so they can re-upload the right format.
+                results.failed += 1;
+                results.errors.push(`${file.name}: ${data.error_message || 'extraction failed'}`);
+            } else {
+                results.uploaded += 1;
+            }
+        } catch (e) {
+            results.failed += 1;
+            results.errors.push(`${file.name}: ${e.message}`);
         }
-        if (data.status === 'failed') {
-            alert('Uploaded but extraction failed: ' + (data.error_message || ''));
-        }
-        input.value = '';  // reset so re-uploading same file works
-        await loadMaterials(sectionId);
-    } catch (e) {
-        alert('Upload failed: ' + e.message);
-        await loadMaterials(sectionId);
     }
+
+    input.value = '';  // reset so re-uploading same file works
+    await loadMaterials(sectionId);
+
+    // Surface a single summary alert instead of N popups
+    if (results.failed > 0 && results.uploaded > 0) {
+        alert(
+            `Uploaded ${results.uploaded}, failed ${results.failed}.\n\n` +
+            results.errors.join('\n')
+        );
+    } else if (results.failed > 0) {
+        alert(`Upload failed for all ${results.failed} file(s):\n\n` +
+              results.errors.join('\n'));
+    }
+    // else: all good, no alert needed
 }
 
 async function deleteMaterial(materialId, sectionId) {
