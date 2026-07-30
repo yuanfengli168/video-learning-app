@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# stop.sh — Stop the Video Learning App (uvicorn on port 8000)
+# stop.sh — Stop the Video Learning App (uvicorn on port 8000 and 8443)
 # Usage:  bash scripts/stop.sh
+#
+# Stops BOTH servers (the :8000 Mac web app server started by start.sh
+# AND the :8443 iOS HTTPS server started by start-ios.sh). Both share
+# the same FastAPI process, so killing the process frees both ports.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-RED='\033[0;31m'
+RED='\033[1;31m'
 NC='\033[0m'
 
 ok()   { echo -e "${GREEN}✅ $1${NC}"; }
@@ -18,13 +22,15 @@ PID="$(pgrep -f 'uvicorn app.main' || true)"
 
 if [[ -z "$PID" ]]; then
     warn "No uvicorn process found"
-    # Even if pgrep didn't find it, port might still be held by a
+    # Even if pgrep didn't find it, ports might still be held by a
     # zombie. Try once more via lsof to be safe.
-    if lsof -ti:8000 &>/dev/null; then
-        warn "Port 8000 is still occupied though — force-killing holder"
-        lsof -ti:8000 | xargs kill -9
-        ok "Killed process on port 8000"
-    fi
+    for PORT in 8000 8443; do
+        if lsof -ti:$PORT &>/dev/null; then
+            warn "Port $PORT is still occupied though — force-killing holder"
+            lsof -ti:$PORT | xargs kill -9
+            ok "Killed process on port $PORT"
+        fi
+    done
     exit 0
 fi
 
@@ -38,10 +44,12 @@ if kill -0 "$PID" 2>/dev/null; then
     kill -9 "$PID"
 fi
 
-# Final safety net: anything still on port 8000
-if lsof -ti:8000 &>/dev/null; then
-    warn "Port 8000 still held — killing holder"
-    lsof -ti:8000 | xargs kill -9
-fi
+# Final safety net: anything still on either port
+for PORT in 8000 8443; do
+    if lsof -ti:$PORT &>/dev/null; then
+        warn "Port $PORT still held — killing holder"
+        lsof -ti:$PORT | xargs kill -9
+    fi
+done
 
-ok "Server stopped"
+ok "Server stopped (both :8000 and :8443)"
