@@ -51,8 +51,16 @@ final class SnapshotStore: ObservableObject {
             snapshot = cached.snapshot
             lastETag = cached.etag
         }
-        // 2. Refresh from network in the background
-        await sync()
+        // 2. Refresh from network in the background — but only if a
+        // Firebase user is signed in. Without a Bearer token, the
+        // X-Dev-User-Id header fallback would 401 on a prod-mode
+        // backend, surfacing as a confusing "Sync error" alert on
+        // the LoginView. The next sync will be triggered after
+        // sign-in (RootView.onChange(of: scenePhase) checks
+        // auth.currentUser) or by the user pulling to refresh.
+        if FirebaseAuthService.shared.currentUser != nil {
+            await sync()
+        }
     }
 
     /// Force a sync from the server. Uses the last `sync_token` + ETag

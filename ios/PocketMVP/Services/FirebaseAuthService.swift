@@ -2,6 +2,9 @@ import Foundation
 import FirebaseCore
 import FirebaseAuth
 import GoogleSignIn
+import os
+
+private let log = Logger(subsystem: "com.shoothigh.pocketmvp", category: "auth")
 
 // MARK: - Firebase auth service
 //
@@ -144,11 +147,22 @@ final class FirebaseAuthService: ObservableObject {
                     hint: nil,
                     additionalScopes: ["email"]
                 ) { result, error in
+                    // Detailed error logging so we can diagnose silent
+                    // OAuth failures (the OAuth sheet appears then
+                    // dismisses without UI feedback).
                     if let error = error {
+                        let nsError = error as NSError
+                        log.error("GIDSignIn.signIn error: domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+                        log.error("  localizedDescription: \(nsError.localizedDescription)")
+                        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                            log.error("  underlying: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
+                        }
                         cont.resume(throwing: error)
                     } else if let result = result {
+                        log.info("GIDSignIn.signIn OK: user=\(result.user.profile?.email ?? "?")")
                         cont.resume(returning: result.user)
                     } else {
+                        log.error("GIDSignIn.signIn returned nil result AND nil error")
                         cont.resume(throwing: AuthError.unknown)
                     }
                 }
@@ -178,7 +192,18 @@ final class FirebaseAuthService: ObservableObject {
             } catch {
                 lastError = "Sign out failed: \(error.localizedDescription)"
             }
+            // Full GoogleSignIn teardown so the next "Continue with
+            // Google" actually shows the account picker:
+            //   1. signOut() — clears the SDK session
+            //   2. disconnect() — revokes the OAuth grant server-side
+            //   3. clear configuration — drops the cached clientID so
+            //      GIDSignIn re-presents the consent UI next time
+            // Without step 2 + 3, iOS auto-signs-in with the cached
+            // Google account (no picker shown).
             GIDSignIn.sharedInstance.signOut()
+            GIDSignIn.sharedInstance.disconnect { _ in
+                GIDSignIn.sharedInstance.configuration = nil
+            }
         }
         currentUser = nil
         KeychainTokenStore.shared.clear()
@@ -218,23 +243,53 @@ final class FirebaseAuthService: ObservableObject {
         }
         isWorking = true
         lastError = nil
-        defer { isWorking = false }
+
+        // Race the sign-in work against a 30s timeout so the spinner
+        // can never get permanently stuck (e.g. GIDSignIn's OAuth
+        // callback never fires if there's no Google account on the
+        // device and the continuation is left dangling).
         do {
-            let user = try await work()
+            let result = try await withThrowingTaskGroup(of: FirebaseAuth.User?.self) { group in
+                group.addTask {
+                    let user = try await work()
+                    return user
+                }
+                group.addTask {
+                    try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                    return nil  // timeout sentinel
+                }
+                // Wait for first non-nil result
+                for try await value in group {
+                    if let value = value {
+                        group.cancelAll()
+                        return value
+                    }
+                }
+                throw NSError(
+                    domain: "PocketMVP.auth",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Sign-in timed out after 30s. Please try again."]
+                )
+            }
+
             currentUser = AuthUser(
-                uid: user.uid,
-                email: user.email ?? "",
-                displayName: user.displayName,
-                isAnonymous: user.isAnonymous
+                uid: result.uid,
+                email: result.email ?? "",
+                displayName: result.displayName,
+                isAnonymous: result.isAnonymous
             )
-            if let token = try? await user.getIDToken() {
-                KeychainTokenStore.shared.save(token: token, uid: user.uid)
+            if let token = try? await result.getIDToken() {
+                KeychainTokenStore.shared.save(token: token, uid: result.uid)
             }
         } catch let error as NSError {
+            log.error("performSignIn failed: \(error.localizedDescription) (domain=\(error.domain) code=\(error.code))")
             lastError = friendlyMessage(for: error)
         } catch {
+            log.error("performSignIn unknown error: \(error.localizedDescription)")
             lastError = error.localizedDescription
         }
+
+        isWorking = false
     }
 
     /// Convert FirebaseAuth error codes into messages the user can act on.

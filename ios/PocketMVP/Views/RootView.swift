@@ -47,7 +47,15 @@ struct RootView: View {
             // (from home screen, from another app, after a call), refresh
             // data if the throttle window has passed. Throttled inside
             // `syncIfStale()` so rapid scenePhase bounces don't fire.
-            if newPhase == .active {
+            //
+            // Skip the sync if there's no signed-in user yet — without
+            // a Firebase Bearer token, APIClient falls back to the
+            // X-Dev-User-Id header (AppConfig.devUserId), which the
+            // prod-mode backend rejects with 401. That 401 surfaces as
+            // a "Sync error" alert on the LoginView, which is wrong:
+            // the user hasn't even signed in yet. The sync should
+            // only run after a successful sign-in.
+            if newPhase == .active && auth.currentUser != nil {
                 Task { await store.syncIfStale() }
             }
         }
