@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Single source of truth for the iOS app's backend URL.
 ///
@@ -6,9 +7,22 @@ import Foundation
 /// the same Mac can hit this directly. For a real iPhone on the LAN, edit
 /// this to your Mac's LAN IP (e.g. https://192.168.1.42:8443) in v0.2.
 ///
+/// v0.1.1: baseURL is now user-editable via Settings. Backed by @AppStorage
+/// so changes persist across app restarts. Default stays localhost so the
+/// iOS Simulator works out of the box; real-device users go to Settings
+/// (gear icon in CourseListView toolbar) and paste their Mac's LAN IP or
+/// Tailscale hostname.
+///
 /// NEVER hardcode the URL anywhere else in the app — always read from here.
 enum AppConfig {
-    static let baseURL: URL = URL(string: "https://localhost:8443")!
+    /// User-editable base URL of the Pocket backend. Defaults to localhost
+    /// so iOS Simulator keeps working. Real iPhone users edit via Settings.
+    @AppStorage("pocket.baseURL") static var baseURLString: String = "https://localhost:8443"
+
+    /// Computed URL, falls back to localhost if the stored value is malformed.
+    static var baseURL: URL {
+        URL(string: baseURLString) ?? URL(string: "https://localhost:8443")!
+    }
 
     /// Polling interval for tutor job status. We poll (instead of using
     /// SSE) because the async job model is straightforward and adding

@@ -47,7 +47,11 @@ if [[ ! -f "$CERT" || ! -f "$KEY" ]]; then
     warn "Generate them once with:"
     warn "  brew install mkcert nss   # if you don't have mkcert"
     warn "  mkcert -install           # trust the local CA in macOS keychain"
-    warn "  mkcert -key-file $KEY -cert-file $CERT localhost 127.0.0.1 ::1"
+    warn "  mkcert -key-file $KEY -cert-file $CERT localhost 127.0.0.1 ::1 <LAN_IP> [ts-hostname]"
+    echo ""
+    warn "  <LAN_IP> = your Mac's LAN IP (run: ipconfig getifaddr en0)"
+    warn "  [ts-hostname] = optional Tailscale hostname (run: tailscale status)"
+    warn "  Both let real iPhones verify the cert; localhost-only won't work off-simulator."
     echo ""
     fail "Aborting — fix the certs, then re-run."
     exit 1

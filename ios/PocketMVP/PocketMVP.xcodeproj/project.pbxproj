@@ -10,6 +10,8 @@
 		0F5ED1ACABA61730A01DC4DF /* MaterialsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D51BB7426AE87B8DB0B6348D /* MaterialsPanel.swift */; };
 		1464EFF8E0B1134DAD078BA2 /* FirebaseAuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA60FFC5F8757B5FD932789A /* FirebaseAuthService.swift */; };
 		18F6CB8AE335270C3B7B9C1C /* OllamaStatusBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C76CA05DE22116A724673BE2 /* OllamaStatusBanner.swift */; };
+		2EB268094FF2E31D227AD4DF /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_6A5716C4-3741-4247-83EA-033E953F2F31" /* PocketMVPApp.swift */; };
+		3206F0B362240972950B067D /* Readme.md in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_B7A42390-6C4E-4967-BE3A-3BA494EF7876" /* Readme.md */; };
 		3252C06CD9332420FAE7B7CC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4871AC707290FE6227484A0 /* RootView.swift */; };
 		3AA852C4F92A6ECF05AEBA10 /* FirebaseAppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1901E8BB8D2489AB0B4A0F5B /* FirebaseAppConfig.swift */; };
 		3D9E7CB8E4A607FD82195DC5 /* VideoDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518F63D8F71631B54788E25E /* VideoDetailView.swift */; };
@@ -20,23 +22,23 @@
 		60293B25A0E9DB9FCEFF9381 /* FavoritesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705492CA166C752993F37524 /* FavoritesView.swift */; };
 		62F28BD5F254D115BFB29267 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 9EB0BF7831F8455ED28B4DF7 /* GoogleService-Info.plist */; };
 		7361C4D1FF631BB12D66FED4 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19772F56F055482D9689396C /* KeychainTokenStore.swift */; };
+		86CD37C180AE73EE68A3669D /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BE700F7C8405EE03D44531 /* SettingsView.swift */; };
 		8A20F5D3CAE62747C39DEDC0 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1808DAC54A53B216B0167A23 /* LoginView.swift */; };
 		9CE4D7A8D5FA17A7D08AB5CF /* SnapshotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D92C5E7F1D81BE9ACA9EC8C /* SnapshotModels.swift */; };
 		A186E18F7157FF2BA68C39D3 /* SyncStatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9519E40D8FCD0FC441AFF52A /* SyncStatusDot.swift */; };
 		A5AFADFA0CE65CB3DC61034F /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 0A3888120ADF88984FEC53F5 /* GoogleSignIn */; };
 		BB91DD8E47DA73F0B9AA8B59 /* SnapshotResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0176715A8F2B3F3CA0A22A /* SnapshotResult.swift */; };
 		C55362DBCD869010413F7ED7 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5058F3F9585EEE0F3B1DDEEE /* AppConfig.swift */; };
-		CE87344F7DAA44753B0A3E86 /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_9A214348-3A8A-4A0F-BA88-C8CD9B24DAB3" /* PocketMVPApp.swift */; };
 		D1CECDC6070BC111C2B1824A /* TeachModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780ADCD27C1D9F02D9C115F0 /* TeachModels.swift */; };
 		D280C5DC944CEB3312C0E055 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F19613FBF36DF7A684C9AEA /* APIClient.swift */; };
 		DDE7137A36FC7123260D3545 /* ReviewMyAnswersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D001608A7C4ED30748A0294D /* ReviewMyAnswersView.swift */; };
-		E8B4C156C49197326568425D /* Readme.md in Resources */ = {isa = PBXBuildFile; fileRef = "TEMP_32D79B44-DFBB-4DE5-9AA9-D597F148A893" /* Readme.md */; };
 		E8CAFD9850C5433C83B213A9 /* NaturalSort.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317FB848050F2DD6DB421AF0 /* NaturalSort.swift */; };
 		F7FED12DC36721512633D146 /* SectionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100FBE34887662D5E8EF6039 /* SectionListView.swift */; };
 		F945FA87854A8A98EE1B184B /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = B19CC69CB21C6EAB7EFBCA41 /* FirebaseAuth */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		06BE700F7C8405EE03D44531 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		100FBE34887662D5E8EF6039 /* SectionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionListView.swift; sourceTree = "<group>"; };
 		1808DAC54A53B216B0167A23 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		1901E8BB8D2489AB0B4A0F5B /* FirebaseAppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebaseAppConfig.swift; sourceTree = "<group>"; };
@@ -62,9 +64,9 @@
 		DBDECA90A2167B222C96A81E /* SnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStore.swift; sourceTree = "<group>"; };
 		F7AAD31248B5DD18FF4E34DC /* CourseListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourseListView.swift; sourceTree = "<group>"; };
 		FA60FFC5F8757B5FD932789A /* FirebaseAuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebaseAuthService.swift; sourceTree = "<group>"; };
-		"TEMP_32D79B44-DFBB-4DE5-9AA9-D597F148A893" /* Readme.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = Readme.md; sourceTree = "<group>"; };
-		"TEMP_60BD7F83-F716-4482-A76E-A664E77DBA7F" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
-		"TEMP_9A214348-3A8A-4A0F-BA88-C8CD9B24DAB3" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
+		"TEMP_0C0AE4FC-C42B-4F79-8075-5C84DE5DC8AB" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
+		"TEMP_6A5716C4-3741-4247-83EA-033E953F2F31" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
+		"TEMP_B7A42390-6C4E-4967-BE3A-3BA494EF7876" /* Readme.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = Readme.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -149,6 +151,7 @@
 				D001608A7C4ED30748A0294D /* ReviewMyAnswersView.swift */,
 				D4871AC707290FE6227484A0 /* RootView.swift */,
 				100FBE34887662D5E8EF6039 /* SectionListView.swift */,
+				06BE700F7C8405EE03D44531 /* SettingsView.swift */,
 				9519E40D8FCD0FC441AFF52A /* SyncStatusDot.swift */,
 				5C737077227DFA3C6D1C5896 /* TeachMeView.swift */,
 				518F63D8F71631B54788E25E /* VideoDetailView.swift */,
@@ -167,12 +170,12 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		"TEMP_2AC37317-D62F-44E7-A1A1-3C97FF30C463" /* . */ = {
+		"TEMP_9706553D-CDF2-4DEA-8E75-725AE15765AA" /* . */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_32D79B44-DFBB-4DE5-9AA9-D597F148A893" /* Readme.md */,
-				"TEMP_60BD7F83-F716-4482-A76E-A664E77DBA7F" /* .gitignore */,
-				"TEMP_9A214348-3A8A-4A0F-BA88-C8CD9B24DAB3" /* PocketMVPApp.swift */,
+				"TEMP_B7A42390-6C4E-4967-BE3A-3BA494EF7876" /* Readme.md */,
+				"TEMP_0C0AE4FC-C42B-4F79-8075-5C84DE5DC8AB" /* .gitignore */,
+				"TEMP_6A5716C4-3741-4247-83EA-033E953F2F31" /* PocketMVPApp.swift */,
 				60C512AA12E4DA2EEB7CDF42 /* Config */,
 				A7C4069EFAC72F3EAA0DE67C /* Resources */,
 				1524F80D83B4949F19309230 /* Models */,
@@ -252,7 +255,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				62F28BD5F254D115BFB29267 /* GoogleService-Info.plist in Resources */,
-				E8B4C156C49197326568425D /* Readme.md in Resources */,
+				3206F0B362240972950B067D /* Readme.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -275,10 +278,11 @@
 				0F5ED1ACABA61730A01DC4DF /* MaterialsPanel.swift in Sources */,
 				E8CAFD9850C5433C83B213A9 /* NaturalSort.swift in Sources */,
 				18F6CB8AE335270C3B7B9C1C /* OllamaStatusBanner.swift in Sources */,
-				CE87344F7DAA44753B0A3E86 /* PocketMVPApp.swift in Sources */,
+				2EB268094FF2E31D227AD4DF /* PocketMVPApp.swift in Sources */,
 				DDE7137A36FC7123260D3545 /* ReviewMyAnswersView.swift in Sources */,
 				3252C06CD9332420FAE7B7CC /* RootView.swift in Sources */,
 				F7FED12DC36721512633D146 /* SectionListView.swift in Sources */,
+				86CD37C180AE73EE68A3669D /* SettingsView.swift in Sources */,
 				9CE4D7A8D5FA17A7D08AB5CF /* SnapshotModels.swift in Sources */,
 				BB91DD8E47DA73F0B9AA8B59 /* SnapshotResult.swift in Sources */,
 				3ED7C703931F7700D79AA492 /* SnapshotStore.swift in Sources */,

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CourseListView: View {
     @EnvironmentObject var store: SnapshotStore
+    @State private var showSettings = false
 
     var body: some View {
         List {
@@ -35,6 +36,19 @@ struct CourseListView: View {
         .listStyle(.insetGrouped)
         .navigationDestination(for: Course.self) { course in
             SectionListView(course: course)
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gear")
+                }
+                .accessibilityLabel("Settings")
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
         }
         .refreshable {
             await store.sync()
