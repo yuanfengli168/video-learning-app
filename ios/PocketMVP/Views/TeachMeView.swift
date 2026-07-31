@@ -243,7 +243,9 @@ struct TeachMeView: View {
                     id: item.chunkId, videoId: video.id, index: item.chunkIndex,
                     startTs: 0, endTs: 0, durationLabel: .min5,
                     conceptTitle: item.conceptTitle,
-                    transcriptQuote: "", teachText: "", checkQuestion: ""
+                    transcriptQuote: "", teachText: "",
+                    teachTextTranscript: nil, teachTextMaterials: nil,
+                    checkQuestion: ""
                 )
                 let s = state(for: stub)
                 s.answer = item.userAnswer
@@ -432,16 +434,19 @@ struct TeachMeView: View {
                   durationLabel: .min2, conceptTitle: "Hook",
                   transcriptQuote: "The most important idea here is X, because Y.",
                   teachText: "Quick intro. The 30-second version of the whole idea.",
+                  teachTextTranscript: nil, teachTextMaterials: nil,
                   checkQuestion: "What's the one thing you'd tell a friend about this?"),
             Chunk(id: "c2", videoId: video.id, index: 1, startTs: 120, endTs: 420,
                   durationLabel: .min5, conceptTitle: "Core concept",
                   transcriptQuote: "We can break this into 3 parts: A, B, and C.",
                   teachText: "The main idea, broken into 3 parts with examples.",
+                  teachTextTranscript: nil, teachTextMaterials: nil,
                   checkQuestion: "Name the 3 parts."),
             Chunk(id: "c3", videoId: video.id, index: 2, startTs: 420, endTs: 1920,
                   durationLabel: .min25, conceptTitle: "Deep dive",
                   transcriptQuote: "In production, you'd want to handle the edge case Z.",
                   teachText: "Everything you need to actually use this. The textbook version.",
+                  teachTextTranscript: nil, teachTextMaterials: nil,
                   checkQuestion: "How would you apply this to a project at work?"),
         ]
     }
@@ -496,9 +501,41 @@ struct ChunkCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
-            // Teach text
-            Text(chunk.teachText)
-                .font(.body)
+            // Teach text — MVP0.2 followup #3: render as two cards
+            // (Transcript / Uploaded Files) when the backend gave us the
+            // structured sections. Falls back to a single Text() of the
+            // raw teachText for old chunks (parsed-but-not-structured).
+            // MVP0.2 followup #4: each section is collapsible — tap the
+            // header to toggle. Default open so the user sees the full
+            // lesson on first paint; collapse to skim or focus on the
+            // check question.
+            if chunk.hasStructuredTeachText {
+                if let transcriptText = chunk.teachTextTranscript, !transcriptText.isEmpty {
+                    CollapsibleSection(
+                        title: "From Transcript",
+                        icon: "quote.opening",
+                        background: Color(.tertiarySystemBackground),
+                        defaultOpen: true
+                    ) {
+                        Text(transcriptText)
+                            .font(.body)
+                    }
+                }
+                if let materialsText = chunk.teachTextMaterials, !materialsText.isEmpty {
+                    CollapsibleSection(
+                        title: "From Uploaded Files",
+                        icon: "doc.text",
+                        background: Color.blue.opacity(0.06),
+                        defaultOpen: true
+                    ) {
+                        Text(materialsText)
+                            .font(.body)
+                    }
+                }
+            } else {
+                Text(chunk.teachText)
+                    .font(.body)
+            }
 
             // Check question
             if !chunk.checkQuestion.isEmpty {
@@ -638,6 +675,84 @@ struct FeedbackBox: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(color.opacity(0.4), lineWidth: 1)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - CollapsibleSection (MVP0.2 followup #4)
+//
+// MVP0.2 followup #3 rendered the two teach_text sections as static
+// cards. The user feedback was: "the sections have no collapse/expand".
+// Now each section is a tappable header with a rotating chevron that
+// toggles the body visibility. Default-open so the user sees the full
+// lesson on first paint; collapses to skim or focus on the check
+// question. State is per-instance (per chunk + per section) — no
+// persistence needed since it's a transient reading-mode toggle.
+struct CollapsibleSection<Content: View>: View {
+    let title: String
+    let icon: String
+    let background: Color
+    let defaultOpen: Bool
+    let content: () -> Content
+
+    @State private var isOpen: Bool
+
+    init(
+        title: String,
+        icon: String,
+        background: Color,
+        defaultOpen: Bool = true,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.title = title
+        self.icon = icon
+        self.background = background
+        self.defaultOpen = defaultOpen
+        self.content = content
+        // _State is unavailable on a stored property in init; use the
+        // underscore-initializer pattern instead.
+        self._isOpen = State(initialValue: defaultOpen)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header row — tap to toggle. Includes a rotating chevron
+            // so the user has a clear visual cue for the open/closed
+            // state. The whole row is a Button so the touch target is
+            // generous (44pt min) per iOS HIG.
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isOpen.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isOpen ? 0 : -90))
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+
+            // Body — shown only when open. Slide animation gives the
+            // user a sense of physicality when toggling.
+            if isOpen {
+                content()
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(background)
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }

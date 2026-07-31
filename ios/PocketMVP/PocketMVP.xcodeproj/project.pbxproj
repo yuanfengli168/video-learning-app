@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		018A8F7C2E40227411883682 /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_D199C73B-4449-4E06-A32F-C1FD0017EBA7" /* PocketMVPApp.swift */; };
 		0F5ED1ACABA61730A01DC4DF /* MaterialsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D51BB7426AE87B8DB0B6348D /* MaterialsPanel.swift */; };
 		1464EFF8E0B1134DAD078BA2 /* FirebaseAuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA60FFC5F8757B5FD932789A /* FirebaseAuthService.swift */; };
 		18F6CB8AE335270C3B7B9C1C /* OllamaStatusBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C76CA05DE22116A724673BE2 /* OllamaStatusBanner.swift */; };
@@ -29,6 +28,7 @@
 		C55362DBCD869010413F7ED7 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5058F3F9585EEE0F3B1DDEEE /* AppConfig.swift */; };
 		D1CECDC6070BC111C2B1824A /* TeachModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780ADCD27C1D9F02D9C115F0 /* TeachModels.swift */; };
 		D280C5DC944CEB3312C0E055 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F19613FBF36DF7A684C9AEA /* APIClient.swift */; };
+		DB54725DF8B0325612DDA92D /* PocketMVPApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_5E5C13E0-9D52-47FB-9960-30887FCD2AD7" /* PocketMVPApp.swift */; };
 		DDE7137A36FC7123260D3545 /* ReviewMyAnswersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D001608A7C4ED30748A0294D /* ReviewMyAnswersView.swift */; };
 		F7FED12DC36721512633D146 /* SectionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100FBE34887662D5E8EF6039 /* SectionListView.swift */; };
 		F945FA87854A8A98EE1B184B /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = B19CC69CB21C6EAB7EFBCA41 /* FirebaseAuth */; };
@@ -59,8 +59,8 @@
 		DBDECA90A2167B222C96A81E /* SnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotStore.swift; sourceTree = "<group>"; };
 		F7AAD31248B5DD18FF4E34DC /* CourseListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CourseListView.swift; sourceTree = "<group>"; };
 		FA60FFC5F8757B5FD932789A /* FirebaseAuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebaseAuthService.swift; sourceTree = "<group>"; };
-		"TEMP_69D1B05E-75F4-4947-A0FC-93E2A490A7F2" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
-		"TEMP_D199C73B-4449-4E06-A32F-C1FD0017EBA7" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
+		"TEMP_5E5C13E0-9D52-47FB-9960-30887FCD2AD7" /* PocketMVPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketMVPApp.swift; sourceTree = "<group>"; };
+		"TEMP_F1AB96E8-AF49-49F4-9B16-8B10A510984B" /* .gitignore */ = {isa = PBXFileReference; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -162,11 +162,11 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
-		"TEMP_1153BAB6-79D4-4FDE-9860-44FEE52E8268" /* . */ = {
+		"TEMP_A63FD5AF-2AC9-42AF-B260-E1BB1D2C2CD6" /* . */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_69D1B05E-75F4-4947-A0FC-93E2A490A7F2" /* .gitignore */,
-				"TEMP_D199C73B-4449-4E06-A32F-C1FD0017EBA7" /* PocketMVPApp.swift */,
+				"TEMP_F1AB96E8-AF49-49F4-9B16-8B10A510984B" /* .gitignore */,
+				"TEMP_5E5C13E0-9D52-47FB-9960-30887FCD2AD7" /* PocketMVPApp.swift */,
 				60C512AA12E4DA2EEB7CDF42 /* Config */,
 				A7C4069EFAC72F3EAA0DE67C /* Resources */,
 				1524F80D83B4949F19309230 /* Models */,
@@ -267,7 +267,7 @@
 				50D5204A75254CA6847C9563 /* MaterialModels.swift in Sources */,
 				0F5ED1ACABA61730A01DC4DF /* MaterialsPanel.swift in Sources */,
 				18F6CB8AE335270C3B7B9C1C /* OllamaStatusBanner.swift in Sources */,
-				018A8F7C2E40227411883682 /* PocketMVPApp.swift in Sources */,
+				DB54725DF8B0325612DDA92D /* PocketMVPApp.swift in Sources */,
 				DDE7137A36FC7123260D3545 /* ReviewMyAnswersView.swift in Sources */,
 				3252C06CD9332420FAE7B7CC /* RootView.swift in Sources */,
 				F7FED12DC36721512633D146 /* SectionListView.swift in Sources */,

@@ -72,6 +72,14 @@ class ChunkOut(BaseModel):
     concept_title: str
     transcript_quote: str = ""
     teach_text: str
+    # MVP0.2 followup #3: structured teach_text broken into two
+    # sections by the LLM (## From Transcript / ## From Uploaded Files).
+    # Backend parses the headings out of teach_text and pre-fills these
+    # so the iOS app can render them as two cards. Optional for
+    # backward compat — old chunks (without the headings) leave these
+    # as None and the iOS falls back to a single Text() of teach_text.
+    teach_text_transcript: str | None = None
+    teach_text_materials: str | None = None
     check_question: str
 
 

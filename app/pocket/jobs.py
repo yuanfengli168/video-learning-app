@@ -166,7 +166,14 @@ def _do_generate(user_id: str, video_id: str) -> list[dict[str, Any]] | None:
                 end_ts=c.end_ts,
                 duration_label=c.duration_label,
                 concept_title=c.concept_title,
+                # MVP0.2 followup #3: persist the structured teach_text
+                # sections so the iOS app can render them as two cards.
+                # Both nullable — the parser sets them to None when the
+                # LLM didn't emit the headings (legacy path).
                 teach_text=c.teach_text,
+                teach_text_transcript=c.teach_text_transcript,
+                teach_text_materials=c.teach_text_materials,
+                transcript_quote=c.transcript_quote,
                 check_question=c.check_question,
             ))
         db.commit()

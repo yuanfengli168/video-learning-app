@@ -70,7 +70,22 @@ SYSTEM_PROMPT = (
     "6. LANGUAGE: respond in the language explicitly named in the user prompt's "
     "LANGUAGE directive. That directive is the source of truth — NOT the language "
     "of this system prompt. Technical terms (API names, library names, code, "
-    "identifiers) stay in their original form regardless of the response language."
+    "identifiers) stay in their original form regardless of the response language.\n"
+    "7. STRUCTURE teach_text with two sections, in this order, using these exact "
+    "Markdown H2 headings (one per line, no extra characters):\n"
+    "     ## From Transcript\n"
+    "     <3-6 sentences teaching what the speaker SAID in this chunk's time "
+    "range. Cite real examples and quotes that appear in the transcript.>\n"
+    "     ## From Uploaded Files\n"
+    "     <2-4 sentences adding context from the user's selected materials — "
+    "definitions, equations, code references, external sources, related concepts. "
+    "If no materials are relevant for this chunk, omit this entire heading + its "
+    "content.>\n"
+    "   The iOS app parses on these two headings and renders each as a separate "
+    "card, so the headings are part of the contract, not decoration. Do NOT use "
+    "## From Video (same thing as From Transcript — use Transcript). Do NOT use "
+    "bullets or other Markdown inside teach_text — keep it plain prose under each "
+    "heading so the parser doesn't get confused."
 )
 
 USER_TEMPLATE = """Transcript (the full video, with [seconds] timestamps):
@@ -97,9 +112,19 @@ Return STRICT JSON (no prose, no markdown fence, no commentary):
   "duration_label": "2min" | "5min" | "25min",
   "concept_title":   "<= 8 words",
   "transcript_quote": "<= 30 words, VERBATIM from the transcript, including [seconds] prefix>",
-  "teach_text":      "3-6 sentences. A mini-lesson, not a teaser.",
+  "teach_text":      "## From Transcript\n<3-6 sentences>\n\n## From Uploaded Files\n<2-4 sentences, omit if no materials apply>",
   "check_question":  "<= 30 words, answerable from teach_text alone"
 }}]
+
+TEACH_TEXT FORMAT REMINDER (mandatory — iOS parses on these headings):
+  teach_text MUST start with "## From Transcript" on the first line, followed
+  by one blank line, then the teaching prose. If the user's selected materials
+  add relevant context for this chunk, add an empty line, then "## From Uploaded
+  Files" on its own line, followed by one blank line, then the materials-sourced
+  prose. If no materials are relevant for this chunk, OMIT the "## From Uploaded
+  Files" section entirely. Do NOT use "## From Video" — Transcript is the
+  canonical name. Do NOT use bullets or other Markdown inside the sections —
+  keep it plain prose under each heading so the iOS parser doesn't get confused.
 """
 
 # If the full prompt exceeds this many chars, fall back to current-video-only.
@@ -287,39 +312,184 @@ def _call_ollama(prompt: str, timeout_s: float | None = None) -> str:
 def _parse_chunks(raw: str) -> list[ChunkOut]:
     """Parse Ollama's text response into ChunkOut objects.
 
-    Tolerant: strips markdown fences, finds the first JSON array, falls back
-    to scanning for JSON objects if the whole-array parse fails.
+    Tolerant against common LLM output quirks:
+      - Markdown fences: ```json ... ```, ``` ... ```, with/without
+        language tag, sometimes with stray leading/trailing whitespace
+      - Prose before/after the JSON array (the LLM occasionally adds
+        "Here's the JSON:" or "Here you go:" prefixes)
+      - Nested arrays (the LLM occasionally wraps the array in another
+        array, e.g. `[[{...}], [{...}]]`)
+      - Trailing commas (rare but happens with glm-5.2:cloud)
+      - Single-element arrays returned as `{}` (rare)
+
+    Strategy: try multiple parse strategies in order of strictness.
+    Fallback to a regex-based chunk-object extraction if structural
+    parsing fails — we accept partial results rather than failing.
     """
     text = raw.strip()
-    # Strip ```json ... ``` fences if present
-    if text.startswith("```"):
-        first_nl = text.find("\n")
-        if first_nl != -1:
-            text = text[first_nl + 1 :]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
 
-    # Try whole-array parse first
-    try:
-        arr = json.loads(text)
-        if isinstance(arr, list):
-            return [ChunkOut.model_validate(_coerce_chunk(c, i)) for i, c in enumerate(arr)]
-    except (json.JSONDecodeError, ValueError, TypeError):
-        pass
+    # Strategy 1: direct parse (text already has no fence)
+    if arr := _try_parse_array(text):
+        return _to_chunks(arr)
 
-    # Fallback: find first '[' and matching ']'
+    # Strategy 2: strip markdown fences (multiple variants)
+    for stripped in _strip_fences(text):
+        if arr := _try_parse_array(stripped):
+            return _to_chunks(arr)
+
+    # Strategy 3: find first '[' and matching ']' (ignoring prose)
     start = text.find("[")
     end = text.rfind("]")
     if start != -1 and end != -1 and end > start:
-        try:
-            arr = json.loads(text[start : end + 1])
-            if isinstance(arr, list):
-                return [ChunkOut.model_validate(_coerce_chunk(c, i)) for i, c in enumerate(arr)]
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
+        candidate = text[start : end + 1]
+        if arr := _try_parse_array(candidate):
+            return _to_chunks(arr)
+        # Try with trailing-comma cleanup
+        candidate_clean = _strip_trailing_commas(candidate)
+        if arr := _try_parse_array(candidate_clean):
+            return _to_chunks(candidate_clean)
 
-    raise ValueError("Could not parse Ollama response as JSON chunk array")
+    # Strategy 4: regex extract JSON objects one-by-one
+    objects = _extract_json_objects(text)
+    if objects:
+        return _to_chunks(objects)
+
+    # All strategies failed — log the raw response so we can debug
+    log.error(
+        "pocket.tutor: _parse_chunks failed. Raw response (first 800 chars): %s",
+        raw[:800],
+    )
+    raise ValueError(
+        f"Could not parse Ollama response as JSON chunk array. "
+        f"Response began with: {raw[:200]!r}"
+    )
+
+
+def _try_parse_array(text: str) -> list | None:
+    """Try to parse `text` as a JSON array. Returns None on any failure."""
+    try:
+        result = json.loads(text)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    if isinstance(result, list):
+        # If the LLM returned a nested array, flatten one level
+        if len(result) == 1 and isinstance(result[0], list):
+            return result[0]
+        return result
+    return None
+
+
+def _strip_fences(text: str) -> list[str]:
+    """Return variants of `text` with common markdown fences stripped.
+
+    Handles ```json, ```, with/without language tag, and various
+    trailing positions. Returns a list because the LLM sometimes
+    emits multiple nested fences (e.g. ```json\n```\n[...]\n```\n```).
+    """
+    variants = [text]
+    if not text.startswith("```"):
+        return variants
+
+    # Try common patterns: ```json\n...\n```, ```JSON\n...\n```,
+    # ```\n...\n```, ```[...]\n``` (no newline after opening fence)
+    for prefix in ("```json", "```JSON", "```Json", "```"):
+        if text.startswith(prefix):
+            rest = text[len(prefix):]
+            # Strip leading newline if present
+            if rest.startswith("\n"):
+                rest = rest[1:]
+            # Strip trailing fence
+            if rest.endswith("```"):
+                rest = rest[:-3]
+            variants.append(rest.strip())
+            # Also try without the trailing fence stripped (in case the
+            # LLM double-fenced and the inner one is the real one)
+            if rest.endswith("```\n```"):
+                rest = rest[:-7]
+                variants.append(rest.strip())
+    return variants
+
+
+def _strip_trailing_commas(text: str) -> str:
+    """Remove trailing commas before ] or } — invalid JSON but the LLM
+    occasionally emits them in long outputs."""
+    # Match comma followed by optional whitespace then ] or }
+    import re
+    return re.sub(r",(\s*[\]}])", r"\1", text)
+
+
+def _extract_json_objects(text: str) -> list[dict]:
+    """Last-resort: regex out individual JSON objects from the text.
+
+    Used when the LLM wraps chunks in a story ("Here's each chunk:
+    { ... } { ... }") instead of a JSON array. We use a brace-counting
+    strategy rather than a regex (regex can't handle nested braces).
+    """
+    out = []
+    i = 0
+    while i < len(text):
+        if text[i] == "{":
+            depth = 0
+            in_string = False
+            escape = False
+            start = i
+            for j in range(i, len(text)):
+                ch = text[j]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"' and not escape:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start : j + 1]
+                        try:
+                            obj = json.loads(candidate)
+                            if isinstance(obj, dict):
+                                out.append(obj)
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            pass
+                        i = j
+                        break
+        i += 1
+    return out
+
+
+def _to_chunks(items: list) -> list[ChunkOut]:
+    """Coerce a list of dict-or-list items into ChunkOut objects.
+
+    Defensive: skips items that can't be coerced (logs a warning) rather
+    than failing the whole batch. Usually this happens when the LLM
+    mixes dicts with stray strings or lists.
+    """
+    chunks = []
+    for i, item in enumerate(items):
+        # If a nested list leaked through, dig one level
+        while isinstance(item, list) and len(item) == 1:
+            item = item[0]
+        if not isinstance(item, dict):
+            log.warning(
+                "pocket.tutor: skipping non-dict chunk at index %d: %r",
+                i, type(item).__name__,
+            )
+            continue
+        try:
+            chunks.append(ChunkOut.model_validate(_coerce_chunk(item, i)))
+        except Exception as exc:
+            log.warning(
+                "pocket.tutor: failed to coerce chunk at index %d: %s. "
+                "Item: %r", i, exc, item,
+            )
+    return chunks
 
 
 def _coerce_chunk(raw: dict[str, Any], index: int) -> dict[str, Any]:
@@ -327,6 +497,15 @@ def _coerce_chunk(raw: dict[str, Any], index: int) -> dict[str, Any]:
     label = str(raw.get("duration_label", "5min")).strip()
     if label not in ("2min", "5min", "25min"):
         label = "5min"
+    teach_text = str(raw.get("teach_text", ""))
+    # MVP0.2 followup #3: parse the structured teach_text into two
+    # sections (## From Transcript / ## From Uploaded Files). The LLM
+    # is now required to emit these headings (see SYSTEM_PROMPT rule 7).
+    # Parser is lenient: if the headings are missing for any reason,
+    # both fields end up None and the iOS app falls back to the raw
+    # `teach_text` blob. Defensive against old chunks still in the DB
+    # from before this rule shipped.
+    sections = _parse_teach_text_sections(teach_text)
     return {
         "id": raw.get("id") or f"chunk-{index}",
         "video_id": raw.get("video_id", ""),
@@ -334,9 +513,86 @@ def _coerce_chunk(raw: dict[str, Any], index: int) -> dict[str, Any]:
         "start_ts": float(raw.get("start_ts", 0.0)),
         "end_ts": float(raw.get("end_ts", 0.0)),
         "duration_label": label,
-        "concept_title": str(raw.get("concept_title", ""))[:255],        "transcript_quote": str(raw.get("transcript_quote", ""))[:500],        "teach_text": str(raw.get("teach_text", "")),
+        "concept_title": str(raw.get("concept_title", ""))[:255],
+        "transcript_quote": str(raw.get("transcript_quote", ""))[:500],
+        "teach_text": teach_text,
+        "teach_text_transcript": sections["transcript"],
+        "teach_text_materials": sections["materials"],
         "check_question": str(raw.get("check_question", "")),
     }
+
+
+# Canonical heading names — the LLM should emit exactly these. We
+# also accept a couple of obvious variants so the parser stays lenient
+# against typos (e.g. "## From the Transcript" common in early runs).
+_TRANSCRIPT_HEADINGS = (
+    "## From Transcript",
+    "## From the Transcript",
+    "## From Video",          # legacy / common mistranslation
+    "## From the Video",
+)
+_MATERIALS_HEADINGS = (
+    "## From Uploaded Files",
+    "## From Materials",
+    "## From the Uploaded Files",
+    "## From the Materials",
+)
+
+
+def _parse_teach_text_sections(teach_text: str) -> dict[str, str | None]:
+    """Split a teach_text into two sections by Markdown H2 headings.
+
+    Returns:
+        {"transcript": str | None, "materials": str | None}
+
+    Each value is the prose under the matching heading, with leading
+    and trailing whitespace stripped. If a heading isn't present, the
+    corresponding value is None.
+
+    The parser is line-based: it finds the first line that matches a
+    known heading, then collects all subsequent lines until either the
+    next known heading or the end of the text. Heading match is
+    case-insensitive and ignores leading/trailing whitespace. The two
+    known headings are mutually exclusive in unmatched text (text
+    before the first heading is dropped — the LLM shouldn't put prose
+    there).
+    """
+    if not teach_text:
+        return {"transcript": None, "materials": None}
+
+    lines = teach_text.split("\n")
+    # Build a list of (line_index, section_name) for every heading.
+    headings: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        lower = stripped.lower()
+        if lower in (h.lower() for h in _TRANSCRIPT_HEADINGS):
+            headings.append((i, "transcript"))
+        elif lower in (h.lower() for h in _MATERIALS_HEADINGS):
+            headings.append((i, "materials"))
+
+    if not headings:
+        return {"transcript": None, "materials": None}
+
+    result: dict[str, str | None] = {"transcript": None, "materials": None}
+    for idx, (line_idx, section_name) in enumerate(headings):
+        # Content starts after the heading line; ends at the next
+        # heading (or end of text).
+        next_heading_idx = headings[idx + 1][0] if idx + 1 < len(headings) else len(lines)
+        content_lines = lines[line_idx + 1: next_heading_idx]
+        # Strip the leading blank line if present and trim trailing blanks.
+        while content_lines and not content_lines[0].strip():
+            content_lines.pop(0)
+        while content_lines and not content_lines[-1].strip():
+            content_lines.pop()
+        content = "\n".join(content_lines).strip()
+        if content:
+            # First wins: if the LLM emits both ## From Transcript and
+            # ## From the Transcript, keep the first one.
+            if result[section_name] is None:
+                result[section_name] = content
+
+    return result
 
 
 def generate_chunks(

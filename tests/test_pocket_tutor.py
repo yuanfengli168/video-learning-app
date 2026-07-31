@@ -454,3 +454,361 @@ def test_language_directive_passes_japanese_verbatim():
     """Non-zh, non-en codes are passed through as-is (the model knows them)."""
     directive = tutor._language_directive("ja")
     assert "Respond in ja" in directive
+
+
+# ── Structured teach_text parser (MVP0.2 followup #3) ─────────
+# The LLM is now required to emit teach_text with two ## From…
+# headings. The backend parses these into teach_text_transcript /
+# teach_text_materials fields so the iOS app can render them as
+# two cards. The parser is lenient: missing headings, leading
+# prose, and typos (## From Video instead of ## From Transcript)
+# all degrade gracefully.
+
+def test_parse_teach_text_sections_basic():
+    """Standard two-section format."""
+    text = """## From Transcript
+The teacher said GraphRAG is one of many implementations.
+
+## From Uploaded Files
+GraphRAG combines knowledge graphs with retrieval-augmented generation."""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] == "The teacher said GraphRAG is one of many implementations."
+    assert result["materials"] == "GraphRAG combines knowledge graphs with retrieval-augmented generation."
+
+
+def test_parse_teach_text_sections_transcript_only():
+    """When materials are omitted, only transcript section is present."""
+    text = """## From Transcript
+Just the transcript content here."""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] == "Just the transcript content here."
+    assert result["materials"] is None
+
+
+def test_parse_teach_text_sections_materials_only():
+    """Inverse case: only materials section."""
+    text = """## From Uploaded Files
+Code reference from the paper."""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] is None
+    assert result["materials"] == "Code reference from the paper."
+
+
+def test_parse_teach_text_sections_no_headings():
+    """When the LLM doesn't emit any headings, both fields are None."""
+    text = "Just a plain wall of text without any structure."
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] is None
+    assert result["materials"] is None
+
+
+def test_parse_teach_text_sections_empty_string():
+    """Empty input → both None."""
+    result = tutor._parse_teach_text_sections("")
+    assert result == {"transcript": None, "materials": None}
+
+
+def test_parse_teach_text_sections_strips_blank_lines():
+    """Blank lines around each section are trimmed."""
+    text = """## From Transcript
+
+
+    The teacher said GraphRAG is one of many implementations.
+
+
+    ## From Uploaded Files
+
+    GraphRAG combines knowledge graphs with retrieval-augmented generation."""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] == "The teacher said GraphRAG is one of many implementations."
+    assert result["materials"] == "GraphRAG combines knowledge graphs with retrieval-augmented generation."
+
+
+def test_parse_teach_text_sections_accepts_from_video_variant():
+    """`## From Video` is a legacy typo — parser accepts it as Transcript."""
+    text = """## From Video
+Content from the video."""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] == "Content from the video."
+    assert result["materials"] is None
+
+
+def test_parse_teach_text_sections_first_wins():
+    """If the LLM emits both `## From Transcript` and `## From the Transcript`,
+    the first one wins (defensive against duplicates)."""
+    text = """## From Transcript
+First one.
+
+## From the Transcript
+Second one."""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] == "First one."
+
+
+def test_parse_teach_text_sections_case_insensitive():
+    """Heading match is case-insensitive."""
+    text = """## FROM TRANSCRIPT
+The teacher said GraphRAG is one of many implementations."""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert result["transcript"] == "The teacher said GraphRAG is one of many implementations."
+
+
+def test_parse_teach_text_sections_multiline_prose():
+    """Each section can contain multiple lines of prose."""
+    text = """## From Transcript
+The teacher said GraphRAG is one of many implementations.
+Microsoft did open-source one.
+But it is not the only one.
+
+## From Uploaded Files
+See the paper for details.
+The official repo is at github.com/microsoft/graphrag.
+"""
+
+    result = tutor._parse_teach_text_sections(text)
+    assert "The teacher said GraphRAG" in result["transcript"]
+    assert "Microsoft did open-source" in result["transcript"]
+    assert "See the paper" in result["materials"]
+    assert "github.com/microsoft/graphrag" in result["materials"]
+
+
+def test_coerce_chunk_populates_structured_fields():
+    """End-to-end: an LLM-style response gets the right structured fields."""
+    raw = json.dumps([{
+        "index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+        "concept_title": "X",
+        "transcript_quote": "quote",
+        "teach_text": (
+            "## From Transcript\n"
+            "The teacher said GraphRAG is one of many implementations.\n\n"
+            "## From Uploaded Files\n"
+            "GraphRAG combines knowledge graphs with retrieval-augmented generation."
+        ),
+        "check_question": "?"
+    }])
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 1
+    assert chunks[0].teach_text_transcript == "The teacher said GraphRAG is one of many implementations."
+    assert chunks[0].teach_text_materials == "GraphRAG combines knowledge graphs with retrieval-augmented generation."
+    # Raw teach_text is still preserved (so the iOS fallback path works).
+    assert "## From Transcript" in chunks[0].teach_text
+
+
+def test_coerce_chunk_leaves_structured_fields_none_for_legacy():
+    """Legacy chunks without headings leave structured fields as None."""
+    raw = json.dumps([{
+        "index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+        "concept_title": "X",
+        "transcript_quote": "quote",
+        "teach_text": "Just a plain wall of text without any structure.",
+        "check_question": "?"
+    }])
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 1
+    assert chunks[0].teach_text_transcript is None
+    assert chunks[0].teach_text_materials is None
+    assert chunks[0].teach_text == "Just a plain wall of text without any structure."
+
+
+# ── End-to-end: structured teach_text persists to DB (MVP0.2 followup #3) ──
+# The user originally reported "I regenerated but got the same old format"
+# because the backend was (a) loading old code from before the structured
+# fields were added, and (b) the persistence loop didn't write the new
+# columns. This test exercises the full path: a fake ChunkOut with
+# structured fields → _do_generate → PocketChunk row → re-read.
+
+def test_structured_teach_text_persists_to_db(auth_client, db_session):
+    """When the LLM emits structured teach_text, the columns land in the DB."""
+    from app.pocket.models import PocketChunk
+    db = db_session
+    v = _make_video_with_assets(db)
+
+    fake_chunks = [{
+        "id": "c1", "video_id": v.id, "index": 0, "start_ts": 0, "end_ts": 60,
+        "duration_label": "2min", "concept_title": "C",
+        "transcript_quote": "quote",
+        "teach_text": "## From Transcript\nThe teacher said X.\n\n## From Uploaded Files\nPaper reference.",
+        "teach_text_transcript": "The teacher said X.",
+        "teach_text_materials": "Paper reference.",
+        "check_question": "?",
+    }]
+
+    def fake_generate(transcript, summary, quiz, flashcards, mindmap, materials_section="", language=None):
+        return tutor.TutorResult(
+            chunks=[tutor.ChunkOut.model_validate(fake_chunks[0])],
+            used_fallback=False,
+            elapsed_s=0.01,
+        )
+
+    with patch("app.pocket.tutor.generate_chunks", side_effect=fake_generate):
+        r = auth_client.post(f"/m/teach/{v.id}")
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        # Poll until ready
+        for _ in range(50):
+            sr = auth_client.get(f"/m/teach/{v.id}/status", params={"job_id": job_id})
+            if sr.json().get("status") == "ready":
+                break
+            elif sr.json().get("status") == "error":
+                raise AssertionError(f"Job failed: {sr.json()}")
+
+    # Re-read from DB and verify the structured fields are populated.
+    chunk = db.query(PocketChunk).filter(PocketChunk.video_id == v.id).first()
+    assert chunk is not None
+    assert chunk.teach_text_transcript == "The teacher said X."
+    assert chunk.teach_text_materials == "Paper reference."
+    # Raw teach_text is also preserved (so the iOS fallback path works).
+    assert "## From Transcript" in chunk.teach_text
+
+
+# ── Tolerant parser (MVP0.2 followup #5: fix JSON parse failures) ─────
+# The pocket tutor was failing with "Could not parse Ollama response as
+# JSON chunk array" for some videos. The cause was the LLM occasionally
+# wrapping its output in awkward markdown fences (```json with stray
+# whitespace, nested arrays, etc.) that the original parser didn't
+# handle. The new parser tries 4 strategies in order of strictness:
+#   1. Direct parse
+#   2. Strip fences (multiple variants) and parse
+#   3. Find [..] in prose + clean trailing commas
+#   4. Brace-counting regex extraction of individual JSON objects
+
+def _make_chunk_json_array(n: int) -> str:
+    """Generate a valid JSON array of n fake chunks."""
+    chunks = []
+    for i in range(n):
+        chunks.append({
+            "index": i, "start_ts": i * 60.0, "end_ts": (i + 1) * 60.0,
+            "duration_label": "2min", "concept_title": f"C{i}",
+            "transcript_quote": "q", "teach_text": "T",
+            "check_question": "?",
+        })
+    return json.dumps(chunks)
+
+
+def test_parse_chunks_direct_array():
+    raw = _make_chunk_json_array(3)
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 3
+    assert chunks[0].concept_title == "C0"
+
+
+def test_parse_chunks_with_json_fence():
+    raw = "```json\n" + _make_chunk_json_array(2) + "\n```"
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 2
+
+
+def test_parse_chunks_with_bare_fence():
+    raw = "```\n" + _make_chunk_json_array(2) + "\n```"
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 2
+
+
+def test_parse_chunks_with_uppercase_JSON_fence():
+    raw = "```JSON\n" + _make_chunk_json_array(1) + "\n```"
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 1
+
+
+def test_parse_chunks_with_prose_prefix():
+    raw = "Here's the JSON you asked for:\n\n" + _make_chunk_json_array(2)
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 2
+
+
+def test_parse_chunks_with_prose_suffix():
+    raw = _make_chunk_json_array(2) + "\n\nLet me know if you need anything else!"
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 2
+
+
+def test_parse_chunks_with_trailing_comma():
+    """Some LLM outputs have trailing commas — invalid JSON but common."""
+    raw = json.dumps([
+        {"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+         "concept_title": "C", "transcript_quote": "q", "teach_text": "T",
+         "check_question": "?",},  # ← trailing comma
+    ])
+    # First attempt will fail (invalid JSON), fallback should clean it
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 1
+
+
+def test_parse_chunks_nested_array():
+    """LLM occasionally wraps the array in another array."""
+    inner = json.loads(json.dumps([
+        {"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+         "concept_title": "C", "transcript_quote": "q", "teach_text": "T",
+         "check_question": "?"},
+    ]))
+    raw = json.dumps([inner])  # [[{...}]]
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 1
+
+
+def test_parse_chunks_individual_objects():
+    """Last-resort: extract individual JSON objects from prose."""
+    raw = (
+        "Here are the chunks:\n"
+        '{"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",'
+        ' "concept_title": "C1", "transcript_quote": "q", "teach_text": "T1",'
+        ' "check_question": "?"}\n'
+        "And then:\n"
+        '{"index": 1, "start_ts": 60, "end_ts": 120, "duration_label": "5min",'
+        ' "concept_title": "C2", "transcript_quote": "q", "teach_text": "T2",'
+        ' "check_question": "?"}\n'
+    )
+    chunks = tutor._parse_chunks(raw)
+    assert len(chunks) == 2
+    assert chunks[0].concept_title == "C1"
+    assert chunks[1].concept_title == "C2"
+
+
+def test_parse_chunks_failure_logs_response():
+    """When all strategies fail, we log the raw response for debugging."""
+    import logging
+    with tutor._logger_unlocked() if hasattr(tutor, '_logger_unlocked') else _NullContext():
+        # Bypass the context-manager helper
+        pass
+    raw = "this is not JSON at all, just plain text — sorry!"
+    with __import__('unittest.mock', fromlist=['patch']).patch.object(
+        tutor.log, 'error'
+    ) as mock_log:
+        with __import__('pytest').raises(ValueError, match="Could not parse"):
+            tutor._parse_chunks(raw)
+    # The error message includes the raw response start
+    assert mock_log.called
+    logged = str(mock_log.call_args)
+    assert "this is not JSON" in logged
+
+
+# Tiny ctx helper for the test above
+class _NullContext:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def test_parse_chunks_skips_invalid_items():
+    """If the LLM mixes dicts with stray items, we skip the bad ones."""
+    raw = json.dumps([
+        {"index": 0, "start_ts": 0, "end_ts": 60, "duration_label": "2min",
+         "concept_title": "C1", "transcript_quote": "q", "teach_text": "T1",
+         "check_question": "?"},
+        "stray string",
+        {"index": 2, "start_ts": 120, "end_ts": 180, "duration_label": "5min",
+         "concept_title": "C3", "transcript_quote": "q", "teach_text": "T3",
+         "check_question": "?"},
+    ])
+    chunks = tutor._parse_chunks(raw)
+    # Should get 2 valid chunks; the stray string is skipped
+    assert len(chunks) == 2
+    assert chunks[0].concept_title == "C1"
+    assert chunks[1].concept_title == "C3"

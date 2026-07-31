@@ -34,6 +34,13 @@ struct Chunk: Codable, Identifiable, Hashable {
     let conceptTitle: String
     let transcriptQuote: String
     let teachText: String
+    /// MVP0.2 followup #3: backend parses the structured teach_text
+    /// (## From Transcript / ## From Uploaded Files headings) and
+    /// pre-fills these. Optional for backward compat — old chunks
+    /// (without the headings) leave these nil and the UI falls back
+    /// to a single Text() of teachText.
+    let teachTextTranscript: String?
+    let teachTextMaterials: String?
     let checkQuestion: String
 
     enum CodingKeys: String, CodingKey {
@@ -45,7 +52,15 @@ struct Chunk: Codable, Identifiable, Hashable {
         case conceptTitle = "concept_title"
         case transcriptQuote = "transcript_quote"
         case teachText = "teach_text"
+        case teachTextTranscript = "teach_text_transcript"
+        case teachTextMaterials = "teach_text_materials"
         case checkQuestion = "check_question"
+    }
+
+    /// True when the backend gave us the structured sections. UI uses
+    /// this to decide between two cards vs. a single Text fallback.
+    var hasStructuredTeachText: Bool {
+        teachTextTranscript != nil && !(teachTextTranscript?.isEmpty ?? true)
     }
 }
 

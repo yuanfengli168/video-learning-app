@@ -242,6 +242,23 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "extraction_method",
         "ALTER TABLE pocket_materials ADD COLUMN extraction_method VARCHAR(32)",
     ),
+    # MVP0.2 followup #3: structured teach_text sections. The LLM emits
+    # teach_text with two H2 headings (`## From Transcript` /
+    # `## From Uploaded Files`). The backend parses these into two
+    # separate columns so the iOS app can render them as two cards.
+    # NULL means legacy row (LLM didn't emit the headings) — UI falls
+    # back to a single Text() of teach_text. Both nullable so old rows
+    # don't need backfill.
+    (
+        "pocket_chunks",
+        "teach_text_transcript",
+        "ALTER TABLE pocket_chunks ADD COLUMN teach_text_transcript TEXT",
+    ),
+    (
+        "pocket_chunks",
+        "teach_text_materials",
+        "ALTER TABLE pocket_chunks ADD COLUMN teach_text_materials TEXT",
+    ),
 ]
 
 

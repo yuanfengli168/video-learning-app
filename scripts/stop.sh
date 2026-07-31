@@ -18,9 +18,15 @@ ok()   { echo -e "${GREEN}✅ $1${NC}"; }
 warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 fail() { echo -e "${RED}❌ $1${NC}"; }
 
-PID="$(pgrep -f 'uvicorn app.main' || true)"
+# Read PIDs into an array (handles multiple uvicorn processes:
+# one on :8000 from start.sh and one on :8443 from start-ios.sh).
+# `mapfile` / `read -a` handles the multi-line output of `pgrep` correctly.
+PIDS=()
+while IFS= read -r p; do
+    [[ -n "$p" ]] && PIDS+=("$p")
+done < <(pgrep -f 'uvicorn app.main' 2>/dev/null || true)
 
-if [[ -z "$PID" ]]; then
+if [[ ${#PIDS[@]} -eq 0 ]]; then
     warn "No uvicorn process found"
     # Even if pgrep didn't find it, ports might still be held by a
     # zombie. Try once more via lsof to be safe.
@@ -34,15 +40,31 @@ if [[ -z "$PID" ]]; then
     exit 0
 fi
 
-echo "Found uvicorn: PID=$PID"
-kill "$PID"
-sleep 1
+echo "Found uvicorn: PIDs=${PIDS[*]}"
+for PID in "${PIDS[@]}"; do
+    kill "$PID" 2>/dev/null || true
+done
 
-# Confirm it actually died; if not, escalate to SIGKILL
-if kill -0 "$PID" 2>/dev/null; then
-    warn "Process $PID didn't exit on SIGTERM, sending SIGKILL"
-    kill -9 "$PID"
-fi
+# Wait up to 3s for graceful shutdown
+for _ in 1 2 3; do
+    sleep 1
+    STILL_ALIVE=0
+    for PID in "${PIDS[@]}"; do
+        if kill -0 "$PID" 2>/dev/null; then
+            STILL_ALIVE=1
+            break
+        fi
+    done
+    [[ $STILL_ALIVE -eq 0 ]] && break
+done
+
+# Escalate to SIGKILL for any survivors
+for PID in "${PIDS[@]}"; do
+    if kill -0 "$PID" 2>/dev/null; then
+        warn "Process $PID didn't exit on SIGTERM, sending SIGKILL"
+        kill -9 "$PID" 2>/dev/null || true
+    fi
+done
 
 # Final safety net: anything still on either port
 for PORT in 8000 8443; do

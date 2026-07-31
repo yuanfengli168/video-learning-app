@@ -52,6 +52,14 @@ class PocketChunk(Base):
     concept_title: Mapped[str] = mapped_column(String(255), nullable=False)
     transcript_quote: Mapped[str] = mapped_column(Text, default="")
     teach_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # MVP0.2 followup #3: structured teach_text broken into two
+    # sections by the LLM (## From Transcript / ## From Uploaded Files).
+    # NULL means legacy row (LLM didn't emit the headings) — the iOS app
+    # falls back to a single Text() of teach_text. Populated by the
+    # pocket tutor when the LLM follows the new format. Both fields
+    # nullable so we don't have to backfill legacy rows.
+    teach_text_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    teach_text_materials: Mapped[str | None] = mapped_column(Text, nullable=True)
     check_question: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

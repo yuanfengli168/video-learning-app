@@ -1466,3 +1466,196 @@ locked onto the system prompt's English.
   for now. Users can fix legacy videos via the existing language
   dropdown on the video page; auto-detection is parked for
   followup #3.
+
+## [Unreleased] — MVP0.2 followup #3: Structured teach_text (From Transcript / From Uploaded Files)
+
+The iOS TeachMe `teach_text` was a wall of prose with no
+provenance — users couldn't tell which facts came from the
+video and which came from the materials. Now the LLM is
+required to structure `teach_text` with two Markdown H2
+sections, parsed at the backend and rendered as two distinct
+cards in the iOS app.
+
+### ✨ Added
+
+- **Backend prompt** (`app/pocket/tutor.py`):
+  - `SYSTEM_PROMPT` rule 7 requires the LLM to emit `teach_text`
+    starting with `## From Transcript` followed by an optional
+    `## From Uploaded Files` section. Placement is at the top of
+    the user prompt (not the system prompt) so the LLM commits
+    to the structure before generating.
+  - `USER_TEMPLATE` JSON schema example updated to show the
+    required format, plus a `TEACH_TEXT FORMAT REMINDER` block
+    at the end.
+- **Backend parser** (`app/pocket/tutor.py::_parse_teach_text_sections`):
+  - Splits `teach_text` on the canonical headings
+    (`## From Transcript`, `## From Uploaded Files`) into two
+    fields: `teach_text_transcript` + `teach_text_materials`.
+  - Lenient: accepts `## From Video` (legacy typo), case-
+    insensitive, missing sections → None, first-wins on duplicates.
+  - Works on multi-line prose; trims surrounding blank lines.
+- **Schema** (`app/pocket/schemas.py`):
+  - `ChunkOut` gained optional `teach_text_transcript` +
+    `teach_text_materials` fields. Additive — old chunks
+    (without the headings) leave them None and the iOS falls
+    back to the raw `teach_text` blob.
+- **iOS model** (`ios/PocketMVP/Models/TeachModels.swift`):
+  - `Chunk` gained optional `teachTextTranscript` +
+    `teachTextMaterials` fields + `hasStructuredTeachText` helper.
+  - Backward-compatible decoding (decodeIfPresent-style via
+    `Codable` defaults).
+- **iOS rendering** (`ios/PocketMVP/Views/TeachMeView.swift`):
+  - When `chunk.hasStructuredTeachText`, renders TWO cards:
+    - **From Transcript** — gray background, `quote.opening` icon
+    - **From Uploaded Files** — light blue background, `doc.text` icon
+  - Falls back to a single `Text()` of `teachText` for legacy chunks.
+
+### 🧪 Tests
+
+- **12 new tests** in `tests/test_pocket_tutor.py`:
+  - 10 unit tests for `_parse_teach_text_sections` (basic,
+    transcript-only, materials-only, no headings, empty string,
+    blank-line stripping, case-insensitive, multiline prose,
+    `## From Video` variant, first-wins on duplicates)
+  - 2 end-to-end tests that round-trip a JSON chunk through
+    `_parse_chunks` and verify the structured fields are
+    populated correctly
+- **Test suite**: 765 of 766 tests pass. The 1 failure is
+  the pre-existing unrelated whisper test.
+
+### 📝 Notes
+
+- **Why not split into two schema fields?** Splitting into
+  `teach_text_transcript` + `teach_text_materials` at the LLM
+  contract level would force the model to balance two response
+  fields, which often results in one being empty. By keeping a
+  single `teach_text` field with internal markers, the LLM can
+  use natural prose and the parser handles the split. The
+  parsed fields are an iOS convenience, not the source of truth.
+- **Why lenient on `## From Video`?** Some early LLM runs
+  emitted this instead of `## From Transcript`. Accepting it
+  keeps the parser robust against slight LLM drift.
+- **Why omit the iOS markdown rendering?** Bullets, links, and
+  other Markdown would confuse the parser. Plain prose under each
+  heading keeps the contract simple and predictable.
+
+### 🐛 Fixed (followup #3 hotfix: persistence + collapsible UI)
+
+While testing followup #3, two more bugs surfaced:
+
+- **New structured fields were never persisted to the DB.** The
+  Pydantic `ChunkOut` had `teach_text_transcript` / `teach_text_materials`
+  but the SQLAlchemy `PocketChunk` model and the persistence loop in
+  `app/pocket/jobs.py` only wrote `teach_text`. The parser was running
+  correctly but the columns it populated were discarded before INSERT.
+  Now: `PocketChunk` model has both fields, `app/database.py` migration
+  adds them, and `_do_generate` writes them. iOS contract test was
+  updated to verify the round-trip.
+- **The two teach_text sections had no expand/collapse.**
+  `ios/PocketMVP/Views/TeachMeView.swift` — added a new
+  `CollapsibleSection<Content: View>` view used for both "From
+  Transcript" and "From Uploaded Files". Tap the header to toggle;
+  chevron rotates -90°. Default open so the user sees the full lesson
+  on first paint; collapses to skim or focus on the check question.
+
+## [Unreleased] — MVP0.2 followup #5: Tolerant parser + section sort
+
+After followup #4 shipped, two more issues surfaced from real-world use:
+
+### 🐛 Fixed (1) — JSON parse failure for some TeachMe jobs
+
+`app/pocket/tutor.py::_parse_chunks` was failing with `ValueError:
+Could not parse Ollama response as JSON chunk array` for ~30% of
+videos. The root cause was that the LLM occasionally wraps its
+output in awkward constructs the original parser didn't handle:
+` ```json ` with stray whitespace, ` ```JSON ` (uppercase), nested
+arrays like `[[{...}]]`, trailing commas inside objects, prose
+prefixes like "Here's the JSON:", and individual objects outside of
+any array.
+
+The new parser tries 4 strategies in order of strictness:
+1. Direct parse (text already has no fence)
+2. Strip fences (` ```json `, ` ```JSON `, ` ``` `, with/without
+   language tag) and parse
+3. Find `[` and `]` in prose + clean trailing commas
+4. Brace-counting extraction of individual JSON objects
+
+When all strategies fail, the parser now logs the raw response (first
+800 chars) so we can debug future issues. The error message includes
+the response start too.
+
+The new `_to_chunks()` helper is defensive: skips non-dict items rather
+than failing the whole batch. This handles the mixed-output case where
+the LLM intersperses strings with dicts.
+
+### ✨ Added (2) — Section sort (asc / desc) on the iOS section list
+
+`ios/PocketMVP/Views/SectionListView.swift` — new toolbar menu in the
+navigation bar's trailing position with two options:
+- **Name A → Z** (ascending)
+- **Name Z → A** (descending)
+
+The menu icon is `arrow.up.arrow.down` (universal "sort" icon). The
+selected option shows a checkmark via Picker. Sort uses
+`localizedCaseInsensitiveCompare` so CJK characters and non-ASCII
+titles sort correctly. Persisted via `@AppStorage` so the user's
+choice survives across app restarts.
+
+The menu only appears when the course has ≥2 sections (sorting 1 item
+is a no-op and would just clutter the toolbar).
+
+### ⚠️  Important — terminate + relaunch the iOS app to see changes
+
+The iOS app caches the binary in the simulator. After `xcodebuild` +
+`xcrun simctl install`, the user must **swipe-up to terminate the app
+and reopen it** to pick up the new binary. The old binary was running
+in the simulator and was missing the CollapsibleSection + sort menu.
+
+## [Unreleased] — MVP0.2 followup #6: Collapsible sections + unified menu
+
+User feedback after followup #5: "the section list is hard to scan
+when every section is expanded. I want each section to be collapsible
+(default collapsed), and the sort button should be in the same menu
+as expand/collapse-all so the top-right isn't crowded."
+
+### ✨ Added
+
+**`ios/PocketMVP/Views/SectionListView.swift`** — replaced the static
+section list with a collapsible version:
+
+- **Each section is now a tappable header row** with a rotating chevron
+  (rotates -90° when collapsed). Default state is **collapsed** so the
+  user sees a clean list of section titles — easier to navigate to
+  "the next section" as the user requested.
+- **Collapse state is persisted** via `@AppStorage` (key
+  `sectionCollapsed.v1`) — JSON-encoded Set of section IDs. State
+  survives app restarts. Switching collapsed/expanded and reopening
+  the app preserves the user's current "expanded section" workflow.
+- **Single toolbar menu** clusters three actions in one icon
+  (`arrow.up.arrow.down`):
+  - Sort: `Name A → Z` / `Name Z → A` (with checkmark on current)
+  - Divider
+  - `Expand all` (icon: `arrow.down.to.line`)
+  - `Collapse all` (icon: `arrow.up.to.line`)
+- **Video count badge** on each section title row (`3 videos`,
+  `2 videos`) and a `· N done` progress hint when any video has
+  completed chunks. Lets the user see at a glance how much is in each
+  section without expanding.
+- Menu only shows when ≥2 sections (sorting 1 item is a no-op).
+
+### 🧪 Tests
+
+- All 777 backend tests pass; iOS changes are pure-SwiftUI (no new
+  backend endpoint to test).
+
+### 📝 Notes
+
+- **Global collapse state, not per-course.** A single
+  `sectionCollapsed.v1` key holds all sections' state. Per-course
+  isolation was considered but adds complexity for marginal benefit
+  (the user only sees one course at a time).
+- **`localizedCaseInsensitiveCompare` for sort** so CJK and other
+  non-ASCII titles sort correctly.
+- **Animation timing** is 0.15s `easeInOut` — matches the existing
+  `CollapsibleSection` in `TeachMeView.swift` so the two chevron
+  patterns feel consistent across the app.
