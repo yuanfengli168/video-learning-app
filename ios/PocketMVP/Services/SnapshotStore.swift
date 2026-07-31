@@ -189,9 +189,19 @@ final class SnapshotStore: ObservableObject {
             .sorted { $0.orderIndex < $1.orderIndex }
     }
 
-    func videos(for sectionId: String) -> [Video] {
+    func videos(for sectionId: String, naturalSort: VideoSortOrder = .ascending) -> [Video] {
+        // MVP0.2 followup #7: user asked for title-based sort (asc/desc)
+        // for the videos inside each section. The previous behavior
+        // sorted by `orderIndex` (an integer the backend provides),
+        // which doesn't match the user's "1.-AI..." expectation when
+        // titles have leading numbers — because "10" sorts before "2"
+        // lexicographically. We now apply natural sort: leading-number
+        // first, then alphabetical. Default is ascending to match the
+        // user's mental model. The Mac web app uses the same strategy
+        // via the Jinja `natural_sort_key` filter, so the two clients
+        // agree on order.
         snapshot.videos.filter { $0.sectionId == sectionId }
-            .sorted { $0.orderIndex < $1.orderIndex }
+            .sortedByTitle(natural: naturalSort)
     }
 
     func video(id: String) -> Video? {

@@ -37,6 +37,10 @@ struct SectionListView: View {
     /// Sort order. One global default for all courses in v0.1.
     @AppStorage("sectionSortOrder.default") private var sortOrderRaw: String = SectionSortOrder.ascending.rawValue
 
+    /// MVP0.2 followup #7: same idea as the section sort, but for the
+    /// videos inside each section. Persisted across app restarts.
+    @AppStorage("videoSortOrder.default") private var videoSortOrderRaw: String = VideoSortOrder.ascending.rawValue
+
     /// Global JSON-encoded set of collapsed section IDs. We use a
     /// JSON string (rather than a dict) because @AppStorage doesn't
     /// support collections directly. The string is `["id1","id2"]` etc.
@@ -44,6 +48,10 @@ struct SectionListView: View {
 
     private var sortOrder: SectionSortOrder {
         SectionSortOrder(rawValue: sortOrderRaw) ?? .ascending
+    }
+
+    private var videoSortOrder: VideoSortOrder {
+        VideoSortOrder(rawValue: videoSortOrderRaw) ?? .ascending
     }
 
     /// Decoded set of collapsed section IDs. Empty when the JSON is
@@ -76,7 +84,7 @@ struct SectionListView: View {
         List {
             ForEach(sortedSections) { section in
                 let isCollapsed = collapsedSet.contains(section.id)
-                let videos = store.videos(for: section.id)
+                let videos = store.videos(for: section.id, naturalSort: videoSortOrder)
                 let totalChunksDone = videos.reduce(0) { acc, v in
                     acc + (store.progress[v.id]?.chunksDone.count ?? 0)
                 }
@@ -145,6 +153,8 @@ struct SectionListView: View {
                     Menu {
                         sortSection
                         Divider()
+                        videoSortSection
+                        Divider()
                         expandAllButton
                         collapseAllButton
                     } label: {
@@ -167,6 +177,19 @@ struct SectionListView: View {
     private var sortSection: some View {
         Picker("Sort sections", selection: $sortOrderRaw) {
             ForEach(SectionSortOrder.allCases) { order in
+                Label(order.label, systemImage: order.systemImage)
+                    .tag(order.rawValue)
+            }
+        }
+    }
+
+    /// MVP0.2 followup #7: video sort picker. Same shape as the section
+    /// sort so the menu reads consistently. Lives in the same toolbar
+    /// menu so the top-right stays a single icon.
+    @ViewBuilder
+    private var videoSortSection: some View {
+        Picker("Sort videos", selection: $videoSortOrderRaw) {
+            ForEach(VideoSortOrder.allCases) { order in
                 Label(order.label, systemImage: order.systemImage)
                     .tag(order.rawValue)
             }
