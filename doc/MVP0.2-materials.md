@@ -1,6 +1,6 @@
 # MVP0.2 — Course Materials (PDF / .md / .txt / .zip as LLM context)
 
-> **Status:** Shipped (5 commits, 726 backend tests pass)
+> **Status:** Shipped (5 commits, 777 backend tests pass — was 726 at MVP0.2 ship, +51 added by followups #1–#7 on this branch)
 > **Branch:** `mvp-mobile-pocket-v0.1`
 > **Scope:** Backend + Mac web UI + iOS read-only mirror
 > **Author:** brainstormed with GitHub Copilot, decisions ratified by user
@@ -321,7 +321,8 @@ backend ↔ iOS JSON contract:
 
 ### Regression status
 
-- 726 of 727 backend tests pass
+- 777 of 778 backend tests pass (was 726/727 at MVP0.2 ship — the 1 failure
+  is the same pre-existing whisper-picker test, untouched by followups)
 - The 1 failure is **pre-existing** and unrelated (`test_whisper_picker
   ::test_transcribe_endpoint_accepts_smart_turbo_pick` — same failure
   before this MVP started, see `test_whisper_picker.py:708`)
@@ -383,5 +384,5 @@ backend ↔ iOS JSON contract:
 - [x] User starts a Teach job → the tutor's prompt includes the PDF text
 - [x] User deletes the PDF on Mac → iOS badge disappears on next sync
 - [x] iOS user tries to upload anything → 403 "Mac web app only" (origin-gated)
-- [x] All 726 backend tests pass; iOS BUILD SUCCEEDED; no crash on launch
+- [x] All 777 backend tests pass (was 726 at ship); iOS BUILD SUCCEEDED; no crash on launch
 - [x] CHANGELOG entry + this doc + plan update

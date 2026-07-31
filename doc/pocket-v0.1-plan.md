@@ -761,7 +761,7 @@ banner, fix Ollama, tap retry → everything works normally again.
 
 ## v0.2 — Course Materials (PDF / .md / .txt / .zip as LLM context)
 
-> **Status:** Shipped (5 commits, 726 backend tests pass, iOS build green)
+> **Status:** Shipped (5 commits, 777 backend tests pass — was 726 at MVP0.2 ship, iOS build green)
 > **Full design doc:** [`doc/MVP0.2-materials.md`](MVP0.2-materials.md)
 
 This is the next major feature after v0.2's Firebase auth. It lets the user
@@ -837,7 +837,8 @@ summary / quiz / flashcards / mindmap blocks.
 
 ### Test status
 
-- 726 of 727 backend tests pass (the 1 failure is **pre-existing** —
+- 777 of 778 backend tests pass (was 726/727 at MVP0.2 ship — +51 added by
+  followups #1–#7 on this branch; the 1 failure is **pre-existing** —
   `test_whisper_picker::test_transcribe_endpoint_accepts_smart_turbo_pick`,
   mlx-whisper vs faster-whisper backend selection; same failure existed
   before this MVP started)

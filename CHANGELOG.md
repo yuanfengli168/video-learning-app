@@ -1659,3 +1659,48 @@ section list with a collapsible version:
 - **Animation timing** is 0.15s `easeInOut` — matches the existing
   `CollapsibleSection` in `TeachMeView.swift` so the two chevron
   patterns feel consistent across the app.
+
+## [Unreleased] — MVP0.2 followup #7: Video sort by title (iOS-only)
+
+After MVP0.2 followup #6 shipped, the user noticed that the videos
+inside `AI LLM practice` (49 videos) were sorted by `orderIndex`
+which is a backend-computed integer. Because titles like
+"26.-AI大模型..." came before "4.-AI大模型..." in the user's view
+(reported by clone tool screenshot), the title-prefixed numeric
+order was broken.
+
+### ✨ Added (iOS-only, no backend change)
+
+- **`ios/PocketMVP/Models/NaturalSort.swift`** — new file. `VideoSortOrder`
+  enum (ascending / descending) plus a `String.naturalSortKey()` extension
+  that extracts the leading number or falls back to alphabetical `localizedCaseInsensitiveCompare`.
+  This matches the Mac web app's Jinja `natural_sort_key` filter so
+  the two clients agree on order.
+- **`ios/PocketMVP/Services/SnapshotStore.swift`** — `videos(for:naturalSort:)`
+  now takes a sort order; default ascending. Replaces the previous
+  `orderIndex`-based sort.
+- **`ios/PocketMVP/Views/SectionListView.swift`** — new
+  `videoSortOrderRaw` `@AppStorage` key (default `asc`), new
+  `videoSortSection` toolbar picker, and `Divider` between the two
+  sort pickers so the menu reads cleanly. Toolbar menu now has:
+  1. **Sort sections** (Name A→Z / Name Z→A)
+  2. — divider —
+  3. **Sort videos** (Title A→Z / Title Z→A) ← new
+  4. — divider —
+  5. **Expand all** / **Collapse all**
+
+### 📝 Notes
+
+- **No backend change.** Per user instruction 2026-07-31, sort logic
+  lives in the iOS client only. The Mac web app already does natural
+  sort via Jinja, so the two clients agree.
+- **Natural sort, not alphabetical.** With plain alphabetical compare,
+  "10-..." sorts before "2-..." because "1" < "2" lexicographically. The
+  user's mental model is numeric-leading-number first, which matches
+  what they see in the course page. The new `naturalSortKey()` extracts
+  the leading number and falls back to alphabetical only when the
+  leading numbers match.
+- **Default ascending** to match the section sort and the user's
+  mental model of "1, 2, 3, ..., 10, 11, ..." instead of "..., 19, 2, 20, 21, ...".
+- **Persists across app restarts** via `@AppStorage` (key
+  `videoSortOrder.default`). Same pattern as the section sort.
