@@ -431,19 +431,65 @@ tailscale status | head -3
 | 2026-07-31 AM | Verified mkcert installed; CA root path known | OK |
 | 2026-07-31 AM | Current cert SAN = localhost/127.0.0.1/::1 | blocker confirmed |
 | 2026-07-31 AM | `DEVELOPMENT_TEAM = ""` in xcodeproj | blocker confirmed |
-| (pending) | Regenerate cert with LAN IP | |
-| (pending) | Install + sign in Tailscale on Mac | |
-| (pending) | Regenerate cert with LAN IP + TS hostname | |
-| (pending) | Restart uvicorn with new cert | |
-| (pending) | Edit `AppConfig.baseURL` to read from @AppStorage | |
-| (pending) | Create `SettingsView.swift` | |
-| (pending) | Add gear icon to `CourseListView` toolbar | |
-| (pending) | Set DEVELOPMENT_TEAM in xcodeproj | |
-| (pending) | Plug iPhone, register, first build via Xcode | |
-| (pending) | AirDrop mkcert rootCA.pem to iPhone | |
-| (pending) | Install + trust root CA on iPhone | |
-| (pending) | Smoke test: same Wi-Fi → chat | |
-| (pending) | Smoke test: cellular + Tailscale → chat | |
+| 2026-07-31 PM | ✅ Regenerate cert with LAN IP 192.168.4.26 | DONE (expires 2028-10-31) |
+| 2026-07-31 PM | ✅ Edit `AppConfig.baseURL` → `@AppStorage`-backed | committed in `63ae64c` |
+| 2026-07-31 PM | ✅ Create `SettingsView.swift` | committed in `63ae64c` |
+| 2026-07-31 PM | ✅ Add gear icon to `CourseListView` toolbar | committed in `63ae64c` |
+| 2026-07-31 PM | ✅ Verified visually on simulator | gear → Settings opens, Examples render |
+| 2026-07-31 PM | ⏸️ Install + sign in Tailscale on Mac | BLOCKED — brew install needs sudo pw; user left before entering it |
+| (pending) | Regenerate cert with LAN IP + TS hostname | need Tailscale hostname first |
+| (pending) | Restart uvicorn with new cert (already running, will pick up via reload if restarted) | low priority — current cert already covers localhost + LAN IP |
+| (pending) | Set DEVELOPMENT_TEAM in xcodeproj | needs user's Apple ID + Team ID |
+| (pending) | Plug iPhone, register, first build via Xcode | needs user + USB |
+| (pending) | AirDrop mkcert rootCA.pem to iPhone | needs user + iPhone |
+| (pending) | Install + trust root CA on iPhone | needs user |
+| (pending) | Smoke test: same Wi-Fi → chat | needs user + iPhone |
+| (pending) | Smoke test: cellular + Tailscale → chat | needs Tailscale + iPhone |
+
+### Picking up after the trip
+
+When user is back and ready to continue (likely from China or after returning to Singapore):
+
+1. **Install Tailscale on Mac first** (5 min):
+   ```bash
+   brew install --cask tailscale    # needs sudo pw
+   open -a Tailscale                 # then click "Log In" → OAuth
+   tailscale status                  # capture the hostname for next step
+   ```
+
+2. **Reissue cert with TS hostname** (2 min):
+   ```bash
+   mkcert -key-file certs/localhost-key.pem \
+          -cert-file certs/localhost.pem \
+          localhost 127.0.0.1 ::1 192.168.4.26 <TS_HOSTNAME>
+   ```
+   Replace `<TS_HOSTNAME>` with what `tailscale status` printed.
+
+3. **Restart uvicorn so it reloads cert** (1 min):
+   ```bash
+   bash scripts/stop.sh
+   nohup uvicorn app.main:app --reload --host 0.0.0.0 --port 8443 \
+     --ssl-keyfile /Users/jackyli/Desktop/Githubs/video-learning-app/certs/localhost-key.pem \
+     --ssl-certfile /Users/jackyli/Desktop/Githubs/video-learning-app/certs/localhost.pem \
+     --h11-max-incomplete-event-size 67108864 \
+     > logs/server-ios.log 2>&1 &
+   ```
+
+4. **Verify both URLs work** (1 min):
+   ```bash
+   curl -ks https://localhost:8443/api/health
+   curl -ks https://192.168.4.26:8443/api/health
+   curl -ks https://<TS_HOSTNAME>:8443/api/health
+   # All three should return {"status":"ok",...}
+   ```
+
+5. **Real-device build** — plug iPhone into Mac via USB, get UDID, sign into Xcode with Apple ID, set DEVELOPMENT_TEAM in xcodeproj, first build via Xcode → "Run" button. (See doc §6.)
+
+6. **AirDrop + trust mkcert root CA** (5 min, manual). See doc §7.
+
+7. **Smoke test on iPhone** (10 min). See doc §8.
+
+Total remaining: ~25 min of focused work. |
 
 ---
 
