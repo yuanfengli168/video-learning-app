@@ -233,11 +233,27 @@ struct SettingsView: View {
 
 ### Step 6 — Real-device build setup
 
-**Decision (Aug 2, 2026): Paid Apple Developer account.** The trip is 17 days
-(Mac Singapore, iPhone China), and free Personal Team signing expires every 7
-days — re-signing requires physical device pairing which isn't possible across
-countries. The $99/year is $0.27/day, less than a coffee, and also unlocks
-App Store publishing for the eventual public release.
+**Decision timeline:**
+
+- **Aug 2**: Originally chose paid Apple Developer account ($99/yr).
+- **Aug 3**: Three enrollment attempts failed (web + iPhone app, original + fresh
+  Singapore Apple ID). Root cause is almost certainly the payment method being
+  rejected by Apple's processor. New Apple ID doesn't help because the error is
+  triggered after form fill, before payment screen, likely during account/profile
+  validation that involves billing checks.
+- **Aug 3**: Plan B adopted — free Personal Team + 7-day signing. Real-device
+  build deferred to user's return to Singapore because iPhone is in China and
+  Mac is in Singapore, and AnyDesk + wireless debug over Tailscale is too
+  unreliable for production builds.
+
+**What this means:**
+- ✅ Mac-side v0.1.1 work is complete and pushed.
+- ✅ Simulator build works (already verified).
+- ❌ Real iPhone build/install deferred until return to Singapore (~10 days).
+- 🔄 When you return, do the Personal Team build first (works immediately,
+  no enrollment needed) to get Pocket on your iPhone right away.
+- 🔄 Then retry paid Developer enrollment at your leisure with a different
+  payment method if you want App Store distribution.
 
 #### 6a. Enroll in the Apple Developer Program
 
@@ -490,6 +506,11 @@ tailscale status | head -3
 | (pending) | Install + trust root CA on iPhone | needs user |
 | (pending) | Smoke test: same Wi-Fi → chat | needs user + iPhone |
 | (pending) | Smoke test: cellular + Tailscale → chat | needs Tailscale + iPhone |
+| 2026-08-03 | ❌ Apple Developer enrollment attempt #1 (web, original Apple ID) | "We are unable to process your request. An unknown error occurred." after filling form |
+| 2026-08-03 | ❌ Apple Developer enrollment attempt #2 (iPhone Developer app, original Apple ID) | same error |
+| 2026-08-03 | ❌ Apple Developer enrollment attempt #3 (fresh new Singapore Apple ID, iPhone Developer app) | same error |
+| 2026-08-03 | ⚠️ Root cause hypothesis | Card / payment method is most likely rejected. Fresh Singapore Apple ID rules out account profile issues. |
+| 2026-08-03 | 🔄 Plan B adopted | Free Personal Team + 7-day signing. Real-device build deferred to user's return to Singapore (cannot build over AnyDesk with iPhone in China). |
 
 ### Picking up after the trip
 
