@@ -511,6 +511,9 @@ tailscale status | head -3
 | 2026-08-03 | ❌ Apple Developer enrollment attempt #3 (fresh new Singapore Apple ID, iPhone Developer app) | same error |
 | 2026-08-03 | ⚠️ Root cause hypothesis | Card / payment method is most likely rejected. Fresh Singapore Apple ID rules out account profile issues. |
 | 2026-08-03 | 🔄 Plan B adopted | Free Personal Team + 7-day signing. Real-device build deferred to user's return to Singapore (cannot build over AnyDesk with iPhone in China). |
+| 2026-08-03 | ✅ Tailscale installed on iPhone (China) | iPhone shows up in `tailscale status` as `iphone182` at `100.67.246.92` |
+| 2026-08-03 | ✅ mkcert root CA installed + trusted on iPhone | Served via HTTP from Mac (port 8888), downloaded on iPhone, profile installed in Settings → General → VPN & Device Management, trust enabled in Certificate Trust Settings |
+| 2026-08-03 | ✅ Cross-network HTTPS test from China → Singapore works | iPhone Safari hits `https://jackys-macbook-pro.tail9eb9d7.ts.net:8443/api/health` → returns `{"status":"ok",...}` |
 
 ### Picking up after the trip
 
