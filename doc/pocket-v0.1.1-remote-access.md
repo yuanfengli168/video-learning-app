@@ -233,16 +233,30 @@ struct SettingsView: View {
 
 ### Step 6 — Real-device build setup
 
-#### 6a. Apple Developer account
+**Decision (Aug 2, 2026): Paid Apple Developer account.** The trip is 17 days
+(Mac Singapore, iPhone China), and free Personal Team signing expires every 7
+days — re-signing requires physical device pairing which isn't possible across
+countries. The $99/year is $0.27/day, less than a coffee, and also unlocks
+App Store publishing for the eventual public release.
 
-This is the one step we have to do manually because it's interactive and account-specific.
+#### 6a. Enroll in the Apple Developer Program
 
-1. Open Xcode → Settings (⌘,) → Accounts
-2. Click `+` → Apple ID
-3. Sign in with the Apple ID that owns the user's Apple Developer account
-4. If the user has a **paid** Developer account ($99/yr), the team will appear automatically and we can use it directly
-5. If the user has **no paid account**, we use "Personal Team" which gives free 7-day signing — sufficient for this trip (17 days is a problem here — see Risks below)
-6. **Get the Team ID:** in Xcode → Settings → Accounts → click the team → "Team ID" is the 10-char alphanumeric string (e.g. `A1B2C3D4E5`)
+**User action required.** ~5 min if account is set up, ~24h waiting for
+Apple approval, then ~5 min more to get the Team ID.
+
+1. Open https://developer.apple.com/account/enroll
+2. Sign in with your Apple ID (or create one)
+3. Choose **Individual** entity type (unless you have a company with D-U-N-S)
+4. Fill in legal name (must match government ID), address, phone
+5. Agree to the Program License Agreement
+6. Pay **$99 USD** via credit/debit card
+7. Wait for the approval email — usually a few hours, sometimes instant
+8. Once approved, **get the Team ID**:
+   - Open Xcode → Settings → Accounts (⌘,)
+   - Click `+` → Apple ID → sign in with the same Apple ID
+   - Your team appears in the list. Click it.
+   - The **Team ID** is shown — 10-character alphanumeric like `A1B2C3D4E5`
+9. **Paste the Team ID to the assistant** so we can update the project file
 
 #### 6b. Set the Team ID in the project
 
@@ -419,6 +433,7 @@ tailscale status | head -3
 - [ ] Real iPhone on cellular + Tailscale: Pocket chat works
 - [ ] Real iPhone on cellular without Tailscale: cached snapshot still browsable
 - [ ] Tailscale installed + signed in on both Mac and iPhone, same account
+- [ ] Apple Developer Program enrolled (paid, $99/yr) — Aug 2 decision
 
 ---
 
