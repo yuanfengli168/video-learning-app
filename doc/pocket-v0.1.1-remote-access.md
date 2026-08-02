@@ -267,15 +267,45 @@ Apple approval, then ~5 min more to get the Team ID.
 ```bash
 # Plug iPhone into Mac via USB
 # Trust the Mac on the iPhone when prompted (tap "Trust", enter passcode)
+# iPhone must be UNLOCKED (face ID or passcode entered) for first trust
 
-# Get the iPhone's UDID
-xcrun xctrace list devices 2>&1 | grep -i "iPhone" | head -3
-# Or: xcrun devicectl list devices
+# 1. Enable Developer Mode on iPhone (one-time, required for Xcode builds)
+#    iPhone: Settings → Privacy & Security → Developer Mode → toggle ON
+#    (Restart iPhone when prompted)
 
-# The UDID is the 40-char hex string in parentheses, e.g. 00008110-001234567ABCDEFG
+# 2. Confirm iPhone is paired and unlocked on Mac
+xcrun devicectl list devices
+# Look for State = "available" (NOT "unavailable")
+
+# If state is unavailable, the iPhone is locked or not trusted.
+# Unlock the iPhone, tap "Trust" on the "Trust This Mac?" prompt,
+# and re-run devicectl list devices.
+
+# 3. Get the iPhone's UDID (40-char hex string)
+xcrun devicectl list devices | grep "iPhone" | grep "available"
 ```
 
+**Aug 2 status check**: Two iPhones detected (iPhone 14 Pro Max + iPhone 17
+Pro Max) but both showed `State = unavailable` because they were locked
+when checked. After unlock + trust + Developer Mode toggle, they'll
+appear as `available`.
+
 Xcode will register the iPhone automatically the first time you build to it.
+
+#### 6c-bis. Wireless debug setup (optional, for Plan B)
+
+If you ever need to re-sign from Mac over Wi-Fi (e.g. from AnyDesk):
+
+```bash
+# Open Xcode → Window → Devices and Simulators
+# Select iPhone → check "Connect via network"
+# iPhone must be on same Wi-Fi as Mac
+# For Tailscale-based re-sign: this is unreliable because Xcode uses
+# mDNS for discovery which doesn't route well over WireGuard
+```
+
+Wireless debug is unreliable over Tailscale — only useful for Plan B if
+you happen to be on the same Wi-Fi when re-sign is needed.
 
 #### 6d. Build and install
 
