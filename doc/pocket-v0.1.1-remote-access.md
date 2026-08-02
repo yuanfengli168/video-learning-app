@@ -436,9 +436,9 @@ tailscale status | head -3
 | 2026-07-31 PM | ✅ Create `SettingsView.swift` | committed in `63ae64c` |
 | 2026-07-31 PM | ✅ Add gear icon to `CourseListView` toolbar | committed in `63ae64c` |
 | 2026-07-31 PM | ✅ Verified visually on simulator | gear → Settings opens, Examples render |
-| 2026-07-31 PM | ⏸️ Install + sign in Tailscale on Mac | BLOCKED — brew install needs sudo pw; user left before entering it |
-| (pending) | Regenerate cert with LAN IP + TS hostname | need Tailscale hostname first |
-| (pending) | Restart uvicorn with new cert (already running, will pick up via reload if restarted) | low priority — current cert already covers localhost + LAN IP |
+| 2026-08-02 00:35 | ✅ Install + sign in Tailscale on Mac | user clicked through installer; node name `jackys-macbook-pro`; IP `100.92.240.53`; suffix `tail9eb9d7.ts.net`; state `Running` |
+| 2026-08-02 00:36 | ✅ Regenerate cert with LAN IP + TS hostname `jackys-macbook-pro.tail9eb9d7.ts.net` | DONE — SAN list now has 5 entries; expires 2028-11-02 |
+| 2026-08-02 00:37 | ✅ Restart uvicorn + verify all 4 URLs return 200 OK | localhost, 192.168.4.26, jackys-macbook-pro.tail9eb9d7.ts.net, 100.92.240.53 all return `{"status":"ok",...}` |
 | (pending) | Set DEVELOPMENT_TEAM in xcodeproj | needs user's Apple ID + Team ID |
 | (pending) | Plug iPhone, register, first build via Xcode | needs user + USB |
 | (pending) | AirDrop mkcert rootCA.pem to iPhone | needs user + iPhone |
