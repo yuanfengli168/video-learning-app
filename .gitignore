@@ -48,6 +48,11 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Private planning docs (personal notes, business strategy, pricing analysis)
+hosting-buyers-guide.md
+*-private.md
+*-planning.md
 .coverage.*
 coverage.xml
 
