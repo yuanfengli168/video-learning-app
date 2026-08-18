@@ -679,7 +679,9 @@ def test_transcribe_endpoint_accepts_manual_choice(client: TestClient):
         assert v.whisper_fallback_reason is None
 
 
-def test_transcribe_endpoint_accepts_smart_turbo_pick(client: TestClient):
+def test_transcribe_endpoint_accepts_smart_turbo_pick(
+    client: TestClient, monkeypatch,
+):
     """The local-large-turbo smart pick is accepted and persisted with the
     mlx-community/whisper-large-v3-turbo model_id on Apple Silicon.
 
@@ -689,7 +691,22 @@ def test_transcribe_endpoint_accepts_smart_turbo_pick(client: TestClient):
     'local-large-turbo' (mlx-community/whisper-large-v3-turbo).
     On arm64 (test environment), MLX is available so the
     resolved backend is mlx-whisper with no fallback.
+
+    MVP2.x production-patches fix: this test previously ran
+    WITHOUT monkeypatch, relying on the test environment being
+    arm64 AND having mlx-whisper installed. On a fresh
+    Apple-Silicon Mac without mlx-whisper (e.g. the user's
+    Mac Studio after a clean venv rebuild), is_mlx_available()
+    returns False and the choice falls back to 'base', making
+    this test flaky / fail in production CI. Now we explicitly
+    inject a dummy mlx_whisper module + mock platform.machine
+    to 'arm64' so the test is deterministic across platforms.
     """
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "mlx_whisper", types.ModuleType("mlx_whisper"))
+    monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
+
     course_id, section_id = _create_course_and_section(client)
     video_id = _upload_video(client, section_id)
     with _mock_auth():
