@@ -16,7 +16,18 @@ pydantic-settings>=2.7.0
 firebase-admin>=6.2.0
 
 # Transcription
+# - faster-whisper: cross-platform (Intel Mac + Apple Silicon + Linux),
+#   CPU-only via CTranslate2. Always installed.
+# - mlx-whisper: Apple-Silicon-only, uses ANE + Metal GPU (~5-10x faster
+#   than faster-whisper base). The PEP 508 marker below makes pip skip
+#   the install on any non-arm64-darwin machine (Intel Macs, Linux CI,
+#   Codespaces, etc.) — so `pip install -r requirements.txt` still works
+#   everywhere. The app's is_mlx_available() gate returns False on
+#   platforms where this marker skipped the install, and the smart pick
+#   silently falls back to faster-whisper base. See Readme.md and
+#   app/services/transcription.py::is_mlx_available() for details.
 faster-whisper>=1.1.0
+mlx-whisper>=0.4.0; sys_platform == "darwin" and platform_machine == "arm64"
 
 # LLM
 ollama>=0.4.4

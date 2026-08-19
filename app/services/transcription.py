@@ -12,9 +12,14 @@ Backend notes:
   - mlx-whisper (Apple MLX): Apple Silicon only. Uses ANE + Metal GPU.
     ~7-30x realtime with distil-large-v3 on M-series (see
     doc/BlockersOrChallengers.md §1 for speed math).
-  - Both backends are auto-installed. mlx-whisper is gated by a
-    platform check (is_mlx_available) so Intel Macs never see the
-    MLX option in the dropdown.
+  - Both backends are declared in requirements.txt with a PEP 508
+    marker (`sys_platform == "darwin" and platform_machine == "arm64"`)
+    so mlx-whisper only installs on Apple Silicon. On Intel Macs,
+    Linux CI, etc. the install is skipped and the gate below returns
+    False. Readme.md and requirements.txt spell this out — historically
+    this comment said "auto-installed" which was misleading; the user
+    still has to run `pip install -r requirements.txt` once on a fresh
+    Apple-Silicon Mac for the marker to actually fire.
 """
 
 import json
