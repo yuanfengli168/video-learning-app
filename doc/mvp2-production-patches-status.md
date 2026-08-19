@@ -607,3 +607,110 @@ For your budget + Mac Studio, I'd skip Datadog (overkill) and use:
 - **Datadog or New Relic** for APM (Application Performance Monitoring)
 - **PostHog Cloud** for product analytics + feature flags
 - **PagerDuty / Opsgenie** for on-call alerts
+
+---
+
+## 🏗️ Production architecture (Aug 19, 2026)
+
+### Goal
+
+Separate **development** from **production** so that:
+- MBP is for writing code, running tests, debugging
+- Mac Studio is for **only** serving users (24/7)
+- GitHub is the source of truth + runs CI/CD
+- Local edits on Mac Studio are **forbidden** (it should only `git pull`)
+
+### Three-machine workflow
+
+```
+┌──────────────────────┐         ┌──────────────────┐         ┌──────────────────────────┐
+│  MBP (dev/tests)     │         │  GitHub          │         │  Mac Studio (prod)       │
+│  Sequoia 15.6.1      │  push   │  source of truth │  pull   │  Sequoia 15.7.9         │
+│  M1 Max / 64GB       │ ──────► │  CI/CD (future)  │ ──────► │  M2 Max / 32GB / 512GB  │
+│                      │         │                  │         │  Yuanfengs-Mac-Studio   │
+└──────────────────────┘         └──────────────────┘         └──────────────────────────┘
+        ▲                                                                  │
+        │                                                                  │
+        └──────────────── AnyDesk (cross-network) ────────────────────────┘
+                            SSH (same network only)
+```
+
+### Roles
+
+| Machine | Role | Allowed actions | Forbidden actions |
+|---|---|---|---|
+| **MBP** | Developer workstation | Edit code, run tests, commit, push, create PRs | None (this is the dev machine) |
+| **GitHub** | Source of truth + CI | Run tests on push, host main + feature branches | n/a |
+| **Mac Studio** | Production server | `git pull`, restart app, monitor logs | **No direct edits, no dev installs, no `pip install` outside requirements.txt** |
+
+### Branch strategy
+
+| Branch | Purpose | Who pushes | Who pulls |
+|---|---|---|---|
+| `main` | Production code | MBP only (after tests pass locally) | Mac Studio pulls |
+| `mvp2-production-patches` | Production hardening (this branch) | MBP only | Reviewed, then merged to main |
+| `feature/*` | New features / experiments | MBP only | Not deployed until merged to main |
+| `MVP2.0`, `MVP2.1` | Historical release branches | (frozen) | Reference only |
+
+### Deploy flow (current — manual)
+
+1. **MBP**: write code, run `bash scripts/test.sh`, commit, push to `main`
+2. **GitHub**: receives push, stores it
+3. **Mac Studio** (via AnyDesk or SSH):
+ ```bash
+ cd ~/Desktop/Githubs/video-learning-app
+ git fetch origin
+ git status # verify clean, on main, no diverged commits
+ git pull origin main
+ bash scripts/stop.sh
+ bash scripts/start.sh
+ curl -s http://localhost:8000/api/health # verify alive
+ ```
+
+### Deploy flow (future — with GitHub Actions CI/CD)
+
+1. **MBP**: push to `feature/*` branch
+2. **GitHub Actions**: runs full test suite
+3. **On pass**: GitHub bot comments + auto-merges to `main` (if rules allow)
+4. **Mac Studio**: polls GitHub every N minutes (cron job or webhook)
+5. **Mac Studio**: pulls + restarts automatically
+
+### Why this architecture (rationale)
+
+1. **Production stability** — Mac Studio serves paying users; no surprise breakages from "let me try this thing"
+2. **Dev velocity** — MBP can break things freely without affecting users
+3. **Parity** — both machines run Sequoia 15.x (MBP on 15.6.1, Mac Studio on 15.7.9); same major version = same Python/MLX/VideoToolbox ecosystem
+4. **Auditability** — every line on Mac Studio came from Git, no ad-hoc edits
+5. **Rollback** — `git revert` on main, Mac Studio pulls, instant rollback
+
+### Mac Studio: hard rules
+
+| Rule | Why |
+|---|---|
+| ❌ Never edit code on Mac Studio | All changes go through git/MBP |
+| ❌ Never `pip install` ad-hoc packages | Goes through requirements.txt + git |
+| ❌ Never commit directly on Mac Studio | Push from MBP only |
+| ❌ Never modify `.env` outside of gitignored path | Config changes go through documented process |
+| ✅ Only allowed: `git pull`, restart app, check logs, monitor health |
+
+### Mac Studio: monitored things
+
+```bash
+# From MBP (via AnyDesk Terminal):
+curl -s http://localhost:8000/api/health         # App alive?
+sudo pmset -g | grep sleep                         # Sleep settings intact?
+sudo launchctl list | grep video-learning-app      # LaunchDaemon loaded?
+df -h /                                             # Disk not full?
+tail -50 ~/Desktop/Githubs/video-learning-app/logs/app.log  # Recent errors?
+ollama list                                         # Models loaded?
+```
+
+### Open questions / future work
+
+| Question | When to address |
+|---|---|
+| Auto-pull on Mac Studio (cron job or webhook)? | When manual deploy becomes annoying |
+| GitHub Actions CI/CD? | When MBP tests start lying (false positives) |
+| Blue/green deploy? | When downtime during restart becomes painful |
+| Database backup automation? | When first user loses data and complains |
+| Monitoring + alerts (Tier 2 above)? | When Mac Studio goes down and you don't notice |
