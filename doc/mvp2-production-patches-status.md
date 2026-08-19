@@ -26,6 +26,9 @@
 | 7 | **LaunchDaemon install** | Run the `sudo tee ...` block to write `/Library/LaunchDaemons/com.video-learning-app.plist` (improved version with `KeepAlive=true` + proper logs) | **User** (needs sudo) | Yes — 24/7 auto-restart won't work |
 | 8 | **Reboot test** | `sudo shutdown -r now`, wait 2-3 min, reconnect via AnyDesk, run `curl http://localhost:8000/api/health` | **User** | Verifies item 7 works |
 | 9 | **Push branch to origin** | `git push -u origin mvp2-production-patches` | **AI (me)** | No — local commit is preserved |
+| 10 | **Cloudflare Tunnel** (NEW — for testers) | Install cloudflared, create tunnel, run as service so testers can reach the app | **User** | Yes — testers can't reach Mac Studio without this |
+| 11 | **Test from phone on cellular** | Open the tunnel URL on phone (NOT wifi), verify login + a video upload works end-to-end | **User** | Verifies item 10 works |
+| 12 | **Recruit 10 free testers** | Post on LinkedIn + Twitter with the tunnel URL, ask for feedback | **User** | Goes live |
 
 ---
 
@@ -60,8 +63,13 @@ Coverage: ~89% (was ~88% before the fix)
 
 1. **User fills in `.env`** with real Firebase credentials → restart server → confirm login buttons appear
 2. **User installs LaunchDaemon** (sudo block) → reboot → verify `curl http://localhost:8000/api/health` after reconnect
-3. **AI pushes `mvp2-production-patches`** to origin (after items 1 & 2 confirmed working)
-4. **Optional**: open a PR or leave on the branch
+3. **User installs Cloudflare Tunnel** (`brew install cloudflared && cloudflared service install`) → verify phone access
+4. **User tests end-to-end** from phone on cellular → upload a video, generate flashcards
+5. **AI pushes `mvp2-production-patches`** to origin (after items 1–4 confirmed working)
+6. **User recruits 10 free testers** via LinkedIn/Twitter posts
+7. **Optional**: open a PR or leave on the branch
+
+**Why Cloudflare Tunnel is in this branch (not parked)**: The whole point of `mvp2-production-patches` is "make this Mac Studio a 24/7 production server". Without public access, only the user can use it. Cloudflare Tunnel is the last step that converts "internal server" → "public beta".
 
 ---
 
@@ -194,6 +202,105 @@ curl -s http://localhost:8000/api/health
 ```bash
 sudo bash scripts/uninstall-launchdaemon.sh
 ```
+
+### Item 10 — Install Cloudflare Tunnel (so testers can reach the app)
+
+**Why this matters**: Mac Studio's uvicorn binds to `0.0.0.0:8000` but your home router hides it from the internet. Cloudflare Tunnel creates an outbound-only encrypted tunnel from your Mac to Cloudflare's edge, giving testers a real HTTPS URL.
+
+**Architecture:**
+
+```
+Tester's browser
+   ↓ https://<your-name>.trycloudflare.com
+Cloudflare edge (Singapore PoP)
+   ↓ encrypted tunnel (outbound only, no port forwarding)
+Mac Studio :8000
+```
+
+**Setup (10 min):**
+
+```bash
+# 1. Install cloudflared via Homebrew (already on Mac Studio)
+brew install cloudflared
+
+# 2. Quick test — get a temporary URL (no account needed, good for initial test)
+cloudflared tunnel --url http://localhost:8000
+# Output: https://random-word-random.trycloudflare.com
+# Copy that URL, test from phone (cellular, not wifi), then Ctrl-C
+
+# 3. For a permanent URL, login to Cloudflare (free account)
+#    Go to https://dash.cloudflare.com/sign-up if you don't have one
+cloudflared tunnel login
+# Browser opens, pick your account/zone (or skip if you don't have a domain)
+
+# 4. Create a named tunnel
+cloudflared tunnel create video-learning-app
+# Output: Created tunnel video-learning-app with id <UUID>
+# Credentials saved to ~/.cloudflared/<UUID>.json
+
+# 5. Create config file
+cat > ~/.cloudflared/config.yml << EOF
+tunnel: $(ls ~/.cloudflared/*.json | head -1 | xargs basename | sed 's/.json//')
+credentials-file: $(ls ~/.cloudflared/*.json | head -1)
+ingress:
+  - hostname: ""
+    service: http://localhost:8000
+  - service: http_status:404
+EOF
+
+# 6. Run tunnel as a system service (auto-start on boot)
+sudo cloudflared service install
+sudo launchctl kickstart -kp system/com.cloudflare.cloudflared
+
+# 7. Verify
+sudo launchctl list | grep cloudflared
+# Expected: PID + com.cloudflare.cloudflared
+
+# 8. Get your permanent URL
+cloudflared tunnel info video-learning-app
+# Will list your *.trycloudflare.com URL
+```
+
+**For 10 free testers**: Just use the `trycloudflare.com` subdomain. Looks like `video-learning-app.trycloudflare.com`. Works perfectly fine for testing — no need to buy a domain yet.
+
+**When to upgrade to a real domain**: When you start charging users (after the 10 free testers validate the concept). Cost: ~$10-15/year.
+
+### Item 11 — Test from phone on cellular (NOT wifi)
+
+This is the **critical validation** that Cloudflare Tunnel actually works for remote users.
+
+```bash
+# 1. Make sure your Mac Studio is awake + app is running
+curl -s http://localhost:8000/api/health
+# Should return: {"status":"ok",...}
+
+# 2. Get the tunnel URL (printed by cloudflared)
+#    Or: cloudflared tunnel info video-learning-app
+
+# 3. On your phone:
+#    - Turn OFF wifi (use cellular data)
+#    - Open browser
+#    - Go to https://<your-tunnel>.trycloudflare.com
+#    - Try logging in
+#    - Try uploading a video
+
+# 4. If everything works → you're ready for testers
+# 5. If something fails → check /var/log/cloudflared.err.log on Mac Studio
+```
+
+### Item 12 — Recruit 10 free testers
+
+Once the tunnel URL works, post on LinkedIn / Twitter. Suggested template:
+
+> 🎓 I'm looking for 10 volunteers to test my new Pocket MVP — an AI-powered video learning tool that turns your course videos into flashcards + summaries.
+>
+> 🔗 https://video-learning-app.trycloudflare.com
+> 📝 What you'll do: upload a video, generate flashcards, give me feedback (10 min survey)
+> ⏱️ Free during beta, will add paid tier in ~4 weeks
+>
+> Built on a Mac Studio in Singapore. Honest feedback appreciated!
+>
+> #buildinpublic #edtech #AI
 
 ---
 
