@@ -1,11 +1,19 @@
 # How to start the backend
 
 > Quick reference for the FastAPI dev server (`app/main.py`).
-> Last updated: 2026-07-14 (after Part A — anti-drift language policy — on commit `08c118d`).
+> **Last updated: 2026-08-19** (added Production on Mac Studio section)
+
+This doc covers **three** contexts:
+
+| Context | Machine | Read this section |
+|---|---|---|
+| Local development (interactive) | MBP | TL;DR + Option A |
+| Local development (background) | MBP | Option B |
+| **Production (24/7)** | **Mac Studio** | **[Production on Mac Studio](#-production-on-mac-studio)** |
 
 ---
 
-## TL;DR
+## TL;DR (MBP development)
 
 ```bash
 cd ~/Desktop/Githubs/video-learning-app
@@ -189,10 +197,8 @@ source venv/bin/activate
 python -m pytest --no-cov
 ```
 
-Expected: `487 passed, 12 pre-existing failures` (as of 2026-07-14, after Part A — anti-drift language policy).
-The 12 failures are pre-existing frontend + node tests, **not** regressions from
-Part A. They cover: `test_frontend.py` (3), `test_loadSummary_dom.py` (4),
-`test_transcript_follow.py` (5).
+Expected: `625 passed, 9 skipped, 0 failed` (as of 2026-08-19, after the mvp2-production-patches branch — see `doc/mvp2-production-patches-status.md`).
+Coverage: ~89%.
 
 ---
 
@@ -209,3 +215,106 @@ Part A. They cover: `test_frontend.py` (3), `test_loadSummary_dom.py` (4),
 | Kill stuck process | `lsof -ti:8000 \| xargs kill -9` |
 | Run tests | `python -m pytest --no-cov` |
 | Get local IP | `ipconfig getifaddr en0` |
+
+---
+
+## 🏭 Production on Mac Studio
+
+> **Critical context:** Mac Studio (`Yuanfengs-Mac-Studio.local`) is the
+> **production server**. It runs 24/7 via launchd. MBP is for development only.
+> Don't run uvicorn manually on Mac Studio — the LaunchDaemon handles it.
+
+### One-time setup on Mac Studio (already done if you ran the branch's TODO)
+
+```bash
+# On Mac Studio (via AnyDesk), one-time:
+bash scripts/setup-env.sh                                  # fill Firebase values
+sudo bash scripts/install-launchdaemon.sh                  # auto-start on boot
+bash scripts/install-cloudflare-tunnel.sh --permanent      # public URL
+```
+
+### Start the server
+
+**You don't.** The LaunchDaemon starts it on boot. If it's not running:
+
+```bash
+sudo launchctl kickstart -kp system/com.video-learning-app
+```
+
+Or:
+
+```bash
+sudo launchctl load -w /Library/LaunchDaemons/com.video-learning-app.plist
+```
+
+### Stop the server
+
+```bash
+sudo launchctl unload /Library/LaunchDaemons/com.video-learning-app.plist
+# OR (less invasive — keeps plist loaded):
+sudo launchctl kill TERM system/com.video-learning-app
+```
+
+### Restart the server (after deploy)
+
+```bash
+cd ~/Desktop/Githubs/video-learning-app
+git pull origin main
+sudo launchctl kickstart -kp system/com.video-learning-app
+sleep 3
+curl -s http://localhost:8000/api/health
+```
+
+### Check it's running (production checks)
+
+```bash
+# 1. Health endpoint
+curl -s http://localhost:8000/api/health
+# Expected: {"status":"ok","app":"Video Learning App"}
+
+# 2. LaunchDaemon status
+sudo launchctl list | grep video-learning-app
+# Expected: PID + "com.video-learning-app"
+
+# 3. Recent app logs
+tail -20 ~/Library/Logs/video-learning-app.out.log
+
+# 4. Recent errors
+tail -20 ~/Library/Logs/video-learning-app.err.log
+
+# 5. Cloudflare Tunnel status
+sudo launchctl list | grep cloudflared
+# Expected: PID + "com.cloudflare.cloudflared"
+
+# 6. Disk / RAM / CPU
+df -h / | tail -1
+ps aux | grep uvicorn | grep -v grep | awk '{print "CPU:", $3, "MEM:", $4}'
+```
+
+### Where logs live (production)
+
+| Log | Path |
+|---|---|
+| App stdout | `~/Library/Logs/video-learning-app.out.log` |
+| App stderr | `~/Library/Logs/video-learning-app.err.log` |
+| Cloudflare Tunnel | `/var/log/cloudflared.log` |
+| Ollama | `~/.ollama/logs/` |
+
+### Production cheat sheet (Mac Studio)
+
+| Want to… | Run |
+|---|---|
+| Health check | `curl -s http://localhost:8000/api/health` |
+| Restart app | `sudo launchctl kickstart -kp system/com.video-learning-app` |
+| View live logs | `tail -f ~/Library/Logs/video-learning-app.out.log` |
+| Pull latest code | `cd ~/Desktop/Githubs/video-learning-app && git pull origin main` |
+| Check Cloudflare | `sudo launchctl list \| grep cloudflared` |
+| Check sleep settings | `sudo pmset -g \| grep sleep` (must show `sleep 0`) |
+| Disk space | `df -h /` |
+
+### Disaster recovery (Mac Studio won't wake / respond)
+
+1. **AnyDesk from MBP** → connect → if green dot but no session, see `doc/MacStudioServer/Aug082026-m2Max32gb.md` appendix
+2. **SSH from same Wi-Fi**: `ssh yuanfengli@Yuanfengs-Mac-Studio.local`
+3. **Hard reboot** (last resort): hold power button 10s, press once
+4. **If still dead**: Time Machine restore + macOS Recovery Mode
