@@ -24,6 +24,7 @@ from app.jobs import (
     start_job,
 )
 from app.models import Asset, Course, Section, Video
+from app.utils.validation import sanitize_filename
 from app.services.transcription import (
     AVAILABLE_MODELS,
     SMART_PICKS,
@@ -162,10 +163,14 @@ async def upload_video(
         )
 
     # Create video record and queue auto-pipeline
+    # Sanitize filename for display — strip path components, control chars,
+    # and cap length. The on-disk file already uses a UUID name, so this
+    # only affects the title (UI) and filename (DB row) fields.
+    safe_filename = sanitize_filename(file.filename or "")
     video = Video(
         id=video_id,
-        title=Path(file.filename).stem,
-        filename=file.filename,
+        title=Path(safe_filename).stem or "upload",
+        filename=safe_filename,
         file_path=str(file_path),
         file_size=file_size,
         section_id=section_id,

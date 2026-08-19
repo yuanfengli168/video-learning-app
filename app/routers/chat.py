@@ -21,6 +21,12 @@ from app.services.chat import (
     transcript_to_chat_text,
 )
 from app.services.transcription import json_to_transcript
+from app.utils.validation import (
+    ValidationError,
+    llm_safe_wrap_user_content,
+    validate_chat_message,
+    validate_concept,
+)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -66,12 +72,18 @@ async def create_chat_session(
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your video")
 
-    system_prompt = build_system_prompt(body.concept)
+    # Validate the concept before it goes into a system prompt
+    try:
+        safe_concept = validate_concept(body.concept)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    system_prompt = build_system_prompt(safe_concept)
 
     session = ChatSession(
         user_id=user.get("uid", ""),
         video_id=body.video_id,
-        concept=body.concept,
+        concept=safe_concept,
         system_prompt=system_prompt,
     )
     db.add(session)
@@ -105,11 +117,19 @@ async def send_message(
     if session.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your chat session")
 
-    # Save user message
+    # Validate the message BEFORE saving or sending to LLM.
+    # Catches: prompt injection attempts, oversized messages,
+    # control chars / null bytes, empty messages.
+    try:
+        safe_content = validate_chat_message(body.content)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Save user message (sanitized version)
     user_msg = ChatMessage(
         session_id=session_id,
         role="user",
-        content=body.content,
+        content=safe_content,
     )
     db.add(user_msg)
     db.commit()
@@ -125,6 +145,14 @@ async def send_message(
         {"role": msg.role, "content": msg.content}
         for msg in all_messages
     ]
+
+    # Defense in depth: wrap the latest user message in clear delimiters
+    # so the model knows "this is user data, not instructions".
+    # Even if check_for_prompt_injection misses something, this helps.
+    if ollama_messages and ollama_messages[-1]["role"] == "user":
+        ollama_messages[-1]["content"] = llm_safe_wrap_user_content(
+            ollama_messages[-1]["content"]
+        )
 
     try:
         ai_response = chat_with_ollama(
@@ -160,7 +188,7 @@ async def send_message(
     return {
         "user_message": {
             "role": "user",
-            "content": body.content,
+            "content": safe_content,
         },
         "ai_message": {
             "role": "assistant",
