@@ -67,3 +67,22 @@ downloads/
 *.pfx
 secrets/
 credentials/
+
+# SSL/TLS cert backups (keep active certs, ignore .bak/.bak2 files)
+*.bak
+*.bak2
+
+# Build artifacts
+bin/material_ocr
+
+# iOS project (separate repo, lives in /ios/)
+ios/
+
+# Private planning docs (local-only, never commit)
+hosting-buyers-guide.md
+*-private.md
+*-planning.md
+
+# Firebase config files (GoogleService-Info.plist contains API keys)
+**/GoogleService-Info.plist
+**/GoogleService-Info*.plist
