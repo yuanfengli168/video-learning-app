@@ -34,8 +34,11 @@ import re
 # Reference: https://stackoverflow.com/q/37282050
 # Note: this regex is strict on the 11-char length to prevent false positives
 # (e.g. "watch?v=foo" would match if we allowed shorter IDs).
+# NB: no \b word boundary — \b treats '-' as non-word char (since
+# \w = [A-Za-z0-9_] only), breaking all-hyphens IDs like '------------'.
+# Length is the only constraint.
 _VIDEO_ID_CHARS = r"[A-Za-z0-9_-]{11}"
-_VIDEO_ID_RE = re.compile(rf"\b{_VIDEO_ID_CHARS}\b")
+_VIDEO_ID_RE = re.compile(_VIDEO_ID_CHARS)
 
 
 # Pattern order matters: most-specific first, fallback to bare ID last.
@@ -93,6 +96,13 @@ def extract_youtube_id(url_or_id: str | None) -> str | None:
         None
     """
     if not url_or_id:
+        return None
+
+    # Type guard: only strings can be YouTube URLs/IDs.
+    # Without this, calling extract_youtube_id(123) crashes with
+    # AttributeError. Returning None is better UX (admin form validation
+    # catches it and shows a friendly error).
+    if not isinstance(url_or_id, str):
         return None
 
     s = url_or_id.strip()
