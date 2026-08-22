@@ -105,51 +105,91 @@
 
 ---
 
-## 🛡️ Admin role — implementation plan
+## 🛡️ Roles & capabilities — implementation plan
 
-### DB schema (one small table)
+> **See full design**: [doc/mvp2-roles-and-access.md](mvp2-roles-and-access.md)
+> The summary below is for quick reference during the build.
+
+### Two-enum design (extensible)
+
+- **UserRole** (int, who you are): `0=ADMIN, 1=PAID, 2=FREE`
+  - Future: `3=EDUCATION, 4=TRIAL, 5=BETA, 6=ENTERPRISE` (5-line addition)
+- **VideoVisibility** (int, what you can see): `0=PUBLIC, 1=PAID_ONLY, 2=ADMIN_ONLY`
+- **Capability** (str enum, what you can do): `VIEW_VIDEO, CHAT_FREE, CHAT_PAID,
+  UPLOAD_VIDEO, REGEN_MATERIALS, CURATE_CATALOG, MANAGE_USERS, VIEW_ADMIN_DASHBOARD`
+- **ROLE_CAPABILITIES map**: ties roles to capabilities, easy to extend
+
+### DB schema (one new table + one new column)
 
 ```sql
+-- Add users table (Day 2)
 CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,        -- matches Firebase UID
+    user_id TEXT PRIMARY KEY,
     email TEXT,
-    role TEXT NOT NULL DEFAULT 'user',  -- 'user' | 'admin' | 'support_admin'
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    role INTEGER NOT NULL DEFAULT 2,  -- UserRole enum, 2 = FREE
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Seed with your account
-INSERT INTO users (user_id, email, role)
-VALUES ('YOUR_FIREBASE_UID', 'your@email.com', 'admin');
+-- Add visibility to videos (Day 2, additive)
+ALTER TABLE videos ADD COLUMN visibility INTEGER NOT NULL DEFAULT 0;  -- PUBLIC
+
+-- Add paid_waitlist for v1.1 prep
+CREATE TABLE IF NOT EXISTS paid_waitlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    message TEXT,
+    source TEXT DEFAULT 'web',
+    notified_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 ### Backend dependency
 
 ```python
-# app/auth/admin.py
+# app/auth/roles.py (NEW)
+from enum import IntEnum
+
+class UserRole(IntEnum):
+    ADMIN = 0
+    PAID = 1
+    FREE = 2
+    # Future: EDUCATION = 3, TRIAL = 4, BETA = 5, ENTERPRISE = 6
+
+class VideoVisibility(IntEnum):
+    PUBLIC = 0
+    PAID_ONLY = 1
+    ADMIN_ONLY = 2
+
+# app/auth/admin.py (NEW)
+from functools import lru_cache
 from fastapi import Depends, HTTPException
 from sqlalchemy import text
-from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
+from app.auth.roles import UserRole, Capability, ROLE_CAPABILITIES
 from app.database import get_db
 
+@lru_cache(maxsize=10000)
+def get_user_role(uid: str, role_db: int) -> UserRole:
+    """Cached role lookup. role_db is part of cache key so changes invalidate."""
+    return UserRole(role_db)
 
-def require_admin(
-    user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict:
-    """Return current user only if they have role='admin' in DB.
-    
-    Use on every admin-only route. Admins added manually (no self-promotion).
-    Future 'support_admin' role: read-only access for CS team.
-    """
-    uid = user.get("uid", "")
-    row = db.execute(
-        text("SELECT role FROM users WHERE user_id = :uid"),
-        {"uid": uid}
-    ).fetchone()
-    if not row or row[0] not in ("admin",):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
+def require_capability(cap: Capability):
+    """Decorator: 403 if user's role lacks this capability."""
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            user = kwargs.get('user') or {}
+            uid = user.get('uid', '')
+            row = db.execute(text("SELECT role FROM users WHERE user_id=:uid"),
+                             {"uid": uid}).fetchone()
+            role = get_user_role(uid, row[0] if row else 2)
+            if cap not in ROLE_CAPABILITIES.get(role, set()):
+                raise HTTPException(403, f"Missing capability: {cap.value}")
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
 ```
 
 ### Two routers
@@ -257,10 +297,15 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 
 | Day | Task | Deliverable |
 |---|---|---|
-| **Day 1** | (a) Verify `.env` is filled, restart server, confirm login works | Working auth |
-| | (b) Add `users` table + `require_admin` dependency + admin router skeleton | Admin route exists |
-| **Day 2** | (a) Add `/api/admin/videos/youtube` endpoint | Admin can register URL |
-| | (b) Frontend: `is_admin` context + admin-only UI | Admin can paste URLs |
+| **Day 1** | (a) Verify `.env` has YOUTUBE_API_KEY + GROQ_API_KEY + OLLAMA_API_KEY, restart server, confirm login works | Working auth |
+| | (b) Add `users` table + `videos.visibility` column + `paid_waitlist` table (additive migrations) | DB ready for roles |
+| | (c) Create `app/auth/roles.py` with UserRole, VideoVisibility, Capability, ROLE_CAPABILITIES | Role system in code |
+| | (d) Create `app/auth/admin.py` with `require_capability` decorator + cached role lookup | Reusable admin gate |
+| **Day 2** | (a) Add `/api/admin/videos/youtube` endpoint (uses YouTube Data API v3 to fetch captions) | Admin can register URL |
+| | (b) Add `videos.youtube_id` + `videos.visibility` columns + auto-fetch title/thumbnail/duration | Video metadata populated |
+| | (c) Frontend: admin-only "Add YouTube video" form with visibility dropdown (PUBLIC/PAID_ONLY/ADMIN_ONLY) | Admin can paste URLs |
+| | (d) Auto-create `users` row on first authenticated login (idempotent INSERT) | New users tracked |
+| | (e) Test: admin pastes URL → video appears → FREE user can browse | End-to-end works |
 | **Day 3** | (a) Add `yt-dlp` metadata-only fetcher + YouTube auto-captions fetch | Transcript comes from YouTube |
 | | (b) Background transcribe job using existing `transcribe_with_backend` | Whisper fallback ready |
 | **Day 4** | (a) LiteLLM proxy setup + rate limit per user + budget | LLM middleware live |
