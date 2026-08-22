@@ -5,11 +5,160 @@
 > **Related**: `mvp2-final-go-live-plan.md`, `mvp2-llm-architecture.md`
 
 This doc captures the role/visibility system: who can do what, how roles
-are stored, how promotion works, and how content visibility ties in.
+are stored, how promotion works, how content visibility ties in, and how
+the paywall UX flows.
 
 ---
 
-## 1. UserRole enum (integer, not string)
+## 0. Future-proofing the enum (extensibility)
+
+**Anticipated future roles**: EDUCATION (students/teachers), TRIAL (14-day
+free trial of paid features), BETA (friend-testers with extra quota),
+ENTERPRISE (corporate accounts). We design now so adding these is a
+**5-line change**, not a refactor.
+
+### Design: Hybrid (IntEnum role + Capability map)
+
+```python
+# app/auth/roles.py
+
+from enum import IntEnum
+from enum import Enum
+
+
+class UserRole(IntEnum):
+    """Identity tier. Lower number = more privilege (by convention)."""
+    ADMIN = 0          # Internal, full access
+    PAID = 1           # Subscribed user
+    FREE = 2           # Default tier
+    # Future (add in v1.1+ without breaking existing rows):
+    # EDUCATION = 3     # Students/teachers (school email verified)
+    # TRIAL = 4         # 14-day trial of paid features
+    # BETA = 5          # Friend-testers, higher quota
+    # ENTERPRISE = 6    # Corporate accounts, custom limits
+
+
+class Capability(str, Enum):
+    """Granular actions a user can perform.
+
+    Adding a new capability = one new entry here + one role-capability map
+    line. NO router code changes required (the @require_capability decorator
+    reads from the map at request time).
+    """
+    VIEW_VIDEO = "view_video"
+    CHAT_FREE = "chat_free"                  # 30 RPD via Groq
+    CHAT_PAID = "chat_paid"                  # unlimited via Ollama Pro/local
+    UPLOAD_VIDEO = "upload_video"            # (legacy pre-pivot)
+    REGEN_MATERIALS = "regen_materials"      # admin re-runs LLM on video
+    CURATE_CATALOG = "curate_catalog"        # admin adds YouTube videos
+    MANAGE_USERS = "manage_users"            # change roles, view list
+    VIEW_ADMIN_DASHBOARD = "view_admin_dashboard"
+
+
+# Map: which capabilities does each role have?
+ROLE_CAPABILITIES: dict[UserRole, set[Capability]] = {
+    UserRole.ADMIN: {
+        Capability.VIEW_VIDEO,
+        Capability.CHAT_FREE, Capability.CHAT_PAID,
+        Capability.UPLOAD_VIDEO,
+        Capability.REGEN_MATERIALS,
+        Capability.CURATE_CATALOG,
+        Capability.MANAGE_USERS,
+        Capability.VIEW_ADMIN_DASHBOARD,
+    },
+    UserRole.PAID: {
+        Capability.VIEW_VIDEO,
+        Capability.CHAT_FREE, Capability.CHAT_PAID,
+        Capability.UPLOAD_VIDEO,
+        Capability.REGEN_MATERIALS,
+        # No CURATE_CATALOG, no MANAGE_USERS, no admin dashboard
+    },
+    UserRole.FREE: {
+        Capability.VIEW_VIDEO,
+        Capability.CHAT_FREE,
+        # No upload, no regen, no curate, no manage
+    },
+}
+
+
+def user_has_capability(role: UserRole, capability: Capability) -> bool:
+    """Single check used by @require_capability decorator."""
+    return capability in ROLE_CAPABILITIES.get(role, set())
+
+
+def capabilities_for(role: UserRole) -> set[Capability]:
+    """Return all capabilities for a role (for UI rendering)."""
+    return ROLE_CAPABILITIES.get(role, set())
+```
+
+### Adding a new role (e.g. EDUCATION) — 5 lines
+
+```python
+# 1. Add to enum
+EDUCATION = 3
+
+# 2. Add to capabilities map
+ROLE_CAPABILITIES[UserRole.EDUCATION] = {
+    Capability.VIEW_VIDEO,
+    Capability.CHAT_FREE,
+    Capability.REGEN_MATERIALS,   # students can regen study materials
+    # No upload, curate, or manage_users
+}
+
+# Done. Router code, frontend checks, DB queries — all unchanged.
+```
+
+### Adding a new capability (e.g. BOOKMARKS) — 3 lines
+
+```python
+# 1. Add to enum
+BOOKMARK_VIDEO = "bookmark_video"
+
+# 2. Add to each role that should have it
+ROLE_CAPABILITIES[UserRole.PAID].add(Capability.BOOKMARK_VIDEO)
+ROLE_CAPABILITIES[UserRole.FREE].add(Capability.BOOKMARK_VIDEO)
+# (Admin gets it automatically if you want — add to ADMIN set too)
+
+# Done.
+```
+
+### Router usage
+
+```python
+# app/routers/admin.py
+
+from functools import wraps
+from app.auth.roles import Capability, user_has_capability
+
+def require_capability(capability: Capability):
+    """Decorator: 403 if current user's role doesn't include this capability."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            user = kwargs.get('user') or args[-1]  # depends on FastAPI signature
+            role = get_user_role(db, user['uid'])
+            if not user_has_capability(role, capability):
+                raise HTTPException(403, f"Missing capability: {capability.value}")
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+@router.post("/api/admin/videos/youtube")
+@require_capability(Capability.CURATE_CATALOG)
+async def admin_add_youtube_video(...):
+    ...
+```
+
+### Why not just check `role == UserRole.ADMIN`?
+
+- Hard to add new admin-tier roles later (e.g., "support_admin" that can
+  manage users but can't curate)
+- Capability checks are reusable (one decorator, many endpoints)
+- Easy to grant temporary capabilities (trials, promotions)
+- Future "feature flags" can grant/revoke capabilities per-user
+
+---
 
 Why integer (not string like `"admin"` / `"paid"` / `"free"`):
 - Smaller in DB (4 bytes vs 16+ bytes)
@@ -182,7 +331,9 @@ restart-on-deploy is fine.
 
 **No admin UI for v1.0.** Admin promotion is manual SQLite INSERT/UPDATE.
 
-### Promote yourself (admin = jackyli)
+### Promote yourself (admin = jacky.li)
+
+Your personal admin email is **jackieliglobal@gmail.com** (forever account).
 
 ```bash
 cd /Users/jackyli/Desktop/Githubs/video-learning-app
@@ -196,7 +347,7 @@ sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db \
 # 2. Promote (replace 'YOUR_FIREBASE_UID' with your actual UID)
 sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db <<'EOF'
 INSERT INTO users (user_id, email, role)
-VALUES ('YOUR_FIREBASE_UID', 'jackyopenclaw.168@gmail.com', 0)
+VALUES ('YOUR_FIREBASE_UID', 'jackieliglobal@gmail.com', 0)
 ON CONFLICT(user_id) DO UPDATE SET role = 0, updated_at = CURRENT_TIMESTAMP;
 EOF
 
@@ -249,8 +400,10 @@ CREATE TABLE IF NOT EXISTS paid_waitlist (
 
 ```sql
 -- Pre-load admin's own email so we don't forget it later
+-- (This is jacky.li's forever personal account; will be the first paid
+-- user when payments go live in v1.1)
 INSERT OR IGNORE INTO paid_waitlist (email, message, source)
-VALUES ('jackyopenclaw.168@gmail.com',
+VALUES ('jackieliglobal@gmail.com',
         'Founder/admin — bootstrap entry',
         'manual');
 ```
@@ -350,7 +503,101 @@ SQLite approach + the defenses above are sufficient.
 
 ---
 
-## 8. Migration plan (v1.0 → v1.1)
+## 8. Paywall UX (v1.1)
+
+When a FREE user encounters a PAID_ONLY video:
+
+### Catalog page (`/api/videos` response)
+
+For PAID_ONLY/ADMIN_ONLY videos, the catalog includes:
+```json
+{
+  "id": "abc123",
+  "title": "Advanced Vector DB Internals",
+  "youtube_id": "XYZ",
+  "thumbnail_url": "https://...",
+  "visibility": 1,                    // PAID_ONLY
+  "locked": true,                     // user can't watch
+  "lock_reason": "premium_content",
+  "preview_description": "...",       // first 200 chars of admin-curated description
+  "price_hint": "Subscribe to unlock" // marketing text
+}
+```
+
+### Video detail page (`/video/<id>`)
+
+If user tries to load a locked video:
+- Server returns 200 with `locked: true` (NOT 404, so UI can show explanation)
+- Frontend renders **Paywall component** instead of the YouTube iframe:
+  - Big 🔒 icon
+  - "Premium content"
+  - 1-sentence teaser ("Master the inner workings of HNSW indexing...")
+  - **"Subscribe to unlock"** button → email waitlist form (or Stripe checkout in v1.1)
+  - Small text: "Already subscribed? [Log in with a different account](#)"
+
+### Hover tooltip (catalog cards)
+
+On the video card, hovering over a locked thumbnail shows:
+```
+🔒 Premium content
+Subscribe to watch
+```
+
+### Admin view (no lock)
+
+For admins, ALL videos show unlocked regardless of visibility (admin can
+preview what paid users see). This is critical for content curation.
+
+### Implementation
+
+```python
+# app/routers/videos.py:get_video
+
+@router.get("/api/videos/{video_id}")
+async def get_video(video_id: str, ...):
+    video = db.get(Video, video_id)
+    role = get_user_role(db, user['uid'])
+
+    # Admin sees everything
+    if role == UserRole.ADMIN:
+        return video.to_dict(include_youtube_id=True)
+
+    # User's max visible tier
+    max_visibility = {PAID: PAID_ONLY, FREE: PUBLIC}[role]
+
+    if video.visibility > max_visibility:
+        # Locked: return metadata but hide the YouTube embed URL
+        d = video.to_dict(include_youtube_id=False)
+        d['locked'] = True
+        d['lock_reason'] = 'premium_content' if video.visibility == PAID_ONLY \
+                          else 'admin_only'
+        return d
+
+    return video.to_dict(include_youtube_id=True)
+```
+
+```python
+# app/models/video.py — to_dict method
+
+def to_dict(self, include_youtube_id: bool = True) -> dict:
+    d = {
+        "id": self.id,
+        "title": self.title,
+        "thumbnail_url": f"https://i.ytimg.com/vi/{self.youtube_id}/hqdefault.jpg",
+        "duration": self.duration,
+        "visibility": self.visibility,
+    }
+    if include_youtube_id:
+        d["youtube_id"] = self.youtube_id
+    return d
+```
+
+**Key**: never embed YouTube iframe for locked videos. The youtube_id stays
+hidden until user has access, preventing workarounds.
+
+---
+
+## 9. Migration plan (v1.0 → v1.1)
 
 When payments go live:
 
@@ -374,6 +621,15 @@ When payments go live:
 - **2026-08-22** — Created doc capturing UserRole enum (0=ADMIN, 1=PAID,
   2=FREE), VideoVisibility enum (PUBLIC, PAID_ONLY, ADMIN_ONLY),
   capabilities matrix, users table schema, manual promotion via SQLite,
-  paid waitlist (bootstrap with jackyopenclaw.168@gmail.com), admin UI
-  visibility choice, self-promotion attack analysis, v1.0→v1.1 migration
-  plan. Implementation on Day 2 of 14-day build.
+  paid waitlist (bootstrap with jackieliglobal@gmail.com — admin's
+  forever personal account), admin UI visibility choice, self-promotion
+  attack analysis, v1.0→v1.1 migration plan.
+
+  **Updated 2026-08-22** — Added Section 0 (Capability-based hybrid design
+  for future extensibility: UserRole stays int, Capability is a separate
+  enum, ROLE_CAPABILITIES map controls what each role can do; adding
+  EDUCATION/TRIAL/BETA roles = 5-line change), Section 8 (Paywall UX for
+  FREE users on PAID_ONLY videos: locked metadata returned, YouTube ID
+  hidden, hover tooltip "🔒 Premium content", paywall landing page on
+  video detail), updated admin email to jackieliglobal@gmail.com.
+  Implementation on Day 2 of 14-day build.
