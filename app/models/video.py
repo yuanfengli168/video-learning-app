@@ -119,6 +119,15 @@ class Video(Base):
     # first 10 min) or manually by the user via the language dropdown
     # on the video page (the Retry-transcribe flow).
     language: Mapped[str | None] = mapped_column(String(8), default=None)
+    # ── MVP2 visibility (read-heavy pivot) ──────────────────────────────────
+    # Int matching VideoVisibility enum (see app/auth/roles.py):
+    #   0 = PUBLIC      → FREE, PAID, ADMIN all see
+    #   1 = PAID_ONLY   → PAID, ADMIN see (paywall for FREE)
+    #   2 = ADMIN_ONLY  → ADMIN only (drafts, internal)
+    # Default 0 (PUBLIC) backfills existing rows via the additive
+    # migration in app/database.py:_MIGRATIONS. See doc/mvp2-roles-and-access.md
+    # for the full design (paywall UX, future-extensible roles, etc.).
+    visibility: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # ── Background job state (MVP1 progress bar + ETA) ──────────────────────
     # 'transcribe' or 'generate' — the latest job of that type for this video.
     # Stored as a JSON string of the Job dict from app/jobs.py. Nullable

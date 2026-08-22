@@ -211,3 +211,135 @@ def test_natural_sort_key_real_data_from_user_test():
     assert sorted_titles[1].startswith("2.-")
     assert sorted_titles[2].startswith("3.-")
     assert sorted_titles[3].startswith("4.-")
+
+# ── MVP2 visibility column tests ──────────────────────────────────────────
+# These cover the new videos.visibility column added in the Day 1
+# migration. Visibility is an int matching VideoVisibility enum
+# (0=PUBLIC, 1=PAID_ONLY, 2=ADMIN_ONLY). Default 0 (PUBLIC) ensures
+# all existing rows stay visible to all users.
+
+
+def test_video_default_visibility_is_public(db_session):
+    """Brand-new videos default to PUBLIC so admin doesn't need to set it."""
+    course = Course(title="ML", user_id="u1")
+    db_session.add(course)
+    db_session.flush()
+    section = Section(title="S1", course_id=course.id)
+    db_session.add(section)
+    db_session.flush()
+    video = Video(
+        title="New upload",
+        filename="x.mp4",
+        file_path="/uploads/x.mp4",
+        section_id=section.id,
+    )
+    db_session.add(video)
+    db_session.commit()
+
+    assert video.visibility == 0  # PUBLIC
+
+
+def test_video_explicit_visibility_values(db_session):
+    """Visibility accepts 0, 1, 2 (matching VideoVisibility enum)."""
+    course = Course(title="ML", user_id="u1")
+    db_session.add(course)
+    db_session.flush()
+    section = Section(title="S1", course_id=course.id)
+    db_session.add(section)
+    db_session.flush()
+
+    videos = []
+    for v_val in (0, 1, 2):
+        v = Video(
+            title=f"video-{v_val}",
+            filename=f"f{v_val}.mp4",
+            file_path=f"/uploads/f{v_val}.mp4",
+            section_id=section.id,
+            visibility=v_val,
+        )
+        videos.append(v)
+    db_session.add_all(videos)
+    db_session.commit()
+
+    rows = (
+        db_session.query(Video)
+        .order_by(Video.visibility)
+        .all()
+    )
+    assert [r.visibility for r in rows] == [0, 1, 2]
+
+
+def test_video_visibility_backfills_to_public(db_session):
+    """A row created without explicit visibility should be PUBLIC.
+
+    This simulates the additive migration: existing rows that were
+    inserted before the visibility column existed should default to
+    PUBLIC (= 0) when the column is added.
+    """
+    course = Course(title="ML", user_id="u1")
+    db_session.add(course)
+    db_session.flush()
+    section = Section(title="S1", course_id=course.id)
+    db_session.add(section)
+    db_session.flush()
+
+    # Insert WITHOUT setting visibility, mimicking pre-migration row
+    video = Video(
+        title="Legacy video",
+        filename="legacy.mp4",
+        file_path="/uploads/legacy.mp4",
+        section_id=section.id,
+    )
+    db_session.add(video)
+    db_session.commit()
+
+    # Force-refresh from DB so we see the column default, not Python-side
+    db_session.expire(video)
+    fresh = db_session.query(Video).filter_by(id=video.id).one()
+    assert fresh.visibility == 0  # PUBLIC backfill
+
+
+def test_video_query_filter_by_visibility(db_session):
+    """A common query: list only PUBLIC videos (catalog page for FREE user)."""
+    course = Course(title="ML", user_id="u1")
+    db_session.add(course)
+    db_session.flush()
+    section = Section(title="S1", course_id=course.id)
+    db_session.add(section)
+    db_session.flush()
+
+    public_v = Video(
+        title="free", filename="a.mp4", file_path="/a",
+        section_id=section.id, visibility=0,
+    )
+    paid_v = Video(
+        title="paid", filename="b.mp4", file_path="/b",
+        section_id=section.id, visibility=1,
+    )
+    admin_v = Video(
+        title="admin", filename="c.mp4", file_path="/c",
+        section_id=section.id, visibility=2,
+    )
+    db_session.add_all([public_v, paid_v, admin_v])
+    db_session.commit()
+
+    # FREE user query (only PUBLIC)
+    visible_to_free = db_session.query(Video).filter(
+        Video.visibility <= 0
+    ).all()
+    assert len(visible_to_free) == 1
+    assert visible_to_free[0].title == "free"
+
+    # PAID user query (PUBLIC + PAID_ONLY)
+    visible_to_paid = db_session.query(Video).filter(
+        Video.visibility <= 1
+    ).all()
+    assert len(visible_to_paid) == 2
+    titles = sorted(v.title for v in visible_to_paid)
+    assert titles == ["free", "paid"]
+
+    # ADMIN query (everything)
+    visible_to_admin = db_session.query(Video).filter(
+        Video.visibility <= 2
+    ).all()
+    assert len(visible_to_admin) == 3
