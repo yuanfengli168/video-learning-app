@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}Admin Upload — {{ app_name }}{% endblock %}
+{% block breadcrumb %}Admin / Upload{% endblock %}
+
+{% block content %}
+<div class="space-y-6 max-w-2xl mx-auto">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <h1 class="text-2xl font-bold mb-2">📺 Add YouTube Video</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+            Paste any YouTube URL. The video ID is extracted automatically.
+            For MVP2, the title you enter is the display title — we don't
+            fetch the YouTube title yet (Day 2B will optionally sync it
+            when the API key is available).
+        </p>
+
+        <form id="admin-upload-form" class="space-y-4">
+            <!-- YouTube URL -->
+            <div>
+                <label for="url" class="block text-sm font-medium mb-1">
+                    YouTube URL <span class="text-red-500">*</span>
+                </label>
+                <input
+                    type="text"
+                    id="url"
+                    name="url"
+                    required
+                    placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                <p id="url-preview" class="mt-1 text-xs text-gray-400"></p>
+            </div>
+
+            <!-- Title -->
+            <div>
+                <label for="title" class="block text-sm font-medium mb-1">
+                    Title <span class="text-red-500">*</span>
+                </label>
+                <input
+                    type="text"
+                    id="title"
+                    name="title"
+                    required
+                    placeholder="Rick Astley — Never Gonna Give You Up"
+                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+            </div>
+
+            <!-- Visibility -->
+            <div>
+                <label for="visibility" class="block text-sm font-medium mb-1">
+                    Visibility
+                </label>
+                <select
+                    id="visibility"
+                    name="visibility"
+                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                    {% for opt in visibility_options %}
+                        <option value="{{ opt.value }}"
+                            {% if opt.value == 0 %}selected{% endif %}>
+                            {{ opt.label }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Submit -->
+            <div class="pt-2">
+                <button
+                    type="submit"
+                    id="submit-btn"
+                    class="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    Add Video
+                </button>
+            </div>
+        </form>
+
+        <!-- Status messages -->
+        <div id="status-msg" class="mt-4 hidden"></div>
+
+        <!-- Last success -->
+        <div id="success-card" class="hidden mt-6 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+            <p class="text-sm font-medium text-green-800 dark:text-green-200">✅ Added!</p>
+            <p class="mt-1 text-xs text-green-700 dark:text-green-300">
+                Video ID: <code id="success-id"></code><br>
+                YouTube ID: <code id="success-ytid"></code><br>
+                <a id="success-link" href="#" target="_blank" class="underline">View on watch page →</a>
+            </p>
+        </div>
+    </div>
+
+    <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 text-sm text-amber-800 dark:text-amber-200">
+        <p class="font-medium mb-1">⚠️ Day 2A — manual workflow</p>
+        <p>
+            Adding a video stores it with status=<code>pending</code>.
+            Day 2B (after YOUTUBE_API_KEY is configured) will
+            automatically fetch the duration, transcript, and YouTube
+            title — and flip status to <code>ready</code>.
+            For now, the video appears in the catalog as soon as you add it.
+        </p>
+    </div>
+</div>
+
+<script>
+// Live preview of extracted YouTube ID as user types
+document.getElementById('url').addEventListener('input', function() {
+    const url = this.value;
+    const preview = document.getElementById('url-preview');
+    const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
+    if (m) {
+        preview.textContent = '→ Video ID: ' + m[1];
+        preview.className = 'mt-1 text-xs text-green-600 dark:text-green-400';
+    } else if (url.length > 0) {
+        preview.textContent = '⚠️ Could not detect a YouTube video ID';
+        preview.className = 'mt-1 text-xs text-amber-600 dark:text-amber-400';
+    } else {
+        preview.textContent = '';
+        preview.className = 'mt-1 text-xs text-gray-400';
+    }
+});
+
+// Form submission via fetch (JSON, not multipart)
+document.getElementById('admin-upload-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = document.getElementById('submit-btn');
+    const status = document.getElementById('status-msg');
+    const success = document.getElementById('success-card');
+
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+    status.classList.add('hidden');
+    success.classList.add('hidden');
+
+    const payload = {
+        url: document.getElementById('url').value,
+        title: document.getElementById('title').value,
+        visibility: parseInt(document.getElementById('visibility').value, 10),
+    };
+
+    try {
+        const token = await firebase.auth().currentUser.getIdToken();
+        const resp = await fetch('/api/admin/videos/youtube', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token,
+            },
+            body: JSON.stringify(payload),
+        });
+
+        if (resp.status === 401) {
+            status.textContent = '❌ Not signed in. Please sign in again.';
+            status.className = 'mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-800 dark:text-red-200';
+            status.classList.remove('hidden');
+            return;
+        }
+        if (resp.status === 403) {
+            status.textContent = '❌ Your account is not an admin.';
+            status.className = 'mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-800 dark:text-red-200';
+            status.classList.remove('hidden');
+            return;
+        }
+        if (resp.status === 409) {
+            const body = await resp.json();
+            status.textContent = '⚠️ This YouTube video is already in the catalog (ID: ' + body.detail + ').';
+            status.className = 'mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg text-sm text-amber-800 dark:text-amber-200';
+            status.classList.remove('hidden');
+            return;
+        }
+        if (!resp.ok) {
+            const body = await resp.json();
+            status.textContent = '❌ ' + (body.detail || resp.statusText);
+            status.className = 'mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-800 dark:text-red-200';
+            status.classList.remove('hidden');
+            return;
+        }
+
+        const body = await resp.json();
+        document.getElementById('success-id').textContent = body.video_id;
+        document.getElementById('success-ytid').textContent = body.youtube_id;
+        document.getElementById('success-link').href = '/video/' + body.video_id;
+        success.classList.remove('hidden');
+
+        // Reset form (but keep visibility choice)
+        document.getElementById('url').value = '';
+        document.getElementById('title').value = '';
+        document.getElementById('url-preview').textContent = '';
+    } catch (err) {
+        status.textContent = '❌ Network error: ' + err.message;
+        status.className = 'mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-800 dark:text-red-200';
+        status.classList.remove('hidden');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add Video';
+    }
+});
+</script>
+{% endblock %}

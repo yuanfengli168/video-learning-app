@@ -9,7 +9,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.admin import get_user_role_from_db, require_capability
 from app.auth.dependencies import get_current_user_optional
+from app.auth.roles import Capability, capabilities_for_role
 from app.config import settings
 from app.database import get_db
 from app.models import Asset, Course, Section, Video
@@ -139,6 +141,14 @@ def _ctx(
         # without an N+1 in the Jinja for-loop.
         for c in ctx["sidebar_courses"]:
             _ = list(c.sections)
+        # Expose capability set so nav can conditionally show admin links
+        # (cheap: one DB lookup per request, cached in _lookup_role_cached)
+        role = get_user_role_from_db(user.get("uid", ""), db)
+        ctx["user_capabilities"] = capabilities_for_role(role)
+        ctx["is_admin"] = Capability.CURATE_CATALOG in ctx["user_capabilities"]
+    else:
+        ctx["user_capabilities"] = frozenset()
+        ctx["is_admin"] = False
     ctx.update(extra)
     return ctx
 
@@ -350,4 +360,41 @@ async def chat_history_page(
         request,
         "chat_history.html",
         _ctx(request, user, db=db),
+    )
+
+
+# Admin-only dep — lazy import to avoid circular import
+_admin_capability_dep = require_capability(Capability.CURATE_CATALOG)
+
+
+@router.get("/admin/upload", response_class=HTMLResponse)
+async def admin_upload_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+) -> HTMLResponse:
+    """Admin upload page — paste a YouTube URL, add title + visibility.
+
+    The form POSTs to /api/admin/videos/youtube (JSON), which validates
+    the URL, extracts the video ID, and creates a Video row with
+    status='pending'.
+
+    Visibility options:
+      - public    (0) — anyone, including signed-out
+      - paid_only (1) — paid users (any role >= PAID) only
+      - admin_only(2) — admins only (for review / debugging)
+    """
+    return templates.TemplateResponse(
+        request,
+        "admin_upload.html",
+        _ctx(
+            request,
+            user,
+            db=db,
+            visibility_options=[
+                {"value": 0, "label": "Public — anyone can view"},
+                {"value": 1, "label": "Paid only — paid subscribers"},
+                {"value": 2, "label": "Admin only — review/debugging"},
+            ],
+        ),
     )
