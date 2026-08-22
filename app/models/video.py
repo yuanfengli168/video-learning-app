@@ -128,6 +128,14 @@ class Video(Base):
     # migration in app/database.py:_MIGRATIONS. See doc/mvp2-roles-and-access.md
     # for the full design (paywall UX, future-extensible roles, etc.).
     visibility: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # ── MVP2 YouTube embed (read-heavy pivot) ──────────────────────────────
+    # 11-char YouTube video ID (e.g. "dQw4w9WgXcQ") extracted from the
+    # pasted URL. NULL allowed for legacy uploaded videos (pre-pivot) —
+    # they keep working but won't appear in MVP2 catalog since admin only
+    # sees youtube_id-typed rows in the new flow. We use VARCHAR(11)
+    # because YouTube video IDs are EXACTLY 11 chars (a-z, A-Z, 0-9,
+    # -, _) — extracting with a strict regex prevents malformed IDs.
+    youtube_id: Mapped[str | None] = mapped_column(String(11), nullable=True)
     # ── Background job state (MVP1 progress bar + ETA) ──────────────────────
     # 'transcribe' or 'generate' — the latest job of that type for this video.
     # Stored as a JSON string of the Job dict from app/jobs.py. Nullable

@@ -209,6 +209,17 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "visibility",
         "ALTER TABLE videos ADD COLUMN visibility INTEGER NOT NULL DEFAULT 0",
     ),
+    # MVP2.0 (read-heavy pivot) — videos.youtube_id. The 11-char YouTube
+    # video ID (e.g. "dQw4w9WgXcQ") extracted from the pasted URL. NULL
+    # allowed for legacy rows (uploaded videos that didn't go through
+    # YouTube — they keep working, just won't appear in MVP2 catalog
+    # because admin only sees youtube_id-typed rows in the new flow).
+    # VARCHAR(11) is exact for YouTube video IDs (we extract strictly).
+    (
+        "videos",
+        "youtube_id",
+        "ALTER TABLE videos ADD COLUMN youtube_id VARCHAR(11)",
+    ),
 ]
 
 
