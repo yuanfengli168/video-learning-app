@@ -4,7 +4,12 @@
 > **Tagline**: "I curate the best videos on the internet. You watch, learn, and chat."
 > **Launch target**: 2026-09-09 (~14 days from 2026-08-22 plan-finalization)
 > **Last updated**: 2026-08-22
-> **Related docs**: `mvp2-storage-architecture.md`, `mvp2-llm-architecture.md`
+> **Related docs**:
+> - `mvp2-storage-architecture.md` — storage design + RAID rationale
+> - `mvp2-raid-setup-log.md` — exact setup commands run on 2026-08-22
+> - `mvp2-llm-architecture.md` — LLM providers, caching, flywheel
+> - `mvp2-roles-and-access.md` — UserRole enum, VideoVisibility, promotion
+> - `handover-mvp2-launch.md` — ops guide for new maintainers / Mac Studio migration
 
 ---
 
