@@ -16,6 +16,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Asset, Course, Section, Video
 from app.models.video import natural_sort_key, natural_sort_key_str
+from app.services.catalog import visible_videos_for_user
 from app.services.markdown import simple_markdown
 from markupsafe import Markup
 
@@ -164,12 +165,25 @@ async def dashboard(
     The sidebar course list (with sections loaded for the upload
     picker) is built in `_ctx`. We pass it through as `courses` so
     the existing template for-loop works without changes.
+
+    Also passes `catalog_videos`: the admin-curated YouTube videos that
+    the current user is allowed to see (filtered by visibility based on
+    role). For MVP2 the catalog is the primary browse surface.
     """
     ctx = _ctx(request, user, db=db)
+    # Limit to 50 most recent — the dashboard is a landing page, not
+    # an exhaustive list. Full pagination comes later if needed.
+    catalog_videos = db.execute(
+        visible_videos_for_user(db, user, limit=50)
+    ).scalars().all()
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {**ctx, "courses": ctx.get("sidebar_courses", [])},
+        {
+            **ctx,
+            "courses": ctx.get("sidebar_courses", []),
+            "catalog_videos": catalog_videos,
+        },
     )
 
 

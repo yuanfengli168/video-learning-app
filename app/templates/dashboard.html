@@ -65,6 +65,42 @@
     </div>
     {% endif %}
 
+    <!-- Catalog — admin-curated YouTube videos (visibility-filtered per user) -->
+    <div>
+        <h2 class="text-lg font-semibold mb-3">📺 Catalog</h2>
+        {% if catalog_videos %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {% for v in catalog_videos %}
+            <a href="/video/{{ v.id }}"
+               class="block bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden hover:shadow-md transition-shadow">
+                <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-3xl">
+                    🎬
+                </div>
+                <div class="p-3">
+                    <h3 class="font-medium text-sm leading-snug line-clamp-2">{{ v.title }}</h3>
+                    {% if v.visibility == 1 %}
+                    <span class="inline-block mt-1 text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                        🔒 Paid
+                    </span>
+                    {% elif v.visibility == 2 %}
+                    <span class="inline-block mt-1 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">
+                        🛡️ Admin
+                    </span>
+                    {% endif %}
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-6 text-center text-gray-400">
+            No videos in the catalog yet.
+            {% if is_admin %}
+            <a href="/admin/upload" class="underline text-indigo-600 dark:text-indigo-400">Add one →</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
     <!-- Your Courses -->
     {% if user %}
     <div>
