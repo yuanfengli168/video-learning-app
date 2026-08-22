@@ -80,8 +80,10 @@ def init_db() -> None:
         asset,
         chat,
         course,
+        paid_waitlist,
         plugin_run,
         section,
+        user,
         video,
     )
 
@@ -192,6 +194,20 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "plugin_runs",
         "status",
         "ALTER TABLE plugin_runs ADD COLUMN status VARCHAR(20) DEFAULT 'done'",
+    ),
+    # MVP2.0 (read-heavy pivot) — videos.visibility. Int enum matching
+    # VideoVisibility (see app/auth/roles.py):
+    #   0 = PUBLIC      → FREE, PAID, ADMIN all see
+    #   1 = PAID_ONLY   → PAID, ADMIN see (paywall for FREE)
+    #   2 = ADMIN_ONLY  → ADMIN only (drafts, internal)
+    # Default 0 (PUBLIC) backfills all existing rows so no admin
+    # action is needed; every video uploaded before this migration
+    # becomes free-tier content, which matches the v1.0 launch
+    # posture (no paid tier yet). See doc/mvp2-roles-and-access.md.
+    (
+        "videos",
+        "visibility",
+        "ALTER TABLE videos ADD COLUMN visibility INTEGER NOT NULL DEFAULT 0",
     ),
 ]
 
