@@ -65,14 +65,6 @@ if TYPE_CHECKING:
     from app.auth.dependencies import get_current_user
 
 
-# Module-level alias for get_current_user. Resolved lazily to avoid
-# circular import at module load time (admin.py <-> dependencies.py).
-def _get_current_user_dep():
-    """Lazy resolver for get_current_user (avoids circular import)."""
-    from app.auth.dependencies import get_current_user
-    return get_current_user
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # 1. DB-backed role lookup (parameterized SQL, no injection)
 # ─────────────────────────────────────────────────────────────────────────
@@ -253,38 +245,51 @@ def require_capability(capability: Capability):
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def require_admin(
-    user: dict[str, Any] = Depends(_get_current_user_dep),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Require role=ADMIN. Convenience wrapper around require_capability.
+def _require_admin_dep():
+    """Lazy import wrapper for require_admin's get_current_user dependency.
 
-    Use this for admin-only routes that don't have a more specific
-    capability name. For routes that should be accessible to non-admin
-    roles later (e.g. support_admin), use require_capability() instead.
-
-    Returns:
-        The user claims dict on success.
-
-    Raises:
-        HTTPException 403 if user is not ADMIN.
+    Avoids the circular import between admin.py and dependencies.py
+    (same pattern as require_capability above).
     """
-    uid = user.get("uid", "") if isinstance(user, dict) else ""
-    if not uid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No uid in token claims",
-        )
+    from app.auth.dependencies import get_current_user
 
-    ensure_user_row(uid, user.get("email"), db)
+    async def _dep(
+        user: dict[str, Any] = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> dict[str, Any]:
+        """Require role=ADMIN. Convenience wrapper around require_capability.
 
-    role = get_user_role_from_db(uid, db)
-    if role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Admin access required. Your role is "
-                f"'{role.name.lower()}'."
-            ),
-        )
-    return user
+        Use this for admin-only routes that don't have a more specific
+        capability name. For routes that should be accessible to non-admin
+        roles later (e.g. support_admin), use require_capability() instead.
+
+        Returns:
+            The user claims dict on success.
+
+        Raises:
+            HTTPException 403 if user is not ADMIN.
+        """
+        uid = user.get("uid", "") if isinstance(user, dict) else ""
+        if not uid:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No uid in token claims",
+            )
+
+        ensure_user_row(uid, user.get("email"), db)
+
+        role = get_user_role_from_db(uid, db)
+        if role != UserRole.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Admin access required. Your role is "
+                    f"'{role.name.lower()}'."
+                ),
+            )
+        return user
+
+    return _dep
+
+
+require_admin = _require_admin_dep()
