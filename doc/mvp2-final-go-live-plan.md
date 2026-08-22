@@ -1,9 +1,10 @@
-# MVP3 Go-Live Plan — Read-Heavy, Admin-Curated
+# MVP2 Go-Live Plan — Read-Heavy, Admin-Curated, Groq-Powered
 
-> **Status**: Planning. No code yet.
+> **Status**: Planning finalized; storage setup in progress.
 > **Tagline**: "I curate the best videos on the internet. You watch, learn, and chat."
-> **Launch target**: 14 days from 2026-08-08 (working backwards, due ~2026-08-22)
-> **Last updated**: 2026-08-20
+> **Launch target**: 2026-09-09 (~14 days from 2026-08-22 plan-finalization)
+> **Last updated**: 2026-08-22
+> **Related docs**: `mvp2-storage-architecture.md`, `mvp2-llm-architecture.md`
 
 ---
 
@@ -16,7 +17,7 @@
 - Bottleneck: 100 users × concurrent transcribes = 100 min queue wait
 - Hardware-heavy: needs more RAM, more Ollama, more storage
 
-### After (MVP3 go-live)
+### After (MVP2 go-live)
 - **Admin curates** the catalog (you, nightly)
 - Users **watch + chat + use study materials**, never upload
 - **YouTube embed iframe** streams video (no file hosting, no ToS issue)
@@ -37,7 +38,7 @@
 
 ## 🛠️ Scope (what's IN, what's OUT)
 
-### ✅ IN for MVP3 v1.0 (ship this in 14 days)
+### ✅ IN for MVP2 v1.0 (ship this in 14 days)
 
 | Component | What it does | Effort |
 |---|---|---|
@@ -315,10 +316,11 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 | Electricity (Mac Studio 24/7) | ~SGD 50 |
 | Internet (Singapore biz fiber) | ~SGD 200 |
 | Cloudflare (free tier) | $0 |
-| LiteLLM (self-hosted, free) | $0 |
+| LiteLLM + Redis (self-hosted, free) | $0 |
 | Firebase Auth (free up to 50K MAU) | $0 |
-| Ollama cloud (`glm-5.2:cloud`) | ~SGD 20-50 (varies with usage) |
-| **Total** | **~SGD 270-300/month** |
+| Groq free tier (free users) | $0 |
+| Ollama Pro (admin testing) | ~SGD 20/month |
+| **Total** | **~SGD 270/month** |
 
 ### Break-even math
 - 1,000 paid users × SGD 19.99 = **SGD 20K/month revenue**
@@ -327,22 +329,149 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 
 ---
 
-## ❓ Decision points (before we code)
+## 🤖 LLM provider design (free vs paid tier)
 
-These are the choices I'm waiting on:
+Full design lives in `doc/mvp2-llm-architecture.md`. Quick summary:
 
-1. **Branch name**: `mvp3-go-live-read-heavy` or different?
-2. **LiteLLM vs hand-rolled middleware**: confirm LiteLLM?
-3. **YouTube embed** (confirmed): `youtube-nocookie.com`?
-4. **Transcript source** (confirmed): YouTube auto-captions only for v1.0?
-5. **Rate limits**: 30 chats/day per free user OK?
-6. **Local 7B model vs `glm-5.2:cloud`**: which for chat?
-7. **When to start coding**: today, after Go-Live doc finalized, or after server config confirmed?
+| Tier | Provider | Model | Chats/day | Cost |
+|---|---|---|---|---|
+| **Free** | Groq | `openai/gpt-oss-120b` (primary) → `openai/gpt-oss-20b` (fallback) | 30/day | **$0** (Groq free tier) |
+| **Beta invite** | Groq | same, higher RPD limit via per-user key | 100/day | **$0** |
+| **Admin (testing)** | Ollama Pro | `glm-5.2:cloud` | unlimited | $20/mo Pro |
+| **Admin (production)** | Local on MBP | `qwen3:14b` | unlimited | **$0** (electricity) |
 
-Reply with picks and I'll set up the branch + start Day 1.
+**Material generation (admin only)**: `groq/qwen/qwen3.6-27b` (better JSON reliability, free).
+
+### Why Groq for free tier?
+- **Free tier** = 30 RPM, 1K RPD, 8K TPM, 200K TPD per organization
+- **Fast inference** (Groq LPU) = <1 sec first token = great UX
+- **Cached tokens don't count** → our semantic cache saves quota for free
+
+### Disclaimer (UI text for free users)
+
+Show above chat input:
+
+> **Free tier** — Chats are processed by Groq (a third-party LLM provider).
+> Don't share personal or sensitive information. Up to 30 chats per day.
+> For unlimited chats with better quality, [upgrade to Pro](#) (coming soon).
+
+Below the disclaimer:
+
+> By using free tier, you agree to Groq's [Terms of Service](https://groq.com/terms)
+> and [Privacy Policy](https://groq.com/privacy).
+
+---
+
+## 💾 Caching strategy
+
+**Semantic cache** (LiteLLM + Redis + bge-m3 local embeddings):
+- Match by embedding similarity (cosine > 0.92), not exact text
+- Cache key = `hash(video_id + model + messages + temperature)`
+- Cache TTL = 7 days
+- **Expected hit rate: 30-50%** of free-tier chat requests
+- Cached responses cost **$0** and don't count toward Groq TPM
+
+**What gets cached**:
+- First user question on a fresh chat session for a video (often "summarize" / "key idea")
+- Admin material re-generation on same video (identical prompt)
+- Common concept questions ("what is X?")
+
+**What doesn't get cached**:
+- Mid-conversation replies (low similarity to past)
+- Specific user questions with details
+- High-temperature creative responses
+
+---
+
+## 👥 User capacity (free tier)
+
+### Constraints stacked (tightest wins)
+| Constraint | Limit | Applies to |
+|---|---|---|
+| Groq free (org-wide) | 30 RPM, 8K TPM, 1K RPD | All free users combined |
+| Our middleware (per user) | 5 RPM, 30 RPD | Per user |
+| FastAPI (gunicorn 4) | ~50 concurrent | All users combined |
+| Mac Studio hardware | ~500 concurrent HTTPS | All users combined |
+
+### Capacity table
+| Scenario | Users | Aggregate RPM | Status |
+|---|---|---|---|
+| **Soft launch (target)** | 100 active | ~20 RPM (realistic) | ✅ Comfortable |
+| Mid-growth | 200 active | ~40 RPM | ⚠️ Throttled at peak |
+| Scale (no infra change) | 300 active | ~60 RPM | ❌ Hits Groq cap |
+| Scale (with 3 Groq accounts) | 500 active | ~100 RPM aggregate (load-balanced) | ✅ Comfortable |
+| Scale (5 accounts + cache) | 1,000 active | ~200 RPM, but cache halves = 100 RPM | ✅ Workable |
+
+### Scaling levers (implement when needed, not now)
+1. **Multiple Groq accounts** — LiteLLM load-balances across N keys (`GROQ_KEY_1`, `_2`, ...). N accounts = N× capacity.
+2. **Redis request queue** — smooths spikes; users see "Thinking..." 1-5 sec.
+3. **Semantic cache** — 30-50% hit rate halves effective RPM to Groq.
+4. **Per-user Groq keys** — at 500+ users, each user gets their own 30 RPM. Avoids org-level cap.
+
+### v1.0 plan: 1 Groq account, 100 users target
+- Don't over-engineer
+- Add 2nd Groq account when 100 users register
+- Add Redis queue when concurrent >20
+
+---
+
+## 💎 Paid tier incentive (post-launch, v1.1)
+
+Goal: make free tier **good enough** to be useful, **annoying enough** to upgrade.
+
+### Tier comparison
+| Feature | Free (Groq) | Paid (Ollama Pro + local) |
+|---|---|---|
+| Chats/day | 30 | Unlimited |
+| Model quality | `gpt-oss-120b` (good) | `qwen3:14b` local (better) or Ollama Pro top models |
+| Privacy | Groq servers | Our servers |
+| Materials generation | ❌ | ✅ |
+| Offline | ❌ | ✅ |
+| Custom fine-tuned model | ❌ | ✅ (when trained) |
+
+### Pricing (suggestion)
+- **Free**: SGD 0/mo, 30 chats/day, Groq
+- **Pro**: SGD 9.99/mo, unlimited, local Ollama + materials regen
+- **Family**: SGD 19.99/mo, 4 accounts, all Pro
+
+### The flywheel (the killer pitch)
+> "Your paid subscription funds the training of our own fine-tuned model. The
+> more subscribers, the better YOUR model gets. You're paying for a service
+> that improves itself."
+
+We log all free-tier chats (with user consent via disclaimer) → admin curates
+the good ones → fine-tune Llama 3.1 8B → host locally → free tier becomes
+unlimited + private. **The data flywheel is the product.**
+
+---
+
+## ❓ Decision points (resolved 2026-08-22)
+
+1. ✅ **Branch name**: stay on `mvp2-production-patches` (existing branch)
+2. ✅ **LiteLLM** confirmed as middleware
+3. ✅ **YouTube embed** via `youtube-nocookie.com`
+4. ✅ **YouTube auto-captions** via Data API v3 (free tier, ~25/day quota)
+5. ✅ **Rate limits**: 5 RPM + 30 RPD per free user (below Groq 30 RPM cap)
+6. ✅ **Free chat model**: Groq (`gpt-oss-120b` primary, `gpt-oss-20b` fallback)
+7. ✅ **Admin model**: Ollama Pro `glm-5.2:cloud` (test) + local `qwen3:14b` (prod)
+8. ✅ **Storage**: 4 drives, RAID 1 HDDs (see `mvp2-storage-architecture.md`)
+9. ✅ **Backup**: 00:00 SGT daily, 30 daily + 12 monthly retention
+10. ✅ **Caching**: semantic cache via LiteLLM + Redis + bge-m3
+11. ✅ **Chat logging**: full conversations stored (PDPA: admin can delete on request)
+12. ✅ **PII scrubbing**: deferred to v1.1 (UI disclaimer only in v1.0)
+13. ✅ **UPS for MBP**: deferred to v1.1 (not blocking v1.0 launch)
 
 ---
 
 ## 📝 Update log
 
-- **2026-08-20** — Created doc capturing the read-heavy pivot, YouTube embed approach (legal analysis), admin role design, LiteLLM middleware plan, 14-day schedule, cost projections.
+- **2026-08-22** — Plan finalized: storage design (4 drives + RAID 1),
+  LLM provider routing (Groq free + Ollama admin), caching strategy
+  (semantic via Redis), user capacity math (100 target, 500 with scaling
+  levers), paid tier incentive + flywheel, disclaimer text, UPS deferred
+  to v1.1. Created `mvp2-storage-architecture.md` and `mvp2-llm-architecture.md`.
+  Acasis H006 enclosure with 4 drives detected: Samsung 990 Pro 1TB (NVMe),
+  Lexar NM610 PRO 2TB (NVMe), 2× 3TB HDDs (USB). RAID 1 planned for HDDs.
+- **2026-08-20** — Created doc capturing the read-heavy pivot, YouTube embed
+  approach (legal analysis), admin role design, LiteLLM middleware plan,
+  14-day schedule, cost projections.
