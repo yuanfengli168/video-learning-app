@@ -333,7 +333,7 @@ restart-on-deploy is fine.
 
 ### Promote yourself (admin = jacky.li)
 
-Your personal admin email is **jackieliglobal@gmail.com** (forever account).
+Your personal admin email is **your-personal-email@example.com** (forever account).
 
 ```bash
 cd /Users/jackyli/Desktop/Githubs/video-learning-app
@@ -347,7 +347,7 @@ sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db \
 # 2. Promote (replace 'YOUR_FIREBASE_UID' with your actual UID)
 sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db <<'EOF'
 INSERT INTO users (user_id, email, role)
-VALUES ('YOUR_FIREBASE_UID', 'jackieliglobal@gmail.com', 0)
+VALUES ('YOUR_FIREBASE_UID', 'your-personal-email@example.com', 0)
 ON CONFLICT(user_id) DO UPDATE SET role = 0, updated_at = CURRENT_TIMESTAMP;
 EOF
 
@@ -403,7 +403,7 @@ CREATE TABLE IF NOT EXISTS paid_waitlist (
 -- (This is jacky.li's forever personal account; will be the first paid
 -- user when payments go live in v1.1)
 INSERT OR IGNORE INTO paid_waitlist (email, message, source)
-VALUES ('jackieliglobal@gmail.com',
+VALUES ('your-personal-email@example.com',
         'Founder/admin — bootstrap entry',
         'manual');
 ```
@@ -621,7 +621,7 @@ When payments go live:
 - **2026-08-22** — Created doc capturing UserRole enum (0=ADMIN, 1=PAID,
   2=FREE), VideoVisibility enum (PUBLIC, PAID_ONLY, ADMIN_ONLY),
   capabilities matrix, users table schema, manual promotion via SQLite,
-  paid waitlist (bootstrap with jackieliglobal@gmail.com — admin's
+  paid waitlist (bootstrap with your-personal-email@example.com — admin's
   forever personal account), admin UI visibility choice, self-promotion
   attack analysis, v1.0→v1.1 migration plan.
 
@@ -631,5 +631,5 @@ When payments go live:
   EDUCATION/TRIAL/BETA roles = 5-line change), Section 8 (Paywall UX for
   FREE users on PAID_ONLY videos: locked metadata returned, YouTube ID
   hidden, hover tooltip "🔒 Premium content", paywall landing page on
-  video detail), updated admin email to jackieliglobal@gmail.com.
+  video detail), updated admin email to your-personal-email@example.com.
   Implementation on Day 2 of 14-day build.
