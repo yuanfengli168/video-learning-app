@@ -73,20 +73,52 @@
             {% for v in catalog_videos %}
             <a href="/video/{{ v.id }}"
                class="block bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden hover:shadow-md transition-shadow">
-                <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-3xl">
+                <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-3xl relative">
+                    {% if v.thumbnail_url %}
+                    <img src="{{ v.thumbnail_url }}"
+                         alt="{{ v.title }}"
+                         class="w-full h-full object-cover"
+                         loading="lazy"
+                         referrerpolicy="no-referrer">
+                    {% else %}
                     🎬
+                    {% endif %}
+                    {# Duration overlay bottom-right (only if > 0).
+                       v.duration is a Float. We use the `int` filter on
+                       each subexpression because Jinja's // and %
+                       on Floats return Floats (renders as "3.0:34.0"
+                       without the filter). #}
+                    {% if v.duration %}
+                    {% set d_secs = v.duration | int %}
+                    <span class="absolute bottom-1 right-1 text-xs px-1.5 py-0.5 rounded bg-black/70 text-white">
+                        {{ d_secs // 60 }}:{{ '%02d' % (d_secs % 60) }}
+                    </span>
+                    {% endif %}
                 </div>
                 <div class="p-3">
                     <h3 class="font-medium text-sm leading-snug line-clamp-2">{{ v.title }}</h3>
-                    {% if v.visibility == 1 %}
-                    <span class="inline-block mt-1 text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
-                        🔒 Paid
-                    </span>
-                    {% elif v.visibility == 2 %}
-                    <span class="inline-block mt-1 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">
-                        🛡️ Admin
-                    </span>
+                    {# Channel name (YouTube videos only — empty for legacy uploads) #}
+                    {% if v.channel %}
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{{ v.channel }}</p>
                     {% endif %}
+                    <div class="flex flex-wrap gap-1 mt-1.5">
+                        {% if v.visibility == 1 %}
+                        <span class="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                            🔒 Paid
+                        </span>
+                        {% elif v.visibility == 2 %}
+                        <span class="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">
+                            🛡️ Admin
+                        </span>
+                        {% endif %}
+                        {# Course / Section badge (small, unobtrusive) #}
+                        {% if v.section and v.section.course %}
+                        <span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 truncate max-w-[160px]"
+                              title="{{ v.section.course.title }} / {{ v.section.title }}">
+                            {{ v.section.course.title }} / {{ v.section.title }}
+                        </span>
+                        {% endif %}
+                    </div>
                 </div>
             </a>
             {% endfor %}

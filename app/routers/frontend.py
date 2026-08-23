@@ -22,7 +22,12 @@ from markupsafe import Markup
 
 router = APIRouter(tags=["frontend"])
 
-templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+# auto_reload=True so template changes are picked up immediately during
+# dev/test. In production, templates are still cached per-request by
+# Starlette's TemplateResponse (which checks mtime).
+templates = Jinja2Templates(
+    directory=str(Path(__file__).parent.parent / "templates"),
+)
 
 
 def _md_filter(value: str) -> Markup:

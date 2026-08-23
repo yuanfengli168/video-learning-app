@@ -35,7 +35,22 @@
             <!-- max-w-full + h-auto prevent the video from overflowing its
                  container on small screens (the intrinsic 1280px width would
                  otherwise force the column wider than the viewport). -->
+            {% if video.youtube_id %}
+            <!-- MVP2: YouTube embed (admin-curated catalog videos).
+                 youtube-nocookie.com is the GDPR-friendly privacy-enhanced
+                 domain — no tracking cookies until the user clicks play. -->
+            <iframe
+                src="https://www.youtube-nocookie.com/embed/{{ video.youtube_id }}"
+                class="w-full aspect-video block"
+                frameborder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowfullscreen
+                referrerpolicy="strict-origin-when-cross-origin"
+                title="{{ video.title }}"></iframe>
+            {% else %}
+            <!-- Legacy: locally uploaded file (pre-pivot videos). -->
             <video controls class="w-full h-auto max-w-full block" src="/api/videos/{{ video.id }}/file"></video>
+            {% endif %}
         </div>
 
         <!-- Topic notification banner (hidden by default, shown when clicking a mindmap node).

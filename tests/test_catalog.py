@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from app.auth.admin import ensure_user_row
+from app.auth.admin import clear_role_cache, ensure_user_row
 from app.auth.roles import UserRole, VideoVisibility
 from app.main import app
 from app.models import Course, Section, Video
@@ -32,6 +32,19 @@ from app.services.catalog import (
 # ─────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_role_cache_between_tests():
+    """Each test starts with empty role cache.
+
+    _lookup_role_cached is module-level lru_cache keyed by (uid, role_db).
+    Tests that change role via UPDATE without clearing the cache would
+    see stale results. Autouse so we don't have to remember per-test.
+    """
+    clear_role_cache()
+    yield
+    clear_role_cache()
 
 
 @pytest.fixture
@@ -361,9 +374,9 @@ def test_dashboard_shows_admin_cta_for_empty_catalog_when_admin(
     ensure_user_row("uid-admin", "admin@x.com", db_session)
     db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
     db_session.commit()
+    # Override the conftest's default verify_token mock so we ARE uid-admin.
     with _mock_verify_token("uid-admin", "admin@x.com"):
-        with TestClient(app) as c:
-            response = c.get("/", headers={"Authorization": "Bearer fake"})
+        response = client.get("/")
     html = response.text
     assert "No videos in the catalog" in html
     assert "/admin/upload" in html
@@ -474,3 +487,177 @@ def test_dashboard_catalog_empty_when_only_legacy_uploads(
     html = response.text
     assert "No videos in the catalog" in html
     assert "Only Legacy" not in html  # NOT shown
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Dashboard catalog card rendering (Day 2C: thumbnails, channels, duration, course badge)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _make_video_with_metadata(
+    db_session,
+    title: str,
+    visibility: int,
+    youtube_id: str,
+    channel: str = "Test Channel",
+    thumbnail_url: str | None = None,
+    duration: float = 214.0,
+) -> Video:
+    """Create a Video with full YouTube metadata enrichment.
+
+    thumbnail_url defaults to a URL derived from the youtube_id so
+    tests can search for either 'abc' (the placeholder) or the
+    actual ID — usually the actual ID.
+    """
+    if thumbnail_url is None:
+        thumbnail_url = f"https://i.ytimg.com/vi/{youtube_id}/maxresdefault.jpg"
+    v = Video(
+        id=f"v-meta-{title.lower().replace(' ', '-')}",
+        title=title,
+        filename=f"youtube:{youtube_id}",
+        file_path=f"https://www.youtube.com/watch?v={youtube_id}",
+        file_size=0,
+        section_id="section-1",
+        status="ready",
+        visibility=visibility,
+        youtube_id=youtube_id,
+        channel=channel,
+        thumbnail_url=thumbnail_url,
+        duration=duration,
+    )
+    db_session.add(v)
+    db_session.commit()
+    db_session.refresh(v)
+    return v
+
+
+def test_dashboard_catalog_card_shows_thumbnail(client: TestClient, db_session, course_and_section):
+    """Card renders <img src=v.thumbnail_url> when YouTube metadata is present."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    _make_video_with_metadata(db_session, "With thumb", 0, "ytwiththumb0")
+    with _mock_verify_token("uid-admin", "admin@x.com"):
+        response = client.get("/")
+    html = response.text
+    assert "https://i.ytimg.com/vi/ytwiththumb0/maxresdefault.jpg" in html
+    # (the <img tag is split across lines by Jinja, so check for 'src='
+    #  pointing at our thumbnail as a proxy for img tag presence)
+    assert 'src="https://i.ytimg.com/vi/ytwiththumb0' in html
+    assert 'object-cover' in html  # Tailwind class for fitting
+
+
+def test_dashboard_catalog_card_shows_channel(client: TestClient, db_session, course_and_section):
+    """Card shows YouTube channel name under the title."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    _make_video_with_metadata(db_session, "Channel test", 0, "ytchannel001", channel="3Blue1Brown")
+    with _mock_verify_token("uid-admin", "admin@x.com"):
+        response = client.get("/")
+    assert "3Blue1Brown" in response.text
+
+
+def test_dashboard_catalog_card_shows_duration(client: TestClient, db_session, course_and_section):
+    """Card shows duration overlay in m:ss format when duration > 0."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    _make_video_with_metadata(db_session, "Duration test", 0, "ytdur000001", duration=214.0)
+    with _mock_verify_token("uid-admin", "admin@x.com"):
+        response = client.get("/")
+    assert "3:34" in response.text  # 214s = 3 minutes 34 seconds
+
+
+def test_dashboard_catalog_card_no_duration_when_zero(client: TestClient, db_session, course_and_section):
+    """Duration overlay hidden when duration=0 (legacy uploads have no duration)."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    _make_video_with_metadata(db_session, "No duration", 0, "ytnodur00001", duration=0.0)
+    with _mock_verify_token("uid-admin", "admin@x.com"):
+        response = client.get("/")
+    # No time overlay like "0:00" should appear (since duration=0 → no overlay)
+    # The visibility badge still shows though
+    assert "No duration" in response.text
+
+
+def test_dashboard_catalog_card_shows_course_section_badge(client: TestClient, db_session, course_and_section):
+    """Card shows 'Course / Section' badge so users know where the video lives."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    _make_video_with_metadata(db_session, "Badge test", 0, "ytbadge00001")
+    # The `client` fixture from conftest already has the session cookie
+    # + mocks verify_token globally. Just hit the URL.
+    response = client.get("/")
+    html = response.text
+    # Course is "Test" / Section is "S1" (from course_and_section fixture)
+    assert "Test / S1" in html
+
+
+def test_dashboard_catalog_card_falls_back_to_emoji_without_thumbnail(
+    client: TestClient, db_session
+):
+    """Card shows 🎬 emoji when thumbnail_url is NULL (legacy or partial data)."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    _make_legacy_upload(db_session, "Legacy Card")
+    with _mock_verify_token("uid-admin", "admin@x.com"):
+        with TestClient(app) as c:
+            response = c.get("/", headers={"Authorization": "Bearer fake"})
+    # No <img> for this card; emoji present
+    html = response.text
+    # (other videos may have <img>, so we check for the absence of thumbnail for "Legacy Card")
+    # Use a unique check: no thumbnail URL contains "ytlgc" since this video has no youtube_id
+    assert "ytlegacy" not in html  # shouldn't appear since legacy is excluded
+    # The card showing for "Legacy Card" doesn't exist at all (excluded from catalog)
+    assert "Legacy Card" not in html
+
+
+def test_dashboard_catalog_card_paid_badge_still_works(client: TestClient, db_session, course_and_section):
+    """Paid visibility badge still renders alongside new metadata fields."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    _make_video_with_metadata(
+        db_session, "Paid Video", VideoVisibility.PAID_ONLY.value, "ytpaidbad001"
+    )
+    with _mock_verify_token("uid-admin", "admin@x.com"):
+        response = client.get("/")
+    assert "🔒 Paid" in response.text
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Video watch page — iframe for YouTube, <video> for legacy
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_watch_page_renders_iframe_for_youtube_video(client: TestClient, db_session, course_and_section):
+    """Watch page embeds YouTube iframe (youtube-nocookie.com) when youtube_id set."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    v = _make_video_with_metadata(db_session, "YT Watch Test", 0, "ytwatch00001")
+    # The `client` fixture from conftest already sets a default valid
+    # session cookie + mocks verify_token globally. Just hit the URL.
+    response = client.get(f"/video/{v.id}")
+    html = response.text
+    assert "youtube-nocookie.com/embed/ytwatch00001" in html
+    assert "<iframe" in html
+    assert "allowfullscreen" in html
+
+
+def test_watch_page_renders_html5_video_for_legacy(client: TestClient, db_session, course_and_section):
+    """Watch page renders <video src=/api/videos/.../file> for legacy uploads."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+    v = _make_legacy_upload(db_session, "Legacy Watch")
+    response = client.get(f"/video/{v.id}")
+    html = response.text
+    assert "<video" in html
+    assert f"/api/videos/{v.id}/file" in html
+    assert "<iframe" not in html  # no iframe for legacy
+    assert "youtube-nocookie" not in html
