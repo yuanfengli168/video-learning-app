@@ -54,12 +54,15 @@ def db_session() -> Generator[Session, None, None]:
     import app.routers.videos as videos_module
     import app.routers.generation as generation_module
     import app.workers.plugin_pool as plugin_pool_module
+    import app.services.youtube_captions_job as captions_job_module
     original_videos_session = videos_module.SessionLocal
     original_generation_session = generation_module.SessionLocal
     original_plugin_pool_session = plugin_pool_module.SessionLocal
+    original_captions_job_session = captions_job_module.SessionLocal
     videos_module.SessionLocal = testing_local
     generation_module.SessionLocal = testing_local
     plugin_pool_module.SessionLocal = testing_local
+    captions_job_module.SessionLocal = testing_local
 
     def override_get_db():
         try:
@@ -79,6 +82,7 @@ def db_session() -> Generator[Session, None, None]:
         videos_module.SessionLocal = original_videos_session
         generation_module.SessionLocal = original_generation_session
         plugin_pool_module.SessionLocal = original_plugin_pool_session
+        captions_job_module.SessionLocal = original_captions_job_session
         # MVP2.1.0.1: drain the plugin worker pool so
         # the next test starts with a clean queue. The
         # pool is a module-level singleton; its worker

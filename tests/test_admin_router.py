@@ -57,6 +57,37 @@ def _disable_youtube_api():
     youtube_api.settings.youtube_api_key = original
 
 
+@pytest.fixture(autouse=True)
+def _skip_background_caption_download():
+    """Stub out the caption-download BackgroundTask.
+
+    Day 3 added a background task that fires after the admin POST
+    creates a video. By default it runs via FastAPI's BackgroundTasks
+    even in TestClient, which mutates the video row (status='error'
+    or 'ready') AFTER the test's assertions have run, causing flaky
+    test failures.
+
+    The route imports the worker lazily inside the function body, so
+    we patch the source module (app.services.youtube_captions_job)
+    directly — every namespace that does `from app.services.youtube_
+    captions_job import _run_caption_download_job` (and the route's
+    late import) will get our no-op.
+
+    Tests that want to exercise the worker directly use their own
+    fixture (see tests/test_youtube_captions_job.py).
+    """
+    from unittest.mock import MagicMock
+    import app.services.youtube_captions_job as job_module
+
+    original = job_module._run_caption_download_job
+    noop = MagicMock(return_value=None)
+    job_module._run_caption_download_job = noop
+    try:
+        yield
+    finally:
+        job_module._run_caption_download_job = original
+
+
 def _admin_token(uid: str = "uid-admin", email: str = "admin@x.com"):
     """Build fake admin claims for verify_token mock."""
     return {"uid": uid, "email": email}

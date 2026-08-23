@@ -29,8 +29,9 @@ GET /api/admin/dashboard
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.admin import (
@@ -143,6 +144,7 @@ class YouTubeVideoResponse(BaseModel):
 @router.post("/videos/youtube", response_model=YouTubeVideoResponse)
 async def admin_add_youtube_video(
     body: YouTubeVideoCreate,
+    background_tasks: BackgroundTasks,
     user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
     db: Session = Depends(get_db),
 ) -> YouTubeVideoResponse:
@@ -324,6 +326,21 @@ async def admin_add_youtube_video(
     db.commit()
     db.refresh(video)
 
+    # Day 3 — kick off caption download in the background. The admin
+    # gets the response immediately (status='pending'); the worker
+    # updates status to 'transcribing' → 'ready' / 'error' as it goes.
+    # Reuses the same _run_caption_download_job() used by the retry
+    # endpoint so admin-initiated adds and manual retries share
+    # one code path.
+    from app.services.youtube_captions_job import (
+        _run_caption_download_job,
+    )
+
+    background_tasks.add_task(
+        _run_caption_download_job,
+        video_id=video.id,
+    )
+
     visibility_name = {
         VideoVisibility.PUBLIC: "public",
         VideoVisibility.PAID_ONLY: "paid_only",
@@ -342,3 +359,141 @@ async def admin_add_youtube_video(
         caption_languages=yt_caption_languages,
         enrichment_status=enrichment_status,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /api/admin/videos/{id}/captions/retry  (Day 3)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/videos/{video_id}/captions/retry")
+async def admin_retry_captions(
+    video_id: str,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Force a re-download of captions for a YouTube video.
+
+    Used by the admin UI "Retry captions" button when the background
+    caption download failed (e.g. transient network error). Unlike the
+    auto-fire on add (which skips if a transcript Asset already exists),
+    this endpoint always overwrites.
+
+    Runs synchronously in the request handler. Returns a summary dict
+    that the UI shows as a toast:
+      {status: 'completed'|'failed', segments: int, language: str,
+       source: str, duration: float, error?: str}
+
+    Capability: CURATE_CATALOG — admins only.
+
+    Security: parameterized SQL only (no injection); the video_id is
+    validated by SQLAlchemy ORM before any I/O.
+    """
+    from app.services.youtube_captions_job import (
+        retry_caption_download,
+    )
+
+    # Cheap defense: return 404 for non-existent videos rather than
+    # leaking that the ID format is valid. The retry helper also
+    # handles this internally; we do it here for a cleaner error code.
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    result = retry_caption_download(video_id, db)
+    if result["status"] == "failed":
+        # 200 anyway — the retry endpoint never 500s. The UI shows the
+        # error in the toast and stays on the page.
+        return result
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /api/admin/videos/{id}/captions/status  (Day 3)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/videos/{video_id}/captions/status")
+async def admin_get_caption_status(
+    video_id: str,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Read the current caption-download state for a YouTube video.
+
+    Polled by the admin UI after a 'Add Video' response to know when
+    the background caption job finishes (transitions from
+    'transcribing' to 'ready' / 'error').
+
+    Returns:
+      {
+        "video_id": str,
+        "status":   str,        # "pending"|"transcribing"|"ready"|"error"
+        "transcript_segments": int | None,  # segment count if ready
+        "language":  str | None,            # locked language if set
+        "transcribed_at": str | None,       # ISO timestamp if ready
+        "job":       dict | None,           # in-flight job state (from app.jobs)
+        "error":     str | None,            # human-readable failure reason
+      }
+    """
+    video = db.get(Video, video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video {video_id} not found",
+        )
+
+    # Count segments if the transcript Asset exists
+    segments_count: int | None = None
+    from app.models import Asset
+
+    transcript = db.execute(
+        select(Asset).where(
+            Asset.video_id == video_id,
+            Asset.asset_type == "transcript",
+        )
+    ).scalar_one_or_none()
+    if transcript is not None:
+        try:
+            import json as _json
+
+            payload = _json.loads(transcript.content)
+            segs = payload.get("segments", [])
+            segments_count = len(segs) if isinstance(segs, list) else None
+        except _json.JSONDecodeError:
+            segments_count = None
+
+    # Look up the in-flight job (None if no job is running for this
+    # video — common case: job already finished, state is on video.status)
+    from app.jobs import get_job as _get_job
+
+    job = _get_job(video_id, "transcribe")
+
+    # Translate whisper_fallback_reason (reused for caption errors)
+    # into the response's `error` field when status='error'
+    error_msg: str | None = None
+    if video.status == "error":
+        # Prefer the live job's error message (more recent); fall
+        # back to the DB-stamped reason
+        if job is not None and job.get("error"):
+            error_msg = job["error"]
+        elif video.whisper_fallback_reason:
+            # Strip the "Captions: " prefix we add in _set_video_error_status
+            error_msg = video.whisper_fallback_reason.replace(
+                "Captions: ", "", 1
+            )
+
+    return {
+        "video_id": video_id,
+        "status": video.status,
+        "transcript_segments": segments_count,
+        "language": video.language,
+        "transcribed_at": (
+            video.transcribed_at.isoformat() if video.transcribed_at else None
+        ),
+        "job": job,
+        "error": error_msg,
+    }
