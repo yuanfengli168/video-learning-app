@@ -8,9 +8,11 @@
         <h1 class="text-2xl font-bold mb-2">📺 Add YouTube Video</h1>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
             Paste any YouTube URL. The video ID is extracted automatically.
-            For MVP2, the title you enter is the display title — we don't
-            fetch the YouTube title yet (Day 2B will optionally sync it
-            when the API key is available).
+            If <code>YOUTUBE_API_KEY</code> is set, we also fetch the real
+            YouTube title, duration, thumbnail, and available caption languages
+            (and prefer the YouTube title over what you type here).
+            Caption DOWNLOAD (transcript text) comes in Day 3 — for now the
+            video appears in the catalog with metadata as soon as you add it.
         </p>
 
         <form id="admin-upload-form" class="space-y-4">
@@ -91,13 +93,14 @@
     </div>
 
     <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 text-sm text-amber-800 dark:text-amber-200">
-        <p class="font-medium mb-1">⚠️ Day 2A — manual workflow</p>
+        <p class="font-medium mb-1">⚠️ What's wired today</p>
         <p>
-            Adding a video stores it with status=<code>pending</code>.
-            Day 2B (after YOUTUBE_API_KEY is configured) will
-            automatically fetch the duration, transcript, and YouTube
-            title — and flip status to <code>ready</code>.
-            For now, the video appears in the catalog as soon as you add it.
+            With <code>YOUTUBE_API_KEY</code> set, adding a video stores it
+            with real title, duration, channel, thumbnail, and caption language
+            list from YouTube (Day 2B).
+            Caption <em>download</em> (the actual transcript text) is Day 3 —
+            until then, the chat/quiz generation features won't have a
+            transcript to work from.
         </p>
     </div>
 </div>
@@ -139,12 +142,14 @@ document.getElementById('admin-upload-form').addEventListener('submit', async fu
     };
 
     try {
-        const token = await firebase.auth().currentUser.getIdToken();
+        // No Bearer header needed — the session cookie set by /api/auth/session
+        // is sent automatically with credentials: 'include'. The backend's
+        // _extract_token() checks cookies first, then Authorization header.
         const resp = await fetch('/api/admin/videos/youtube', {
             method: 'POST',
+            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + token,
             },
             body: JSON.stringify(payload),
         });

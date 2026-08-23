@@ -182,3 +182,40 @@ def test_unknown_admin_path_returns_404(client: TestClient, admin_user):
         with TestClient(app) as c:
             response = c.get("/admin/upload/typo", headers=_auth_header("uid-admin", "admin@x.com"))
     assert response.status_code == 404
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Form submission uses session cookie (not Bearer token)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_form_uses_credentials_include_not_bearer(client: TestClient, admin_user):
+    """Form POSTs with credentials:'include' so the session cookie is sent.
+
+    Bug fix 2026-08-23: previous version called firebase.auth() which
+    isn't loaded on this page (only login.html imports AuthKit).
+    Switching to credentials:'include' works because the session cookie
+    was set by /api/auth/session during login.
+    """
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get("/admin/upload", headers=_auth_header("uid-admin", "admin@x.com"))
+    html = response.text
+    assert "credentials: 'include'" in html
+    # No firebase.auth() calls anywhere
+    assert "firebase.auth" not in html
+    # No Bearer header construction
+    assert "Authorization: 'Bearer" not in html
+
+
+def test_form_help_text_reflects_day2b(client: TestClient, admin_user):
+    """Help text no longer says 'Day 2B will...' (it already does)."""
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get("/admin/upload", headers=_auth_header("uid-admin", "admin@x.com"))
+    html = response.text
+    assert "Day 2B will" not in html
+    assert "Day 2A — manual workflow" not in html
+    # New copy
+    assert "YouTube title" in html
+    assert "Day 3" in html  # mentions caption download is Day 3
