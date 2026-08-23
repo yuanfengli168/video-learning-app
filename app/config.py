@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "glm-5.2:cloud"
 
+    # ── YouTube Data API v3 (Day 2B) ──
+    # Optional — if set, the admin upload endpoint enriches videos with
+    # title, duration, and caption track listing. If empty, the endpoint
+    # falls back to admin-provided title (Day 2A behavior).
+    # Get yours: console.cloud.google.com → APIs & Services → Credentials
+    # Quota: 10,000 units/day. videos.list costs 1 unit; captions.list costs 50.
+    youtube_api_key: str = ""
+
     # ── Firebase (frontend config) ──
     firebase_api_key: str = ""
     firebase_auth_domain: str = ""
