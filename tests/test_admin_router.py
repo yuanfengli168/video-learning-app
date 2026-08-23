@@ -38,6 +38,25 @@ def _clear_role_cache():
     clear_role_cache()
 
 
+@pytest.fixture(autouse=True)
+def _disable_youtube_api():
+    """Disable YouTube Data API enrichment for most tests.
+
+    Day 2B tests that exercise enrichment patch the client directly.
+    Everything else behaves like Day 2A (admin-typed title only).
+
+    Why autouse: the test env has YOUTUBE_API_KEY set (for live testing),
+    which would cause every admin-add test to make a real HTTP call to
+    Google — slow + flaky + quota-burning. Setting the key to '' here
+    makes enrichment skip silently, just like a fresh install with no key.
+    """
+    from app.services import youtube_api
+    original = youtube_api.settings.youtube_api_key
+    youtube_api.settings.youtube_api_key = ""
+    yield
+    youtube_api.settings.youtube_api_key = original
+
+
 def _admin_token(uid: str = "uid-admin", email: str = "admin@x.com"):
     """Build fake admin claims for verify_token mock."""
     return {"uid": uid, "email": email}
@@ -545,11 +564,17 @@ def test_response_includes_all_required_fields(client: TestClient, db_session):
         )
 
     body = response.json()
+    # Day 2B: response now includes 6 enrichment fields. With API key
+    # disabled (autouse fixture), all 6 are present but empty/null.
     assert set(body.keys()) == {
         "video_id", "youtube_id", "title", "visibility", "visibility_name",
+        "duration_seconds", "thumbnail_url", "channel",
+        "caption_languages", "enrichment_status",
     }
     # video_id is a UUID (36 chars with hyphens)
     assert len(body["video_id"]) == 36
+    # With API disabled, enrichment_status is 'skipped'
+    assert body["enrichment_status"] == "skipped"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -592,3 +617,290 @@ def test_empty_uid_claims_returns_401(client: TestClient, db_session):
     # Either 401 (defense-in-depth catches it) or 403 (capability check
     # catches it first). Both are correct security outcomes.
     assert response.status_code in (401, 403)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 2B — YouTube API enrichment (when YOUTUBE_API_KEY is set)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _enable_youtube_api(monkeypatch):
+    """Override the autouse fixture to actually use the YouTube API."""
+    from app.services import youtube_api
+    monkeypatch.setattr(youtube_api.settings, "youtube_api_key", "test-fake-key")
+
+
+def test_enrichment_enriched_when_api_returns_data(
+    client: TestClient, db_session, monkeypatch
+):
+    """Happy path: API returns metadata → video row + response enriched."""
+    _enable_youtube_api(monkeypatch)
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    # Patch the client's get_video_metadata to return canned data
+    from app.services.youtube_api import VideoMetadata, CaptionTrack
+    canned = VideoMetadata(
+        youtube_id="enrich00001",
+        title="Real YouTube Title",
+        channel="Real Channel",
+        thumbnail_url="https://i.ytimg.com/vi/enrich00001/maxresdefault.jpg",
+        duration_seconds=600,
+        caption_tracks=[
+            CaptionTrack(id="cap1", language="en", name="English", auto_generated=False),
+            CaptionTrack(id="cap2", language="zh", name="", auto_generated=True),
+        ],
+    )
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        with patch(
+            "app.services.youtube_api.YouTubeAPIClient.get_video_metadata",
+            return_value=canned,
+        ):
+            response = client.post(
+                "/api/admin/videos/youtube",
+                json={
+                    "url": "https://www.youtube.com/watch?v=enrich00001",
+                    "title": "Admin typed this (overridden by API)",
+                },
+                headers={"Authorization": "Bearer fake"},
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Real YouTube Title"  # API beats admin-typed
+    assert body["channel"] == "Real Channel"
+    assert body["duration_seconds"] == 600
+    assert "maxresdefault" in body["thumbnail_url"]
+    assert body["caption_languages"] == ["en", "zh"]
+    assert body["enrichment_status"] == "enriched"
+
+    # Verify DB has the enriched values
+    from app.models import Video
+    v = db_session.query(Video).filter_by(youtube_id="enrich00001").first()
+    assert v.title == "Real YouTube Title"
+    assert v.channel == "Real Channel"
+    assert v.duration == 600.0
+    import json
+    assert json.loads(v.caption_languages) == ["en", "zh"]
+
+
+def test_enrichment_falls_back_when_api_key_missing(
+    client: TestClient, db_session
+):
+    """No API key → admin-typed title preserved, enrichment_status='skipped'."""
+    # Don't call _enable_youtube_api — autouse fixture leaves key empty
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        response = client.post(
+            "/api/admin/videos/youtube",
+            json={
+                "url": "https://www.youtube.com/watch?v=noskip00001",
+                "title": "Admin-typed title preserved",
+            },
+            headers={"Authorization": "Bearer fake"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Admin-typed title preserved"
+    assert body["channel"] is None
+    assert body["duration_seconds"] is None
+    assert body["thumbnail_url"] is None
+    assert body["caption_languages"] == []
+    assert body["enrichment_status"] == "skipped"
+
+
+def test_enrichment_failed_when_api_raises_unexpected_error(
+    client: TestClient, db_session, monkeypatch
+):
+    """Network/unexpected error → enrichment_status='failed', admin title preserved."""
+    _enable_youtube_api(monkeypatch)
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    from app.services.youtube_api import YouTubeAPIError
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        with patch(
+            "app.services.youtube_api.YouTubeAPIClient.get_video_metadata",
+            side_effect=YouTubeAPIError("network down"),
+        ):
+            response = client.post(
+                "/api/admin/videos/youtube",
+                json={
+                    "url": "https://www.youtube.com/watch?v=failtest0001",
+                    "title": "Admin-typed when API fails",
+                },
+                headers={"Authorization": "Bearer fake"},
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Admin-typed when API fails"
+    assert body["enrichment_status"] == "failed"
+    assert body["channel"] is None
+
+
+def test_enrichment_video_not_found_returns_400(
+    client: TestClient, db_session, monkeypatch
+):
+    """Video deleted from YouTube between paste and API call → 400."""
+    from app.services.youtube_api import YouTubeVideoNotFound
+    _enable_youtube_api(monkeypatch)
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        with patch(
+            "app.services.youtube_api.YouTubeAPIClient.get_video_metadata",
+            side_effect=YouTubeVideoNotFound("deleted"),
+        ):
+            response = client.post(
+                "/api/admin/videos/youtube",
+                json={
+                    "url": "https://www.youtube.com/watch?v=deleted001x",
+                    "title": "Will fail",
+                },
+                headers={"Authorization": "Bearer fake"},
+            )
+
+    assert response.status_code == 400
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_enrichment_quota_exceeded_is_treated_as_failure(
+    client: TestClient, db_session, monkeypatch
+):
+    """Quota exhausted → enrichment_status='failed', video still added."""
+    from app.services.youtube_api import YouTubeQuotaExceeded
+    _enable_youtube_api(monkeypatch)
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        with patch(
+            "app.services.youtube_api.YouTubeAPIClient.get_video_metadata",
+            side_effect=YouTubeQuotaExceeded("daily quota"),
+        ):
+            response = client.post(
+                "/api/admin/videos/youtube",
+                json={
+                    "url": "https://www.youtube.com/watch?v=quotaex0001",
+                    "title": "Quota exhausted test",
+                },
+                headers={"Authorization": "Bearer fake"},
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Quota exhausted test"
+    assert body["enrichment_status"] == "failed"
+
+
+def test_enrichment_uses_admin_title_when_api_returns_empty_title(
+    client: TestClient, db_session, monkeypatch
+):
+    """If API returns no title (rare but possible), admin title is preserved."""
+    _enable_youtube_api(monkeypatch)
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    from app.services.youtube_api import VideoMetadata
+    canned = VideoMetadata(
+        youtube_id="emptyt00001",
+        title="",  # empty!
+        channel="Some Channel",
+        thumbnail_url="https://example.com/thumb.jpg",
+        duration_seconds=120,
+        caption_tracks=[],
+    )
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        with patch(
+            "app.services.youtube_api.YouTubeAPIClient.get_video_metadata",
+            return_value=canned,
+        ):
+            response = client.post(
+                "/api/admin/videos/youtube",
+                json={
+                    "url": "https://www.youtube.com/watch?v=emptyt00001",
+                    "title": "Admin fallback title",
+                },
+                headers={"Authorization": "Bearer fake"},
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Admin fallback title"  # admin title wins
+    assert body["channel"] == "Some Channel"  # other fields still enriched
+    assert body["enrichment_status"] == "enriched"
+
+
+def test_enrichment_duplicate_check_runs_before_api_call(
+    client: TestClient, db_session, monkeypatch
+):
+    """Duplicate youtube_id → 409 even if API would otherwise succeed.
+
+    Important: we shouldn't waste an API call on a duplicate. The duplicate
+    check must run first.
+    """
+    _enable_youtube_api(monkeypatch)
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    # Pre-existing video with same youtube_id (use the default-skipped
+    # path so no API call is needed for setup)
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        # First add (with API disabled via autouse)
+        first = client.post(
+            "/api/admin/videos/youtube",
+            json={"url": "https://youtu.be/duptest00001", "title": "First"},
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert first.status_code == 200
+
+    # Second add with API ENABLED — should still 409 without making a call
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        with patch(
+            "app.services.youtube_api.YouTubeAPIClient.get_video_metadata",
+        ) as mock_api:
+            second = client.post(
+                "/api/admin/videos/youtube",
+                json={"url": "https://youtu.be/duptest00001", "title": "Second"},
+                headers={"Authorization": "Bearer fake"},
+            )
+    assert second.status_code == 409
+    # Critical: API was NOT called for the duplicate
+    mock_api.assert_not_called()
