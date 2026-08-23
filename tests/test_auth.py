@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 
 def test_me_without_token(client: TestClient):
@@ -119,7 +120,7 @@ def test_get_current_user_optional_no_header(client: TestClient):
     assert result is None
 
 
-def test_get_current_user_optional_valid_token(client: TestClient):
+def test_get_current_user_optional_valid_token(client: TestClient, db_session):
     """get_current_user_optional should return claims with a valid token."""
     fake_claims = {"uid": "test-uid", "email": "test@example.com"}
 
@@ -140,11 +141,11 @@ def test_get_current_user_optional_valid_token(client: TestClient):
         import asyncio
         from app.auth.dependencies import get_current_user_optional
 
-        result = asyncio.run(get_current_user_optional(request, credentials))
+        result = asyncio.run(get_current_user_optional(request, credentials, db_session))
         assert result == fake_claims
 
 
-def test_get_current_user_optional_invalid_token(client: TestClient):
+def test_get_current_user_optional_invalid_token(client: TestClient, db_session):
     """get_current_user_optional should return None with an invalid token."""
     with patch(
         "app.auth.dependencies.verify_token",
@@ -166,5 +167,76 @@ def test_get_current_user_optional_invalid_token(client: TestClient):
         import asyncio
         from app.auth.dependencies import get_current_user_optional
 
-        result = asyncio.run(get_current_user_optional(request, credentials))
+        result = asyncio.run(get_current_user_optional(request, credentials, db_session))
         assert result is None
+
+
+def test_get_current_user_optional_creates_user_row(client: TestClient, db_session):
+    """get_current_user_optional should call ensure_user_row (new in Day 2A fix).
+
+    This is the fix for the 'sign in but no row in DB' bug — the user
+    row is now created on FIRST authenticated request, not only on admin routes.
+    """
+    from app.auth.dependencies import get_current_user_optional
+    from app.models import User
+    from fastapi.security import HTTPAuthorizationCredentials
+    from starlette.requests import Request
+    import asyncio
+
+    fake_claims = {"uid": "new-uid-123", "email": "new@example.com"}
+
+    # Sanity: no row yet
+    existing = db_session.query(User).filter_by(user_id="new-uid-123").first()
+    assert existing is None
+
+    with patch("app.auth.dependencies.verify_token", return_value=fake_claims):
+        scope = {
+            "type": "http", "method": "GET", "path": "/",
+            "headers": [(b"authorization", b"Bearer token")],
+            "query_string": b"",
+        }
+        request = Request(scope)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
+        asyncio.run(get_current_user_optional(request, credentials, db_session))
+
+    # Row should now exist with role=FREE
+    row = db_session.query(User).filter_by(user_id="new-uid-123").first()
+    assert row is not None
+    assert row.email == "new@example.com"
+    assert row.role == 2  # FREE
+
+
+def test_get_current_user_optional_already_existing_user_no_change(
+    client: TestClient, db_session
+):
+    """If user row already exists, ensure_user_row should NOT reset role."""
+    from app.auth.dependencies import get_current_user_optional
+    from app.models import User
+    from app.auth.admin import ensure_user_row
+    from fastapi.security import HTTPAuthorizationCredentials
+    from starlette.requests import Request
+    import asyncio
+
+    # Pre-create an admin row
+    ensure_user_row("existing-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='existing-admin'"))
+    db_session.commit()
+
+    fake_claims = {"uid": "existing-admin", "email": "new-email@x.com"}
+
+    with patch("app.auth.dependencies.verify_token", return_value=fake_claims):
+        scope = {
+            "type": "http", "method": "GET", "path": "/",
+            "headers": [(b"authorization", b"Bearer token")],
+            "query_string": b"",
+        }
+        request = Request(scope)
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
+        asyncio.run(get_current_user_optional(request, credentials, db_session))
+
+    # Role should still be ADMIN (not reset to FREE)
+    row = db_session.query(User).filter_by(user_id="existing-admin").first()
+    assert row is not None
+    assert row.role == 0  # ADMIN — preserved
+    # Email updated (in case user changed it in Firebase)
+    assert row.email == "new-email@x.com"
