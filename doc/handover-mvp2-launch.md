@@ -97,7 +97,19 @@ tail -50 ~/Library/Logs/video-app-backup.log
 | 1 | PAID_ONLY | PAID + ADMIN |
 | 2 | ADMIN_ONLY | Admin only (drafts) |
 
-### Promote yourself to admin (manual SQLite)
+### Promote yourself to admin (use the helper script)
+
+```bash
+# After signing into the web app at least once with your admin email:
+bash scripts/promote-admin.sh your@email.com
+```
+
+The script shows the full user table, validates the email exists, and confirms
+the role change. Auto-detects DB path from `.env`. Full design + rationale:
+`doc/mvp2-roles-and-access.md` §4.
+
+If the helper script is unavailable (e.g., fresh Mac without scripts/),
+the raw SQL equivalent is:
 
 ```bash
 sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db <<'EOF'
@@ -109,8 +121,7 @@ EOF
 
 **How to find your Firebase UID**: log into web app → browser devtools →
 Application → Local Storage → look for Firebase user → copy `uid` field.
-
-Full design: `doc/mvp2-roles-and-access.md`.
+Or just list users with `bash scripts/promote-admin.sh` (no args).
 
 ### SECURITY: no self-promotion
 

@@ -329,11 +329,31 @@ restart-on-deploy is fine.
 
 ## 4. Manual admin promotion (v1.0)
 
-**No admin UI for v1.0.** Admin promotion is manual SQLite INSERT/UPDATE.
+**No admin UI for v1.0.** Admin promotion is manual — use the
+`scripts/promote-admin.sh` helper (added 2026-08-23, supersedes the
+raw SQL examples below).
 
 ### Promote yourself (admin = jacky.li)
 
 Your personal admin email is **your-personal-email@example.com** (forever account).
+
+#### Recommended: use the helper script
+
+```bash
+cd /Users/jackyli/Desktop/Githubs/video-learning-app
+
+# 1. Sign into the web app at least once with this email
+#    (the app auto-creates a users row with role=FREE on first login)
+
+# 2. Run the helper — it shows you a table, then promotes + shows before/after:
+bash scripts/promote-admin.sh your-personal-email@example.com
+```
+
+The script auto-detects the DB path from `.env`, validates the email exists,
+refuses to overwrite an existing admin (no-op), and shows the full user table
+before + after.
+
+#### Manual SQL (if the helper script is unavailable)
 
 ```bash
 cd /Users/jackyli/Desktop/Githubs/video-learning-app
@@ -355,6 +375,14 @@ EOF
 sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db \
     "SELECT user_id, email, role FROM users WHERE role = 0;"
 ```
+
+### Why a script, not raw SQL?
+
+The script catches the common bugs:
+- DB path doesn't exist (forgot to start the app) → clear error
+- Email typo (doesn't match DB) → lists available emails + suggests signing in
+- Already admin → no-op message (idempotent, safe to re-run)
+- Unknown shell escape mistakes → handled by parameterized `sqlite3` calls
 
 ### Demote (back to FREE)
 

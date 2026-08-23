@@ -515,6 +515,18 @@ unlimited + private. **The data flywheel is the product.**
 
 ## 📝 Update log
 
+- **2026-08-23** — **Day 2A complete** (4 topics, 8 commits, +100 tests):
+  - Topic 1: YouTube URL extraction + `videos.youtube_id` column
+  - Topic 2: `POST /api/admin/videos/youtube` endpoint (no API key needed —
+    ID extraction is pure regex; Day 2B will add transcript fetch)
+  - Topic 3: Admin upload form UI on `/admin/upload` (Tailwind + JS preview)
+  - Topic 4: Catalog service (`app/services/catalog.py`) with
+    visibility-filtered queries + dashboard grid
+  - Bug fix: `ensure_user_row` now runs on EVERY authenticated request
+    (was only on admin routes → fresh Google OAuth users had no DB row,
+    couldn't be promoted). See commit `c32beb8`.
+  - Helper script: `bash scripts/promote-admin.sh you@email.com`
+  - Test count: 894 passing, 91% coverage. New modules at 100% coverage.
 - **2026-08-22** — Plan finalized: storage design (4 drives + RAID 1),
   LLM provider routing (Groq free + Ollama admin), caching strategy
   (semantic via Redis), user capacity math (100 target, 500 with scaling
