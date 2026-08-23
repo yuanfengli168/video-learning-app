@@ -9,12 +9,14 @@ Endpoints:
 POST /api/admin/videos/youtube
   Body: { url, title, description?, visibility }
   Capability: CURATE_CATALOG
-  Effect: extracts YouTube ID, creates Video row, returns video_id.
+  Effect: extracts YouTube ID, fetches real metadata (title, duration,
+    thumbnail, channel, caption tracks) via YouTube Data API v3 when
+    YOUTUBE_API_KEY is set. Creates Video row + returns enriched
+    video_id + enrichment diagnostics.
 
-  Day 2A: no YouTube API call (YOUTUBE_API_KEY comes later).
-    Just stores the URL-derived ID + admin-provided title.
-  Day 2B: will fetch real title/duration/thumbnail/captions from
-    YouTube Data API v3 (deferred — needs API key).
+  Day 2A: no YouTube API call. Just stores admin-typed title.
+  Day 2B: enriches with real YouTube metadata (this file).
+    Caption DOWNLOAD is Day 3 (yt-dlp).
 
 GET /api/admin/videos/pending
   Capability: CURATE_CATALOG
@@ -98,13 +100,29 @@ class YouTubeVideoCreate(BaseModel):
 
 
 class YouTubeVideoResponse(BaseModel):
-    """Response body after successfully adding a YouTube video."""
+    """Response body after successfully adding a YouTube video.
+
+    All enrichment fields are populated only when YOUTUBE_API_KEY is set
+    AND the API call succeeds. Otherwise they're empty/null and the
+    admin can still add the video with admin-provided title.
+    """
 
     video_id: str
     youtube_id: str
     title: str
     visibility: int
     visibility_name: str
+    # Day 2B enrichment (from YouTube Data API v3). All nullable.
+    duration_seconds: int | None = None
+    thumbnail_url: str | None = None
+    channel: str | None = None
+    caption_languages: list[str] = []
+    """JSON array of BCP-47 codes (e.g. ['en','ja','zh'])."""
+    # Diagnostics
+    enrichment_status: str = "skipped"
+    """One of: 'enriched' (API call succeeded), 'failed' (API call failed),
+    'skipped' (no API key configured). Admin can see at a glance whether
+    YouTube metadata was populated."""
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -124,20 +142,24 @@ async def admin_add_youtube_video(
       1. Extract YouTube ID from the URL (any supported format).
       2. Validate the extracted ID (must be exactly 11 chars).
       3. Ensure user row exists (auto-create on first login).
-      4. Insert Video row with status='pending' (admin added it,
-         but processing — caption fetch, embed preview — happens later).
-      5. Return the new video_id + youtube_id for the admin UI to
-         link to the video detail page.
+      4. Check for duplicate (same youtube_id already in catalog).
+      5. Fetch YouTube metadata (Day 2B): title, duration, thumbnail,
+         channel, caption track list. Best-effort — falls back to
+         admin-provided title if API key missing or call fails.
+      6. Insert Video row with status='pending' (admin added it,
+         but processing — caption download, embed preview — happens later).
+      7. Return the new video_id + enrichment metadata for the admin UI.
 
-    Day 2A: no YouTube API call (YOUTUBE_API_KEY comes later). We just
-    store the URL-derived ID + admin-provided title. The actual title
-    on YouTube is ignored for now; admin types it in.
+    Day 2A: no YouTube API call. We just store admin-provided title.
+    Day 2B: enrich with YouTube Data API v3 (title, duration, thumbnail,
+      channel, caption language list). Caption DOWNLOAD is Day 3 (yt-dlp).
 
     Security:
       - Capability check enforced server-side (no client-side trust)
       - Parameterized SQL via SQLAlchemy ORM (no injection)
       - URL is parsed via regex, NOT evaluated (no SSRF risk)
       - YouTube ID is strictly validated to 11 chars
+      - YouTube API call is best-effort (failures don't block adding the video)
     """
     uid = user.get("uid", "")
     if not uid:
@@ -180,17 +202,76 @@ async def admin_add_youtube_video(
             ),
         )
 
-    # Step 4: Create the Video row
-    # Note: status='pending' — we don't actually fetch the captions yet
-    # (Day 2B with YouTube API). The MVP2 admin can paste URLs at any
-    # pace; processing happens in the background later.
+    # Step 4: Fetch YouTube metadata (Day 2B enrichment)
+    # Best-effort: failures don't block the admin add. We log the error
+    # and fall back to admin-provided title. The response includes
+    # enrichment_status so the admin UI can show a warning if needed.
+    enrichment_status = "skipped"
+    yt_title: str | None = None
+    yt_duration: int | None = None
+    yt_thumbnail: str | None = None
+    yt_channel: str | None = None
+    yt_caption_languages: list[str] = []
+
+    from app.services.youtube_api import (
+        YouTubeAPIKeyMissing,
+        YouTubeAPIClient,
+        YouTubeVideoNotFound,
+    )
+
+    try:
+        yt_client = YouTubeAPIClient()  # uses settings.youtube_api_key
+    except YouTubeAPIKeyMissing:
+        yt_client = None
+
+    if yt_client is not None:
+        try:
+            meta = yt_client.get_video_metadata(youtube_id)
+            # If the API returned a real title, prefer it over the
+            # admin-typed one. Otherwise keep what the admin typed.
+            if meta.title:
+                yt_title = meta.title
+            yt_duration = meta.duration_seconds or None
+            yt_thumbnail = meta.thumbnail_url or None
+            yt_channel = meta.channel or None
+            yt_caption_languages = [c.language for c in meta.caption_tracks]
+            enrichment_status = "enriched"
+        except YouTubeVideoNotFound:
+            # Video was deleted from YouTube between admin paste and our call
+            # — surface a 400 so the admin knows the URL is stale.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"YouTube video {youtube_id!r} not found. "
+                    f"It may have been deleted or set to private."
+                ),
+            )
+        except Exception as exc:
+            # All other YouTube API errors are non-fatal. Log + continue.
+            # The admin can manually fix the metadata later.
+            import logging
+            logging.getLogger(__name__).warning(
+                f"YouTube API enrichment failed for {youtube_id}: {exc}"
+            )
+            enrichment_status = "failed"
+
+    # Step 5: Resolve title (API beats admin if API succeeded)
+    final_title = yt_title or body.title
+
+    # Step 6: Create the Video row
+    import json as _json
     video = Video(
-        title=body.title,
-        # YouTube ID stored in its own column (added in migration)
+        title=final_title,
+        # YouTube ID stored in its own column
         youtube_id=youtube_id,
+        # Day 2B enrichment (None if API call skipped/failed)
+        thumbnail_url=yt_thumbnail,
+        channel=yt_channel,
+        caption_languages=_json.dumps(yt_caption_languages),
+        duration=yt_duration or 0.0,
         # Visibility (PUBLIC/PAID_ONLY/ADMIN_ONLY) from request
         visibility=body.visibility,
-        # status='pending' until processing completes (future)
+        # status='pending' until processing completes (Day 3+ caption download)
         status="pending",
         # Pre-pivot: filename/file_path/file_size were required.
         # For YouTube-typed videos these are NULL/dummy.
@@ -238,4 +319,9 @@ async def admin_add_youtube_video(
         title=video.title,
         visibility=body.visibility,
         visibility_name=visibility_name,
+        duration_seconds=yt_duration,
+        thumbnail_url=yt_thumbnail,
+        channel=yt_channel,
+        caption_languages=yt_caption_languages,
+        enrichment_status=enrichment_status,
     )

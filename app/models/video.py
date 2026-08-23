@@ -4,7 +4,7 @@ import re
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -136,6 +136,22 @@ class Video(Base):
     # because YouTube video IDs are EXACTLY 11 chars (a-z, A-Z, 0-9,
     # -, _) — extracting with a strict regex prevents malformed IDs.
     youtube_id: Mapped[str | None] = mapped_column(String(11), nullable=True)
+    # ── MVP2 YouTube metadata enrichment (Day 2B) ──────────────────────────
+    # Populated from YouTube Data API v3 when admin adds the video.
+    # All nullable so legacy rows + future uploaded videos stay valid.
+    #
+    # thumbnail_url: maxres/default preview shown in catalog grid.
+    # VARCHAR(512) is enough for any YouTube thumbnail URL.
+    thumbnail_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # channel: YouTube channel title (e.g. "Rick Astley", "3Blue1Brown").
+    # VARCHAR(255) handles any human-readable channel name.
+    channel: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # caption_languages: JSON array of BCP-47 codes (e.g. ["en","ja","zh"]).
+    # Stored as TEXT (not a join table) since this is read-only metadata
+    # and the lists are small (typically 0-10 entries). Day 3 will use
+    # this to pick which caption track to download first.
+    # Default '[]' (empty JSON array) so legacy rows are valid.
+    caption_languages: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     # ── Background job state (MVP1 progress bar + ETA) ──────────────────────
     # 'transcribe' or 'generate' — the latest job of that type for this video.
     # Stored as a JSON string of the Job dict from app/jobs.py. Nullable

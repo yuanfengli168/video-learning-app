@@ -220,6 +220,38 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "youtube_id",
         "ALTER TABLE videos ADD COLUMN youtube_id VARCHAR(11)",
     ),
+    # MVP2.0 (Day 2B) — videos.thumbnail_url. Populated from YouTube
+    # Data API v3 (maxres/default thumbnail). Used by the catalog grid
+    # (dashboard.html) to show a real preview instead of the 🎬 emoji.
+    # Nullable + no default — legacy rows stay valid (no thumbnail).
+    # URL length: YouTube's maxres thumbnails are ~120 chars, but we
+    # size up to 512 for headroom.
+    (
+        "videos",
+        "thumbnail_url",
+        "ALTER TABLE videos ADD COLUMN thumbnail_url VARCHAR(512)",
+    ),
+    # MVP2.0 (Day 2B) — videos.channel. YouTube channel title from the
+    # API (e.g. "Rick Astley", "3Blue1Brown"). Display in the catalog
+    # card so users know what they're clicking. Nullable; legacy rows
+    # have no channel info. VARCHAR(255) is plenty for human-readable
+    # channel names.
+    (
+        "videos",
+        "channel",
+        "ALTER TABLE videos ADD COLUMN channel VARCHAR(255)",
+    ),
+    # MVP2.0 (Day 2B) — videos.caption_languages. JSON array of BCP-47
+    # language codes for available captions (e.g. ["en","ja","zh"]).
+    # Populated from captions.list. Used by Day 3 to pick which track
+    # to download first. Empty list (not NULL) for videos with no
+    # captions. Stored as TEXT (JSON) to avoid creating a join table
+    # for what is read-only metadata.
+    (
+        "videos",
+        "caption_languages",
+        "ALTER TABLE videos ADD COLUMN caption_languages TEXT DEFAULT '[]'",
+    ),
 ]
 
 
