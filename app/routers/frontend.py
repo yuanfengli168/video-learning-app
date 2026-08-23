@@ -402,7 +402,18 @@ async def admin_upload_page(
       - public    (0) — anyone, including signed-out
       - paid_only (1) — paid users (any role >= PAID) only
       - admin_only(2) — admins only (for review / debugging)
+
+    Side effect: if the admin has zero Courses/Sections, auto-create a
+    "Default Catalog" / "Uncategorized" pair so the Section dropdown on
+    the form isn't empty. Idempotent for admins who already have content.
     """
+    # Auto-create default Course+Section if admin has none yet. This is
+    # the same logic the backend uses on the POST path; sharing it via
+    # ensure_admin_has_a_section keeps both call sites in sync.
+    from app.services.section_picker import ensure_admin_has_a_section
+
+    ensure_admin_has_a_section(db, user.get("uid", ""))
+
     return templates.TemplateResponse(
         request,
         "admin_upload.html",

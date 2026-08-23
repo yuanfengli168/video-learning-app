@@ -219,3 +219,110 @@ def test_form_help_text_reflects_day2b(client: TestClient, admin_user):
     # New copy
     assert "YouTube title" in html
     assert "Day 3" in html  # mentions caption download is Day 3
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 2C Topic 2 — Section picker on the form
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_form_has_section_id_dropdown(client: TestClient, admin_user):
+    """Form has a section_id <select> between Visibility and Submit."""
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get("/admin/upload", headers=_auth_header("uid-admin", "admin@x.com"))
+    html = response.text
+    assert 'id="section_id"' in html
+    assert 'name="section_id"' in html
+    assert "Add to Section" in html
+    # JS includes section_id in the POST payload
+    assert "section_id" in html  # payload field
+
+
+def test_form_auto_creates_default_section_when_admin_has_none(
+    client: TestClient, admin_user, db_session
+):
+    """Brand-new admin (0 courses) → 'Default Catalog' / 'Uncategorized' appears."""
+    # Sanity precondition
+    from app.models import Course
+    owned = (
+        db_session.query(Course).filter(Course.user_id == "uid-admin").count()
+    )
+    assert owned == 0, "precondition: admin owns zero courses"
+
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get("/admin/upload", headers=_auth_header("uid-admin", "admin@x.com"))
+    assert response.status_code == 200
+    html = response.text
+    # The auto-created pair shows up in the dropdown
+    assert "Default Catalog" in html
+    assert "Uncategorized" in html
+
+
+def test_form_groups_sections_by_course_via_optgroup(
+    client: TestClient, admin_user, db_session
+):
+    """Multiple courses → sections nested under <optgroup label='Course Title'>."""
+    import uuid
+    from app.models import Course, Section
+
+    # Create 2 courses with 2 sections each, all owned by the admin
+    a_course = Course(id=str(uuid.uuid4()), title="ML Foundations", user_id="uid-admin")
+    db_session.add(a_course)
+    db_session.flush()
+    db_session.add_all([
+        Section(id=str(uuid.uuid4()), title="Intro", course_id=a_course.id, order_index=0),
+        Section(id=str(uuid.uuid4()), title="Advanced", course_id=a_course.id, order_index=1),
+    ])
+    b_course = Course(id=str(uuid.uuid4()), title="Web Dev", user_id="uid-admin")
+    db_session.add(b_course)
+    db_session.flush()
+    db_session.add_all([
+        Section(id=str(uuid.uuid4()), title="HTML", course_id=b_course.id, order_index=0),
+        Section(id=str(uuid.uuid4()), title="CSS", course_id=b_course.id, order_index=1),
+    ])
+    db_session.commit()
+
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get("/admin/upload", headers=_auth_header("uid-admin", "admin@x.com"))
+    html = response.text
+    # Both courses appear as optgroup labels
+    assert '<optgroup label="ML Foundations">' in html
+    assert '<optgroup label="Web Dev">' in html
+    # All 4 section titles are present (Jinja puts whitespace inside
+    # the <option> tag, so use the title surrounded by the indentation
+    # the template generates, not ">Intro</option>").
+    assert ">Intro</option>" in html or "\n                                    Intro\n                                </option>" in html
+    assert "Advanced" in html
+    assert "HTML" in html
+    assert "CSS" in html
+
+
+def test_form_first_option_is_marked_selected(
+    client: TestClient, admin_user, db_session
+):
+    """The very first <option> across all courses is the default-selected one."""
+    import uuid
+    from app.models import Course, Section
+
+    a = Course(id=str(uuid.uuid4()), title="A Course", user_id="uid-admin")
+    db_session.add(a); db_session.flush()
+    first_sec = Section(id=str(uuid.uuid4()), title="First Sec", course_id=a.id, order_index=0)
+    second_sec = Section(id=str(uuid.uuid4()), title="Second Sec", course_id=a.id, order_index=1)
+    db_session.add_all([first_sec, second_sec])
+    db_session.commit()
+
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get("/admin/upload", headers=_auth_header("uid-admin", "admin@x.com"))
+    html = response.text
+    # The first section's <option> has 'selected'; subsequent ones don't.
+    assert f'<option value="{first_sec.id}"' in html
+    # The first option should be the one marked selected — its option tag
+    # has selected, the second one does not.
+    first_block = html.split('<option value="' + first_sec.id + '"')[1].split('>')[0]
+    second_block = html.split('<option value="' + second_sec.id + '"')[1].split('>')[0]
+    assert "selected" in first_block
+    assert "selected" not in second_block

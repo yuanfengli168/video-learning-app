@@ -41,7 +41,7 @@ from app.auth.admin import (
 from app.auth.dependencies import get_current_user
 from app.auth.roles import Capability, UserRole, VideoVisibility
 from app.database import get_db
-from app.models import Video
+from app.models import Section, Video
 from app.services.youtube import extract_youtube_id, is_valid_youtube_id
 
 
@@ -79,6 +79,16 @@ class YouTubeVideoCreate(BaseModel):
     visibility: int = Field(
         default=VideoVisibility.PUBLIC,
         description="0=PUBLIC (everyone), 1=PAID_ONLY (paywall), 2=ADMIN_ONLY (drafts)",
+    )
+    section_id: str | None = Field(
+        default=None,
+        max_length=36,
+        description=(
+            "Section UUID to put the video into. Optional — when omitted, "
+            "the backend picks the admin's first available section (or "
+            "auto-creates 'Default Catalog' / 'Uncategorized' if the admin "
+            "has none yet)."
+        ),
     )
 
     @field_validator("visibility")
@@ -281,27 +291,34 @@ async def admin_add_youtube_video(
         file_path=f"https://www.youtube.com/watch?v={youtube_id}",
         file_size=0,
     )
-    # section_id required (NOT NULL FK). We put the new video in the
-    # first Section of the first Course (admin "scratch" location)
-    # until proper Section assignment is added to the UI.
-    # TODO (Day 3+): let admin pick a Course+Section when adding.
-    from app.models import Course, Section  # local import to avoid cycle
-    first_section = db.query(Section).order_by(Section.id).first()
-    if first_section is None:
-        # No sections exist — create a default "Uncategorized" course
-        # + section so the video has a valid FK target.
-        course = Course(title="Uncategorized", user_id=uid)
-        db.add(course)
-        db.flush()
-        first_section = Section(
-            title="Uncategorized",
-            course_id=course.id,
-            order_index=0,
-        )
-        db.add(first_section)
-        db.flush()
+    # Resolve which Section this video lands in.
+    #
+    # Priority:
+    #   1. Explicit body.section_id from the admin form (UUID)
+    #   2. First Section of the admin's first Course (alphabetical)
+    #   3. Auto-create a "Default Catalog" Course + "Uncategorized" Section
+    #
+    # Why honor the admin's pick but auto-fall-back: lets admins curate
+    # intentionally while not blocking adds when they're new and have no
+    # courses yet (the "Default Catalog" catch-all is for that case).
+    from app.services.section_picker import (
+        resolve_section_for_new_video,
+    )
 
-    video.section_id = first_section.id
+    try:
+        chosen_section = resolve_section_for_new_video(
+            db=db, uid=uid, requested_section_id=body.section_id
+        )
+    except ValueError as exc:
+        # section_id is invalid (missing, belongs to another admin).
+        # 400 because the request body is wrong, not 403 (which would
+        # leak that other admins have sections).
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    video.section_id = chosen_section.id
 
     db.add(video)
     db.commit()

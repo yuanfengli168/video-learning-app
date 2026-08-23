@@ -904,3 +904,182 @@ def test_enrichment_duplicate_check_runs_before_api_call(
     assert second.status_code == 409
     # Critical: API was NOT called for the duplicate
     mock_api.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 2C Topic 2 — section_id resolution
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_admin_add_video_uses_explicit_section_id(client: TestClient, db_session):
+    """When admin picks a Section from the dropdown, the new video lands there."""
+    import uuid
+    from app.models import Course, Section
+
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    # Admin owns 2 courses — the picker should default to the first
+    # alphabetical, but the admin can override via section_id.
+    a_course = Course(id=str(uuid.uuid4()), title="A-Course", user_id="uid-admin")
+    db_session.add(a_course); db_session.flush()
+    a_first = Section(id=str(uuid.uuid4()), title="A-First", course_id=a_course.id, order_index=0)
+    db_session.add(a_first)
+    z_course = Course(id=str(uuid.uuid4()), title="Z-Course", user_id="uid-admin")
+    db_session.add(z_course); db_session.flush()
+    z_first = Section(id=str(uuid.uuid4()), title="Z-First", course_id=z_course.id, order_index=0)
+    db_session.add(z_first)
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        response = client.post(
+            "/api/admin/videos/youtube",
+            json={
+                "url": "https://www.youtube.com/watch?v=sectiontstX",
+                "title": "Picked Section Test",
+                "section_id": z_first.id,  # explicitly the Z one
+            },
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert response.status_code == 200
+
+    # Verify the new video's section_id matches what we asked for
+    row = db_session.execute(text(
+        "SELECT section_id FROM videos WHERE youtube_id='sectiontstX'"
+    )).fetchone()
+    assert row[0] == z_first.id
+    # Not the default (which would be A-First because alphabetical)
+    assert row[0] != a_first.id
+
+
+def test_admin_add_video_rejects_section_id_from_another_admin(
+    client: TestClient, db_session
+):
+    """Sanity: section_id belongs to another admin → 400."""
+    import uuid
+    from app.models import Course, Section
+
+    # Admin user
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    # Another admin owns a course
+    ensure_user_row("other-admin", "other@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='other-admin'"))
+    db_session.commit()
+
+    other_course = Course(id=str(uuid.uuid4()), title="Other's", user_id="other-admin")
+    db_session.add(other_course); db_session.flush()
+    other_section = Section(
+        id=str(uuid.uuid4()), title="Other's Sec", course_id=other_course.id
+    )
+    db_session.add(other_section)
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        response = client.post(
+            "/api/admin/videos/youtube",
+            json={
+                "url": "https://www.youtube.com/watch?v=othradmtX01",
+                "title": "Should Fail",
+                "section_id": other_section.id,
+            },
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert response.status_code == 400
+    assert "does not belong to your account" in response.json()["detail"]
+
+    # And no video was inserted
+    row = db_session.execute(text(
+        "SELECT id FROM videos WHERE youtube_id='othradmtX01'"
+    )).fetchone()
+    assert row is None
+
+
+def test_admin_add_video_falls_back_when_section_id_omitted(
+    client: TestClient, db_session
+):
+    """Omitting section_id → backend picks first alphabetical Section."""
+    import uuid
+    from app.models import Course, Section
+
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    # Two courses — verify backend picks the first alphabetically
+    z_course = Course(id=str(uuid.uuid4()), title="Z-Course", user_id="uid-admin")
+    db_session.add(z_course); db_session.flush()
+    db_session.add(Section(id=str(uuid.uuid4()), title="Z-Sec", course_id=z_course.id))
+    a_course = Course(id=str(uuid.uuid4()), title="A-Course", user_id="uid-admin")
+    db_session.add(a_course); db_session.flush()
+    a_first = Section(id=str(uuid.uuid4()), title="A-Sec", course_id=a_course.id, order_index=0)
+    db_session.add(a_first)
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        response = client.post(
+            "/api/admin/videos/youtube",
+            json={
+                "url": "https://www.youtube.com/watch?v=fallbacks01",
+                "title": "Fallback Test",
+                # no section_id
+            },
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert response.status_code == 200
+
+    row = db_session.execute(text(
+        "SELECT section_id FROM videos WHERE youtube_id='fallbacks01'"
+    )).fetchone()
+    assert row[0] == a_first.id
+
+
+def test_admin_add_video_auto_creates_default_when_admin_has_none(
+    client: TestClient, db_session
+):
+    """No courses → 'Default Catalog' / 'Uncategorized' auto-created."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    # Sanity: no courses / sections for this admin
+    from app.models import Course, Section
+    assert db_session.query(Course).filter_by(user_id="uid-admin").count() == 0
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value=_admin_token(),
+    ):
+        response = client.post(
+            "/api/admin/videos/youtube",
+            json={
+                "url": "https://www.youtube.com/watch?v=autocreate1",
+                "title": "Auto-create Test",
+            },
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert response.status_code == 200
+
+    # The default Course+Section exists and the video points there
+    course = db_session.query(Course).filter_by(title="Default Catalog", user_id="uid-admin").first()
+    assert course is not None
+    section = db_session.query(Section).filter_by(course_id=course.id).first()
+    assert section is not None
+    assert section.title == "Uncategorized"
+
+    row = db_session.execute(text(
+        "SELECT section_id FROM videos WHERE youtube_id='autocreate1'"
+    )).fetchone()
+    assert row[0] == section.id
