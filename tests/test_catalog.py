@@ -384,3 +384,93 @@ def test_dashboard_hides_admin_cta_for_free_user_when_empty(
     # CTA only shown when is_admin
     # But the sidebar nav has /admin/upload link for admin — free user has no sidebar link either
     assert html.count("href=\"/admin/upload\"") == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Legacy upload exclusion (MVP2 catalog only shows YouTube videos)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _make_legacy_upload(db_session, title: str, visibility: int = 0) -> Video:
+    """Create a pre-pivot uploaded video (no youtube_id).
+
+    Legacy uploads have youtube_id=NULL — they were added before the
+    YouTube pivot. Visibility defaults to 0 (PUBLIC) per the migration
+    default. These should NOT appear in the MVP2 catalog.
+    """
+    v = Video(
+        id=f"v-legacy-{title.lower().replace(' ', '-')}",
+        title=title,
+        filename=f"{title}.mp4",
+        file_path=f"/uploads/{title}.mp4",
+        file_size=1024 * 1024,
+        section_id="section-1",
+        status="ready",
+        visibility=visibility,
+        youtube_id=None,  # KEY: no youtube_id
+    )
+    db_session.add(v)
+    db_session.commit()
+    db_session.refresh(v)
+    return v
+
+
+def test_legacy_uploads_excluded_from_catalog(db_session, course_and_section):
+    """Pre-pivot uploads (no youtube_id) must NOT appear in the catalog.
+
+    Bug fix 2026-08-23: without the youtube_id filter, every legacy
+    upload (visibility=0 by migration default) was polluting the new
+    admin-curated catalog. Now the catalog is YouTube-only.
+    """
+    _make_legacy_upload(db_session, "Legacy Upload", VideoVisibility.PUBLIC.value)
+    rows = db_session.execute(
+        visible_videos_for_role(db_session, UserRole.FREE)
+    ).scalars().all()
+    assert rows == []
+
+
+def test_catalog_has_only_youtube_videos(db_session, course_and_section, three_visibility_videos):
+    """Mix of legacy + youtube videos → catalog only shows youtube ones."""
+    _make_legacy_upload(db_session, "Old Upload A", VideoVisibility.PUBLIC.value)
+    _make_legacy_upload(db_session, "Old Upload B", VideoVisibility.PAID_ONLY.value)
+    rows = db_session.execute(
+        visible_videos_for_role(db_session, UserRole.ADMIN)
+    ).scalars().all()
+    # Only the 3 from three_visibility_videos fixture (all have youtube_id)
+    titles = sorted(v.title for v in rows)
+    assert titles == ["Admin Video", "Paid Video", "Public Video"]
+
+
+def test_count_visible_excludes_legacy_uploads(db_session, course_and_section):
+    """count_visible_videos_for_role also excludes legacy uploads."""
+    _make_legacy_upload(db_session, "Legacy 1", VideoVisibility.PUBLIC.value)
+    _make_legacy_upload(db_session, "Legacy 2", VideoVisibility.PAID_ONLY.value)
+    _make_video(db_session, "Modern Video", VideoVisibility.PUBLIC.value, "ytmodern0001")
+    # Admin should see 1 (modern), not 3 (incl. 2 legacy)
+    assert count_visible_videos_for_role(db_session, UserRole.ADMIN) == 1
+
+
+def test_dashboard_catalog_empty_when_only_legacy_uploads(
+    client: TestClient, db_session,
+):
+    """If catalog has only legacy uploads (no youtube_id), dashboard shows empty state."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    # Need a course/section first so we can create the legacy video
+    course = Course(id="course-d", title="D", user_id="uid-admin")
+    db_session.add(course)
+    db_session.flush()
+    section = Section(id="section-d", title="S", course_id="course-d", order_index=0)
+    db_session.add(section)
+    db_session.commit()
+    _make_legacy_upload(db_session, "Only Legacy", VideoVisibility.PUBLIC.value)
+
+    with _mock_verify_token("uid-admin", "admin@x.com"):
+        with TestClient(app) as c:
+            response = c.get("/", headers={"Authorization": "Bearer fake"})
+    assert response.status_code == 200
+    html = response.text
+    assert "No videos in the catalog" in html
+    assert "Only Legacy" not in html  # NOT shown
