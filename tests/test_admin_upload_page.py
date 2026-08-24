@@ -397,3 +397,60 @@ def test_admin_budget_page_rejects_non_admin(client, free_user):
                 headers=_auth_header("uid-free", "free@x.com"),
             )
     assert response.status_code == 403
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 5 — /admin/events audit log page
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _seed_event(db_session, **kwargs):
+    """Helper: insert one Event row directly via the helper."""
+    from app.utils.events import log_event
+    log_event(
+        db_session,
+        level=kwargs.get("level", "INFO"),
+        source=kwargs.get("source", "test.events"),
+        message=kwargs.get("message", "seeded"),
+        user_id=kwargs.get("user_id"),
+        video_id=kwargs.get("video_id"),
+        context=kwargs.get("context"),
+    )
+    db_session.commit()
+
+
+def test_admin_events_page_returns_200_for_admin(client, admin_user, db_session):
+    """Admin sees the page rendered with the seeded event."""
+    _seed_event(db_session, message="hello audit log")
+
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            r = c.get("/admin/events", headers=_auth_header("uid-admin", "admin@x.com"))
+    assert r.status_code == 200
+    assert "Audit Log" in r.text
+    assert "hello audit log" in r.text
+    assert "test.events" in r.text
+
+
+def test_admin_events_page_filters_by_level(client, admin_user, db_session):
+    """?level=WARNING only shows WARNING rows."""
+    _seed_event(db_session, level="INFO", message="info-row")
+    _seed_event(db_session, level="WARNING", message="warn-row")
+
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            r = c.get(
+                "/admin/events?level=WARNING",
+                headers=_auth_header("uid-admin", "admin@x.com"),
+            )
+    assert r.status_code == 200
+    assert "warn-row" in r.text
+    assert "info-row" not in r.text
+
+
+def test_admin_events_page_rejects_non_admin(client, free_user):
+    """FREE user → 403."""
+    with _mock_verify_token(free_user["uid"], free_user["email"]):
+        with TestClient(app) as c:
+            r = c.get("/admin/events", headers=_auth_header("uid-free", "free@x.com"))
+    assert r.status_code == 403
