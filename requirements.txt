@@ -38,6 +38,16 @@ yt-dlp>=2025.1.0
 # LLM
 ollama>=0.4.4
 httpx>=0.27.0,<0.28.0
+# LiteLLM (Day 4) — unified API for 100+ LLM providers. Lets us swap
+# between Ollama, Groq, OpenAI with one function call. Reads API keys
+# from OPENAI_API_KEY / GROQ_API_KEY env vars automatically.
+# Tier-based chains configured in app/config.py:
+#   FREE users     → [groq]   (less powerful but free)
+#   PAID/ADMIN     → [ollama, openai]   (Ollama = powerful default,
+#                                       OpenAI = paid fallback when
+#                                       Ollama quota near cap)
+# Quota tracker lives in app/services/llm_quota.py.
+litellm>=1.40.0
 
 # Testing
 pytest>=8.3.0
