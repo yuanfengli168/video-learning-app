@@ -428,3 +428,43 @@ async def admin_upload_page(
             ],
         ),
     )
+
+# ─────────────────────────────────────────────────────────────────────────
+# /admin/budget  (Day 4 — observability)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/admin/budget", response_class=HTMLResponse)
+async def admin_budget_page(
+    request: Request,
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+) -> HTMLResponse:
+    """Admin observability: LLM quota, provider chains, models.
+
+    Shows the same data as GET /api/admin/llm/budget but rendered as HTML
+    so admins can verify Day 4 governance is working without using curl.
+    """
+    from app.services.llm_quota import ollama_quota
+    from app.config import settings as app_settings
+
+    ollama_usage = ollama_quota.current_usage()
+    return templates.TemplateResponse(
+        request,
+        "admin_budget.html",
+        _ctx(
+            request,
+            user,
+            ollama=ollama_usage,
+            alert_pct=app_settings.ollama_quota_alert_pct,
+            providers={
+                "groq": app_settings.llm_model_groq,
+                "ollama": app_settings.llm_model_ollama,
+                "openai": app_settings.llm_model_openai,
+            },
+            chains={
+                "free": app_settings.get_provider_chain(2),  # UserRole.FREE
+                "paid": app_settings.get_provider_chain(1),  # UserRole.PAID
+                "admin": app_settings.get_provider_chain(0),  # UserRole.ADMIN
+            },
+        ),
+    )

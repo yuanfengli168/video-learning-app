@@ -54,6 +54,19 @@ def _mock_verify_token(uid: str, email: str):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_llm_quota_state():
+    """Clear rate-limiter + Ollama quota between tests so high-volume tests
+    (e.g. -near-cap that adds 2700 records) don't pollute the next test."""
+    from app.services import llm_quota
+
+    llm_quota.rate_limiter.reset_all()
+    llm_quota.ollama_quota.reset()
+    yield
+    llm_quota.rate_limiter.reset_all()
+    llm_quota.ollama_quota.reset()
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Auth gating
 # ─────────────────────────────────────────────────────────────────────────
@@ -326,3 +339,61 @@ def test_form_first_option_is_marked_selected(
     second_block = html.split('<option value="' + second_sec.id + '"')[1].split('>')[0]
     assert "selected" in first_block
     assert "selected" not in second_block
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 4 — /admin/budget observability page
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_admin_budget_page_returns_200_for_admin(client, admin_user):
+    """Admin can visit /admin/budget and see the Day 4 state."""
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get(
+                "/admin/budget",
+                headers=_auth_header("uid-admin", "admin@x.com"),
+            )
+    assert response.status_code == 200
+    html = response.text
+    # All 3 provider chains + per-provider models should be visible
+    assert "FREE users" in html
+    assert "PAID users" in html
+    assert "ADMIN" in html
+    assert "groq" in html
+    assert "ollama" in html
+    assert "openai" in html
+    # Quota stats should be visible
+    assert "5-hour window" in html
+    assert "Weekly window" in html
+
+
+def test_admin_budget_page_shows_near_cap_warning(client, admin_user, db_session):
+    """When Ollama hits 90% of cap, the page shows a red warning."""
+    from app.services import llm_quota
+
+    llm_quota.ollama_quota.reset()
+    # 90% of weekly 3000 = 2700
+    for _ in range(2700):
+        llm_quota.ollama_quota.record_call()
+
+    with _mock_verify_token(admin_user["uid"], admin_user["email"]):
+        with TestClient(app) as c:
+            response = c.get(
+                "/admin/budget",
+                headers=_auth_header("uid-admin", "admin@x.com"),
+            )
+    assert response.status_code == 200
+    assert "Near cap" in response.text
+    assert "auto-fallback will skip Ollama" in response.text
+
+
+def test_admin_budget_page_rejects_non_admin(client, free_user):
+    """Non-admin (FREE user) gets 403."""
+    with _mock_verify_token(free_user["uid"], free_user["email"]):
+        with TestClient(app) as c:
+            response = c.get(
+                "/admin/budget",
+                headers=_auth_header("uid-free", "free@x.com"),
+            )
+    assert response.status_code == 403
