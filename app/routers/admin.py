@@ -497,3 +497,63 @@ async def admin_get_caption_status(
         "job": job,
         "error": error_msg,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /api/admin/llm/budget  (Day 4 — observability)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/llm/budget")
+async def admin_get_llm_budget(
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+) -> dict[str, Any]:
+    """Read current LLM-call budget / rate-limit state.
+
+    Returns:
+      {
+        "ollama": {
+          "calls_5h": int, "limit_5h": int,
+          "calls_week": int, "limit_week": int,
+          "near_cap": bool,
+          "next_reset_seconds": int
+        },
+        "alert_pct": 0.9,
+        "providers": {
+          "groq":   "llama-3.3-70b-versatile",
+          "ollama": "glm-5.2:cloud",
+          "openai": "gpt-4o-mini"
+        },
+        "chains": {
+          "free":  ["groq"],
+          "paid":  ["ollama", "openai"],
+          "admin": ["ollama", "openai"]
+        }
+      }
+
+    The admin can use this to verify that:
+      - Ollama is not near cap (else it'll auto-fallback to OpenAI)
+      - The right provider chains are configured per tier
+      - The right models are being used per provider
+
+    Capability: CURATE_CATALOG — admins only.
+    """
+    from app.services.llm_quota import ollama_quota
+    from app.config import settings as app_settings
+
+    ollama_usage = ollama_quota.current_usage()
+
+    return {
+        "ollama": ollama_usage,
+        "alert_pct": app_settings.ollama_quota_alert_pct,
+        "providers": {
+            "groq": app_settings.llm_model_groq,
+            "ollama": app_settings.llm_model_ollama,
+            "openai": app_settings.llm_model_openai,
+        },
+        "chains": {
+            "free": app_settings.get_provider_chain(2),  # UserRole.FREE
+            "paid": app_settings.get_provider_chain(1),  # UserRole.PAID
+            "admin": app_settings.get_provider_chain(0),  # UserRole.ADMIN
+        },
+    }

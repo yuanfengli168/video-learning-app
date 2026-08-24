@@ -39,6 +39,26 @@ def _clear_role_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_llm_quota_state():
+    """Reset llm_quota trackers between tests.
+
+    test_admin_llm_budget_endpoint_shows_near_cap fills the Ollama
+    tracker with 2700 records (above the 90% alert threshold). Without
+    this autouse fixture, the next test in the same pytest run sees
+    the tracker in near_cap state and the fallback wrapper skips Ollama
+    entirely — breaking test_llm.py tests that rely on ollama being
+    available as the ADMIN chain's first provider.
+    """
+    from app.services import llm_quota
+
+    llm_quota.rate_limiter.reset_all()
+    llm_quota.ollama_quota.reset()
+    yield
+    llm_quota.rate_limiter.reset_all()
+    llm_quota.ollama_quota.reset()
+
+
+@pytest.fixture(autouse=True)
 def _disable_youtube_api():
     """Disable YouTube Data API enrichment for most tests.
 
@@ -1114,3 +1134,107 @@ def test_admin_add_video_auto_creates_default_when_admin_has_none(
         "SELECT section_id FROM videos WHERE youtube_id='autocreate1'"
     )).fetchone()
     assert row[0] == section.id
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 4 — GET /api/admin/llm/budget observability endpoint
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_admin_llm_budget_endpoint_returns_ollama_usage(client, db_session):
+    """GET /api/admin/llm/budget returns ollama usage stats."""
+    from app.services import llm_quota
+
+    # Ensure uid-admin exists with role=0 (ADMIN)
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    llm_quota.ollama_quota.reset()
+    for _ in range(7):
+        llm_quota.ollama_quota.record_call()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "uid-admin", "email": "admin@x.com"},
+    ):
+        response = client.get(
+            "/api/admin/llm/budget",
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ollama"]["calls_week"] == 7
+    assert body["ollama"]["limit_5h"] == 800
+    assert body["ollama"]["limit_week"] == 3000
+    assert body["alert_pct"] == 0.9
+    assert body["ollama"]["near_cap"] is False
+
+
+def test_admin_llm_budget_endpoint_shows_near_cap(client, db_session):
+    """When Ollama hits 90% of weekly cap, near_cap=True."""
+    from app.services import llm_quota
+
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    llm_quota.ollama_quota.reset()
+    # 90% of 3000 = 2700 — triggers near_cap
+    for _ in range(2700):
+        llm_quota.ollama_quota.record_call()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "uid-admin", "email": "admin@x.com"},
+    ):
+        response = client.get(
+            "/api/admin/llm/budget",
+            headers={"Authorization": "Bearer fake"},
+        )
+    body = response.json()
+    assert body["ollama"]["near_cap"] is True
+
+
+def test_admin_llm_budget_endpoint_includes_provider_chains(client, db_session):
+    """The response includes the tier-based chains + per-provider models."""
+    ensure_user_row("uid-admin", "admin@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "uid-admin", "email": "admin@x.com"},
+    ):
+        response = client.get(
+            "/api/admin/llm/budget",
+            headers={"Authorization": "Bearer fake"},
+        )
+    body = response.json()
+
+    # Chains
+    assert body["chains"]["free"] == ["groq"]
+    assert body["chains"]["paid"] == ["ollama", "openai"]
+    assert body["chains"]["admin"] == ["ollama", "openai"]
+
+    # Per-provider models
+    assert "groq" in body["providers"]
+    assert "ollama" in body["providers"]
+    assert "openai" in body["providers"]
+
+
+def test_admin_llm_budget_endpoint_requires_admin(client, db_session):
+    """Non-admin (FREE user) gets 403."""
+    ensure_user_row("uid-free", "free@x.com", db_session)
+    db_session.execute(text("UPDATE users SET role=2 WHERE user_id='uid-free'"))
+    db_session.commit()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "uid-free", "email": "free@x.com"},
+    ):
+        response = client.get(
+            "/api/admin/llm/budget",
+            headers={"Authorization": "Bearer fake"},
+        )
+    assert response.status_code == 403
