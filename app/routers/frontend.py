@@ -468,3 +468,69 @@ async def admin_budget_page(
             },
         ),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /admin/events  (Day 5 — audit log dashboard)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/admin/events", response_class=HTMLResponse)
+async def admin_events_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+    level: str | None = None,
+    source: str | None = None,
+    video_id: str | None = None,
+    page: int = 1,
+) -> HTMLResponse:
+    """Admin observability: recent structured events from the events table.
+
+    Read-only view that supports three filters (level, source, video_id)
+    and pagination (50 events per page). The events table is written to
+    by log_event() in app/utils/events.py — every hot path that
+    previously called logger.info/warning now also writes a row here.
+
+    Query params:
+      level: INFO | WARNING | ERROR (case-insensitive)
+      source: dotted path like 'services.llm_providers'
+      video_id: filter to one video
+      page: 1-indexed page number
+    """
+    from app.utils.events import distinct_sources, recent_events
+
+    page = max(1, page)
+    page_size = 50
+    offset = (page - 1) * page_size
+
+    events = recent_events(
+        db,
+        level=level,
+        source=source,
+        video_id=video_id,
+        limit=page_size,
+        offset=offset,
+    )
+    sources = distinct_sources(db)
+
+    return templates.TemplateResponse(
+        request,
+        "admin_events.html",
+        _ctx(
+            request,
+            user,
+            events=events,
+            sources=sources,
+            filters={
+                "level": (level or "").upper(),
+                "source": source or "",
+                "video_id": video_id or "",
+            },
+            pagination={
+                "page": page,
+                "page_size": page_size,
+                "has_next": len(events) == page_size,
+            },
+        ),
+    )

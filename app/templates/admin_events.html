@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Audit Log — {{ app_name }}{% endblock %}
+{% block breadcrumb %}Admin / Audit Log{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <h1 class="text-2xl font-bold mb-2">📋 Audit Log (Day 5)</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+            Recent structured events from <code>app/utils/events.py</code>.
+            Every hot path that previously called <code>logger.info/warning</code>
+            now writes a row here too. Filter by level / source / video_id.
+        </p>
+
+        {# Filters #}
+        <form method="get" action="/admin/events" class="flex flex-wrap items-end gap-3 mb-6">
+            <div>
+                <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Level</label>
+                <select name="level" class="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm">
+                    <option value="">All</option>
+                    {% for lvl in ["INFO", "WARNING", "ERROR", "DEBUG"] %}
+                    <option value="{{ lvl }}" {% if filters.level == lvl %}selected{% endif %}>{{ lvl }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Source</label>
+                <select name="source" class="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm min-w-[16rem]">
+                    <option value="">All</option>
+                    {% for src in sources %}
+                    <option value="{{ src }}" {% if filters.source == src %}selected{% endif %}>{{ src }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Video ID</label>
+                <input type="text" name="video_id" value="{{ filters.video_id }}"
+                       placeholder="UUID"
+                       class="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm w-48">
+            </div>
+            <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">
+                Filter
+            </button>
+            {% if filters.level or filters.source or filters.video_id %}
+            <a href="/admin/events" class="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:underline">Clear</a>
+            {% endif %}
+        </form>
+
+        {# Counts #}
+        <div class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+            Showing {{ events|length }} event{{ "" if events|length == 1 else "s" }} on page {{ pagination.page }}.
+        </div>
+
+        {# Table #}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700">
+                        <th class="py-2 pr-4 w-44">Time</th>
+                        <th class="py-2 pr-4 w-24">Level</th>
+                        <th class="py-2 pr-4 w-56">Source</th>
+                        <th class="py-2 pr-4">Message</th>
+                        <th class="py-2 pr-4 w-32">Video</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                    {% for ev in events %}
+                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-900/50">
+                        <td class="py-2 pr-4 text-xs text-gray-600 dark:text-gray-400 font-mono whitespace-nowrap">
+                            {{ ev.ts.strftime("%Y-%m-%d %H:%M:%S") }}
+                        </td>
+                        <td class="py-2 pr-4">
+                            {% if ev.level == "ERROR" %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200">ERROR</span>
+                            {% elif ev.level == "WARNING" %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200">WARNING</span>
+                            {% elif ev.level == "INFO" %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200">INFO</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">{{ ev.level }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-2 pr-4 text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                            {{ ev.source }}
+                        </td>
+                        <td class="py-2 pr-4">
+                            <div class="text-gray-900 dark:text-gray-100">{{ ev.message }}</div>
+                            {% if ev.context_json %}
+                            <details class="mt-1">
+                                <summary class="text-xs text-gray-500 dark:text-gray-400 cursor-pointer hover:underline">context</summary>
+                                <pre class="mt-1 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">{{ ev.context_json }}</pre>
+                            </details>
+                            {% endif %}
+                        </td>
+                        <td class="py-2 pr-4 text-xs font-mono text-gray-500 dark:text-gray-400">
+                            {% if ev.video_id %}
+                            <a href="/video/{{ ev.video_id }}" class="hover:underline">{{ ev.video_id[:8] }}…</a>
+                            {% else %}
+                            <span class="text-gray-300 dark:text-gray-600">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                            No events match the current filters. Try clearing filters,
+                            or trigger some activity (add a YouTube video, regenerate
+                            materials, exceed a rate limit).
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {# Pagination #}
+        <div class="mt-4 flex items-center justify-between text-sm">
+            <a href="/admin/events?{% if filters.level %}level={{ filters.level }}&{% endif %}{% if filters.source %}source={{ filters.source }}&{% endif %}{% if filters.video_id %}video_id={{ filters.video_id }}&{% endif %}page={{ pagination.page - 1 }}"
+               class="px-3 py-1 rounded text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 {% if pagination.page == 1 %}invisible{% endif %}">
+                ← Previous
+            </a>
+            <span class="text-xs text-gray-500 dark:text-gray-400">Page {{ pagination.page }}</span>
+            <a href="/admin/events?{% if filters.level %}level={{ filters.level }}&{% endif %}{% if filters.source %}source={{ filters.source }}&{% endif %}{% if filters.video_id %}video_id={{ filters.video_id }}&{% endif %}page={{ pagination.page + 1 }}"
+               class="px-3 py-1 rounded text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 {% if not pagination.has_next %}invisible{% endif %}">
+                Next →
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}
