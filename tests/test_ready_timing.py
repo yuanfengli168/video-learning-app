@@ -266,7 +266,7 @@ def test_generate_worker_sets_generated_at_on_success(client: TestClient):
         return_value=fake_materials,
     ):
         from app.routers.generation import _run_generate_job
-        _run_generate_job(video_id)
+        _run_generate_job(video_id, "test-uid", 0)
 
     with _get_session_local()() as db:
         v = db.get(Video, video_id)
@@ -293,7 +293,7 @@ def test_generate_worker_does_not_set_generated_at_on_failure(client: TestClient
         side_effect=fake_broken,
     ):
         from app.routers.generation import _run_generate_job
-        _run_generate_job(video_id)
+        _run_generate_job(video_id, "test-uid", 0)
 
     with _get_session_local()() as db:
         v = db.get(Video, video_id)

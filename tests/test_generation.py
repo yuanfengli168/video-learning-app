@@ -102,7 +102,7 @@ def _run_generate_synchronously(client: TestClient, video_id: str, materials: di
     test depends on.
     """
     import uuid
-    def fake_generate_worker(vid: str) -> None:
+    def fake_generate_worker(vid: str, user_id: str, user_role: int) -> None:
         from app.database import SessionLocal
         from app.models import Asset, Video
         import json
@@ -234,7 +234,7 @@ def test_generate_failure_marks_error_status(client: TestClient):
     """If the (background) generate worker fails, video status becomes 'error'."""
     video_id = _setup_video_with_transcript(client)
 
-    def fake_generate_worker_raises(vid: str) -> None:
+    def fake_generate_worker_raises(vid: str, user_id: str, user_role: int) -> None:
         from app.jobs import get_job, finish_job
         from app.database import SessionLocal
         from app.models import Video

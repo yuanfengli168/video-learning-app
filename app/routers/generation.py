@@ -71,7 +71,12 @@ async def generate(
     video.last_generate_job = serialize_job(job)
     db.commit()
 
-    background_tasks.add_task(_run_generate_job, video_id)
+    background_tasks.add_task(
+        _run_generate_job,
+        video_id,
+        user.get("uid", ""),
+        user.get("role", 2),  # UserRole.FREE if not set
+    )
 
     return {
         "video_id": video_id,
@@ -80,7 +85,7 @@ async def generate(
     }
 
 
-def _run_generate_job(video_id: str) -> None:
+def _run_generate_job(video_id: str, user_id: str, user_role: int) -> None:
     """Background worker: call Ollama + write all generated assets to DB."""
     job = get_job(video_id, "generate")
     if not job:
@@ -120,7 +125,12 @@ def _run_generate_job(video_id: str) -> None:
             except Exception:
                 db.rollback()
 
-        materials = generate_materials(transcript, on_progress=_on_progress)
+        materials = generate_materials(
+            transcript,
+            on_progress=_on_progress,
+            user_role=user_role,
+            user_id=user_id,
+        )
 
         set_progress(job, done=95, message="Saving assets to database...")
         asset_map = {
@@ -165,7 +175,16 @@ def _run_generate_job(video_id: str) -> None:
         video.last_generate_job = serialize_job(job)
         db.commit()
     except Exception as exc:
-        finish_job(job, status="failed", error=str(exc))
+        # LlmCallError carries a structured .detail dict; surface it so
+        # the admin UI can show "rate limited — retry in 60s" rather
+        # than a bare exception message.
+        from app.services.llm import LlmCallError
+
+        if isinstance(exc, LlmCallError):
+            error_msg = f"{exc.detail.get('error', 'error')}: {exc.detail.get('message', str(exc))}"
+        else:
+            error_msg = str(exc)
+        finish_job(job, status="failed", error=error_msg)
         try:
             video = db.get(Video, video_id)
             if video:

@@ -1,6 +1,19 @@
-"""LLM service — Ollama integration for generating learning materials.
+"""LLM service — generate learning materials from video transcripts.
 
-Sends video transcripts to Ollama and receives structured JSON containing:
+Day 4 (mvp2-production-patches): the underlying LLM call goes through
+the LiteLLM fallback wrapper (`app.services.llm_providers`). Per-tier
+provider chains (FREE -> groq, PAID/ADMIN -> ollama+openai) with
+per-user rate limiting and Ollama quota tracking.
+
+The public function signature is preserved so callers (the generate
+worker in `app/routers/generation.py`) don't have to know about the
+wrapper. Two new optional kwargs were added:
+  - user_role (int, UserRole enum value)
+  - user_id (str, Firebase uid)
+If both are omitted, the call uses Ollama directly with no rate limit
+check (legacy behavior). All callers updated in this commit pass both.
+
+Sends a transcript to the configured LLM and returns structured JSON:
 - Markdown summary
 - Mindmap data (Markmap-compatible markdown)
 - Quiz questions and answers
@@ -10,8 +23,6 @@ Sends video transcripts to Ollama and receives structured JSON containing:
 import json
 import re
 from typing import Any
-
-import httpx
 
 from app.config import settings
 
@@ -126,25 +137,49 @@ def generate_materials(
     transcript: dict[str, Any],
     model: str | None = None,
     on_progress: "callable | None" = None,
+    *,
+    user_role: int | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Generate learning materials from a transcript using Ollama.
+    """Generate learning materials from a transcript using the configured
+    provider chain (Ollama / Groq / OpenAI via LiteLLM).
 
     Args:
         transcript: Dict with 'segments' (list of {start, end, text}).
-        model: Ollama model name (defaults to settings.ollama_model).
+        model: Provider-specific model name. If None, picks the right
+            default for the user's tier from settings. (Legacy callers
+            passing the Ollama model name are silently ignored; the
+            provider chain picks per-user.)
         on_progress: Optional callback `fn(done: int, total: int, message: str)`
             called at key milestones so the background worker can update
             the UI's progress bar. Currently called at:
-              - 10/100 "Building prompt..."
-              - 20/100 "Calling Ollama (this may take 30-60s)..."
-              - 90/100 "Parsing LLM response..."
+              - 5/100 "Building prompt..."
+              - 15/100 "Calling LLM..."
+              - 90/100 "Parsing response..."
             Anything past 90% is "saving to database" which the caller
             does outside this function.
+        user_role: UserRole enum value (0=ADMIN, 1=PAID, 2=FREE).
+            Used to pick the provider chain + apply rate limit thresholds.
+            Required (Day 4) — callers that omit it get FREE defaults
+            (groq only) so legacy code stays safe but is rate-limited
+            appropriately.
+        user_id: Firebase uid. Required for rate limit tracking.
 
     Returns:
         Dict with keys: summary, mindmap, flashcards, quiz.
+        On rate limit or all-providers-failed, raises LlmCallError with
+        a structured dict in .detail (HTTP-friendly error format).
     """
-    model = model or settings.ollama_model
+    # Default to FREE if caller didn't pass user_role (legacy safety).
+    # The router in app/routers/generation.py is the only real caller and
+    # was updated in this commit to always pass both.
+    if user_role is None:
+        from app.auth.roles import UserRole
+        user_role = UserRole.FREE
+    if user_id is None:
+        # Synthetic uid for unauthenticated tests. In production, the
+        # router always provides user_id from the Firebase claims.
+        user_id = "anonymous"
 
     # Build transcript text from segments
     if on_progress:
@@ -158,57 +193,123 @@ def generate_materials(
         raise ValueError("Transcript is empty — cannot generate materials")
 
     if on_progress:
-        on_progress(15, 100, f"Calling Ollama ({model}) — this may take 30-60s...")
+        on_progress(15, 100, "Calling LLM (tier-aware provider chain)...")
 
-    # Call Ollama API
-    # Use temperature=0 + fixed seed for deterministic output so re-generating
-    # the same transcript produces the same mindmap/flashcards/quiz.
-    response = httpx.post(
-        f"{settings.ollama_base_url}/api/chat",
-        json={
-            "model": model,
-            "stream": False,
-            "messages": [
-                {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Transcript:\n\n{transcript_text}"},
-            ],
-            "options": {
-                "temperature": 0,
-                "seed": 42,
-            },
-        },
-        timeout=300.0,  # 5 min timeout for long transcripts
+    # Delegate to the LiteLLM wrapper. It handles provider selection,
+    # rate limiting, Ollama quota tracking, and JSON parsing hints.
+    from app.services.llm_providers import call_llm_with_fallback
+
+    result = call_llm_with_fallback(
+        messages=[
+            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Transcript:\n\n{transcript_text}"},
+        ],
+        user_role=user_role,
+        user_id=user_id,
+        json_mode=True,
     )
-    response.raise_for_status()
 
-    result = response.json()
-    content = result.get("message", {}).get("content", "")
+    # Map the structured response to the historical exception interface
+    # so the router in app/routers/generation.py can still detect
+    # rate-limit / quota errors and surface them to the user.
+    if result["status"] == "rate_limited":
+        if on_progress:
+            on_progress(95, 100, "Rate limit hit")
+        raise LlmCallError(
+            status_code=429,
+            detail={
+                "error": "rate_limited",
+                "message": result["message"],
+                "retry_after_seconds": result["retry_after_seconds"],
+            },
+        )
+    if result["status"] == "provider_unavailable":
+        if on_progress:
+            on_progress(95, 100, "All providers failed")
+        raise LlmCallError(
+            status_code=503,
+            detail={
+                "error": "provider_unavailable",
+                "message": result["message"],
+                "attempts": result["attempts"],
+            },
+        )
 
+    content = result["content"]
     if on_progress:
-        on_progress(90, 100, "Parsing LLM response...")
+        provider = result.get("provider", "unknown")
+        on_progress(90, 100, f"Parsing {provider} response...")
 
     return _extract_json(content)
 
 
-def generate_summary(transcript: dict[str, Any], model: str | None = None) -> str:
+class LlmCallError(Exception):
+    """Raised when generate_materials() fails due to rate limit or
+    all-providers-failed. .status_code is HTTP-friendly (429 or 503)
+    and .detail is a structured dict the router surfaces to the UI.
+    """
+
+    def __init__(self, status_code: int, detail: dict[str, Any]):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail.get("message", "LLM call failed"))
+
+
+def generate_summary(
+    transcript: dict[str, Any],
+    model: str | None = None,
+    *,
+    user_role: int | None = None,
+    user_id: str | None = None,
+) -> str:
     """Generate just the markdown summary."""
-    materials = generate_materials(transcript, model)
+    materials = generate_materials(
+        transcript, model,
+        user_role=user_role, user_id=user_id,
+    )
     return materials.get("summary", "")
 
 
-def generate_mindmap(transcript: dict[str, Any], model: str | None = None) -> str:
+def generate_mindmap(
+    transcript: dict[str, Any],
+    model: str | None = None,
+    *,
+    user_role: int | None = None,
+    user_id: str | None = None,
+) -> str:
     """Generate just the mindmap markdown."""
-    materials = generate_materials(transcript, model)
+    materials = generate_materials(
+        transcript, model,
+        user_role=user_role, user_id=user_id,
+    )
     return materials.get("mindmap", "")
 
 
-def generate_flashcards(transcript: dict[str, Any], model: str | None = None) -> list[dict[str, str]]:
+def generate_flashcards(
+    transcript: dict[str, Any],
+    model: str | None = None,
+    *,
+    user_role: int | None = None,
+    user_id: str | None = None,
+) -> list[dict[str, str]]:
     """Generate just the flashcards."""
-    materials = generate_materials(transcript, model)
+    materials = generate_materials(
+        transcript, model,
+        user_role=user_role, user_id=user_id,
+    )
     return materials.get("flashcards", [])
 
 
-def generate_quiz(transcript: dict[str, Any], model: str | None = None) -> list[dict[str, Any]]:
+def generate_quiz(
+    transcript: dict[str, Any],
+    model: str | None = None,
+    *,
+    user_role: int | None = None,
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Generate just the quiz."""
-    materials = generate_materials(transcript, model)
+    materials = generate_materials(
+        transcript, model,
+        user_role=user_role, user_id=user_id,
+    )
     return materials.get("quiz", [])

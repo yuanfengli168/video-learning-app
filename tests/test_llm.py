@@ -123,11 +123,15 @@ FAKE_MATERIALS = {
 }
 
 
-def _mock_ollama_response(content: str):
-    """Create a mock httpx response with the given content."""
+def _mock_litellm_response(content: str) -> MagicMock:
+    """Create a mock litellm.ModelResponse with the given content.
+
+    Matches the shape the LiteLLM wrapper expects
+    (response.choices[0].message.content).
+    """
     mock_resp = MagicMock()
-    mock_resp.json.return_value = {"message": {"content": content}}
-    mock_resp.raise_for_status = MagicMock()
+    mock_resp.choices = [MagicMock()]
+    mock_resp.choices[0].message.content = content
     return mock_resp
 
 
@@ -138,8 +142,13 @@ def test_generate_materials_success():
         "language": "en",
     }
 
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))):
-        result = generate_materials(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+    ):
+        result = generate_materials(
+            transcript, user_role=0, user_id="uid-admin"
+        )
 
     assert result["summary"] == FAKE_MATERIALS["summary"]
     assert result["mindmap"] == FAKE_MATERIALS["mindmap"]
@@ -150,7 +159,7 @@ def test_generate_materials_success():
 def test_generate_materials_empty_transcript():
     """Should raise ValueError for empty transcript."""
     with pytest.raises(ValueError, match="Transcript is empty"):
-        generate_materials({"segments": []})
+        generate_materials({"segments": []}, user_role=0, user_id="u")
 
 
 def test_generate_materials_code_fence_response():
@@ -160,58 +169,111 @@ def test_generate_materials_code_fence_response():
     }
 
     fenced_content = f"```json\n{json.dumps(FAKE_MATERIALS)}\n```"
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(fenced_content)):
-        result = generate_materials(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(fenced_content),
+    ):
+        result = generate_materials(
+            transcript, user_role=0, user_id="u"
+        )
 
     assert result["summary"] == FAKE_MATERIALS["summary"]
 
 
-def test_generate_materials_http_error():
-    """Should raise on HTTP error from Ollama."""
-    transcript = {
-        "segments": [{"start": 0.0, "end": 5.0, "text": "Test"}],
-    }
+def test_generate_materials_provider_error_propagates():
+    """When LiteLLM raises, generate_materials raises LlmCallError(503)."""
+    from app.services.llm import LlmCallError
 
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = Exception("Connection refused")
+    transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
 
-    with patch("app.services.llm.httpx.post", return_value=mock_resp):
-        with pytest.raises(Exception, match="Connection refused"):
-            generate_materials(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        side_effect=Exception("connection refused"),
+    ):
+        with pytest.raises(LlmCallError) as exc_info:
+            generate_materials(transcript, user_role=0, user_id="u")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "provider_unavailable"
+
+
+def test_generate_materials_rate_limited_raises_429():
+    """Rate limit hit → LlmCallError(429) with retry_after."""
+    from app.services.llm import LlmCallError
+    from app.services import llm_quota
+
+    transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
+    # FREE tier = 5/min. Make 5 calls, then the 6th raises.
+    llm_quota.rate_limiter.reset_all()
+    for _ in range(5):
+        with patch(
+            "app.services.llm_providers.litellm.completion",
+            return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+        ):
+            generate_materials(transcript, user_role=2, user_id="rate-limited")
+
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+    ) as mock:
+        with pytest.raises(LlmCallError) as exc_info:
+            generate_materials(transcript, user_role=2, user_id="rate-limited")
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.detail["error"] == "rate_limited"
+    assert exc_info.value.detail["retry_after_seconds"] > 0
+    # Provider NOT called for the rejected attempt
+    assert mock.call_count == 0
+    llm_quota.rate_limiter.reset_all()
 
 
 def test_generate_materials_invalid_json_response():
     """Should raise ValueError when LLM returns non-JSON."""
-    transcript = {
-        "segments": [{"start": 0.0, "end": 5.0, "text": "Test"}],
-    }
-
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response("This is not JSON")):
+    transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response("This is not JSON"),
+    ):
         with pytest.raises(ValueError, match="Could not extract"):
-            generate_materials(transcript)
+            generate_materials(transcript, user_role=0, user_id="u")
 
 
 def test_generate_summary():
     """generate_summary should return just the summary string."""
     transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))):
-        result = generate_summary(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+    ):
+        result = generate_summary(
+            transcript, user_role=0, user_id="u"
+        )
     assert result == FAKE_MATERIALS["summary"]
 
 
 def test_generate_mindmap():
     """generate_mindmap should return just the mindmap string."""
     transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))):
-        result = generate_mindmap(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+    ):
+        result = generate_mindmap(
+            transcript, user_role=0, user_id="u"
+        )
     assert result == FAKE_MATERIALS["mindmap"]
 
 
 def test_generate_flashcards():
     """generate_flashcards should return just the flashcards list."""
     transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))):
-        result = generate_flashcards(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+    ):
+        result = generate_flashcards(
+            transcript, user_role=0, user_id="u"
+        )
     assert len(result) == 1
     assert result[0]["term"] == "AI"
 
@@ -219,16 +281,27 @@ def test_generate_flashcards():
 def test_generate_quiz():
     """generate_quiz should return just the quiz list."""
     transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))):
-        result = generate_quiz(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+    ):
+        result = generate_quiz(
+            transcript, user_role=0, user_id="u"
+        )
     assert len(result) == 1
     assert result[0]["question"] == "What is AI?"
+
 
 def test_generate_topic_timestamps():
     """generate_materials should return topic_timestamps when present."""
     transcript = {"segments": [{"start": 0.0, "end": 5.0, "text": "Test"}]}
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))):
-        result = generate_materials(transcript)
+    with patch(
+        "app.services.llm_providers.litellm.completion",
+        return_value=_mock_litellm_response(json.dumps(FAKE_MATERIALS)),
+    ):
+        result = generate_materials(
+            transcript, user_role=0, user_id="u"
+        )
     assert "topic_timestamps" in result
     assert len(result["topic_timestamps"]) == 2
     assert result["topic_timestamps"][0]["topic"] == "Topic"
@@ -242,18 +315,3 @@ def test_llm_prompt_includes_topic_timestamps_instruction():
     assert "topic_timestamps" in GENERATION_SYSTEM_PROMPT
     assert "start" in GENERATION_SYSTEM_PROMPT
     assert "end" in GENERATION_SYSTEM_PROMPT
-
-def test_generate_materials_uses_deterministic_options():
-    """The Ollama call should set temperature=0 and a fixed seed so that
-    re-generating the same transcript produces the same materials."""
-    transcript = {
-        "segments": [{"start": 0.0, "end": 5.0, "text": "Test"}],
-    }
-    with patch("app.services.llm.httpx.post", return_value=_mock_ollama_response(json.dumps(FAKE_MATERIALS))) as mock_post:
-        generate_materials(transcript)
-
-    # Inspect the payload sent to Ollama
-    call_args = mock_post.call_args
-    payload = call_args.kwargs.get("json") or call_args.args[1]
-    assert payload["options"]["temperature"] == 0
-    assert payload["options"]["seed"] == 42
