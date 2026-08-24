@@ -66,6 +66,7 @@ from app.services.youtube_captions import (
     YouTubeCaptionsUnavailable,
     fetch_youtube_captions,
 )
+from app.utils.events import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +232,13 @@ def _run_caption_download_job(video_id: str) -> None:
                 "Video %s has invalid caption_languages JSON %r, "
                 "treating as empty", video_id, video.caption_languages,
             )
+            log_event(
+                db, level="WARNING",
+                source="services.youtube_captions_job",
+                message=f"invalid caption_languages JSON for {video_id}",
+                video_id=video_id,
+                context={"raw": video.caption_languages},
+            )
             available_languages = []
 
         set_progress(
@@ -270,6 +278,15 @@ def _run_caption_download_job(video_id: str) -> None:
                 "Caption first attempt failed for %s, "
                 "retrying without language preference",
                 video_id,
+            )
+            log_event(
+                db, level="INFO",
+                source="services.youtube_captions_job",
+                message=(
+                    f"caption first attempt failed for {video_id}; "
+                    f"retrying without language preference"
+                ),
+                video_id=video_id,
             )
             try:
                 caption = fetch_youtube_captions(
@@ -316,6 +333,13 @@ def _run_caption_download_job(video_id: str) -> None:
             logger.exception(
                 "Unexpected error fetching captions for %s", video_id,
             )
+            log_event(
+                db, level="ERROR",
+                source="services.youtube_captions_job",
+                message=f"unexpected error fetching captions for {video_id}",
+                video_id=video_id,
+                context={"error": str(exc), "type": type(exc).__name__},
+            )
             video.status = "error"
             _set_video_error_status(
                 db, video_id, f"Unexpected: {exc}"
@@ -354,6 +378,18 @@ def _run_caption_download_job(video_id: str) -> None:
         # ({lang}, {source})" from the transcript Asset's metadata.
         video.status = "ready"
         video.transcribed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        log_event(
+            db, level="INFO",
+            source="services.youtube_captions_job",
+            message=f"caption download completed for {video_id}",
+            video_id=video_id,
+            context={
+                "language": caption.language,
+                "source": caption.source,
+                "segments": len(caption.segments),
+                "duration": caption.duration,
+            },
+        )
         finish_job(
             job,
             status="completed",
@@ -369,6 +405,13 @@ def _run_caption_download_job(video_id: str) -> None:
         # Final defense — anything we missed above lands here.
         logger.exception(
             "Caption job for video %s crashed", video_id,
+        )
+        log_event(
+            db, level="ERROR",
+            source="services.youtube_captions_job",
+            message=f"caption job crashed for {video_id}",
+            video_id=video_id,
+            context={"error": str(exc), "type": type(exc).__name__},
         )
         try:
             video = db.get(Video, video_id)
@@ -458,6 +501,13 @@ def retry_caption_download(video_id: str, db: Session) -> dict[str, Any]:
         return {"status": "failed", "error": str(exc)}
     except Exception as exc:
         logger.exception("retry_caption_download crashed for %s", video_id)
+        log_event(
+            db, level="ERROR",
+            source="services.youtube_captions_job",
+            message=f"retry_caption_download crashed for {video_id}",
+            video_id=video_id,
+            context={"error": str(exc), "type": type(exc).__name__},
+        )
         video.status = "error"
         _set_video_error_status(
             db, video_id, f"Unexpected: {exc}"

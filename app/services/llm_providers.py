@@ -36,10 +36,12 @@ from typing import Any
 import litellm
 
 from app.config import settings
+from app.database import SessionLocal
 from app.services.llm_quota import (
     ollama_quota,
     rate_limiter,
 )
+from app.utils.events import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,29 @@ class _AllProvidersFailed(Exception):
     def __init__(self, attempts: list[dict[str, Any]]):
         self.attempts = attempts
         super().__init__(f"All {len(attempts)} providers failed")
+
+
+def _audit(level: str, message: str, *, user_id: str | None = None,
+           video_id: str | None = None, context: dict[str, Any] | None = None) -> None:
+    """Short-lived audit-log write. Opens its own session so we don't have to
+    thread `db` through every call site. log_event() never raises, so this
+    is safe to call from any hot path."""
+    db = SessionLocal()
+    try:
+        log_event(
+            db, level=level, source="services.llm_providers",
+            message=message, user_id=user_id, video_id=video_id,
+            context=context,
+        )
+        db.commit()
+    except Exception as exc:
+        logger.warning("audit log failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 def call_llm_with_fallback(
@@ -89,6 +114,12 @@ def call_llm_with_fallback(
             "Rate limit hit for user %s (role=%d): %s",
             user_id, user_role, rl.reason,
         )
+        _audit("WARNING", f"rate limit hit for user {user_id}",
+               user_id=user_id, context={
+                   "role": user_role,
+                   "reason": rl.reason,
+                   "retry_after_seconds": rl.retry_after_seconds,
+               })
         return {
             "status": "rate_limited",
             "retry_after_seconds": rl.retry_after_seconds,
@@ -117,6 +148,12 @@ def call_llm_with_fallback(
         logger.warning(
             "Ollama near cap (5h or weekly >= 90%%). Skipping to next provider."
         )
+        _audit("WARNING", "Ollama near cap, skipping in chain",
+               user_id=user_id, context={
+                   "remaining_chain": chain,
+                   "ollama_5h": ollama_quota.current_usage().get("calls_5h"),
+                   "ollama_week": ollama_quota.current_usage().get("calls_week"),
+               })
         chain = [p for p in chain if p != "ollama"]
         if not chain:
             return {
@@ -157,6 +194,14 @@ def call_llm_with_fallback(
                 "LLM call succeeded via %s/%s for user %s",
                 provider, model, user_id,
             )
+            _audit("INFO", f"LLM call succeeded via {provider}/{model}",
+                   user_id=user_id, context={
+                       "provider": provider,
+                       "model": model,
+                       "role": user_role,
+                       "json_mode": json_mode,
+                       "attempts_before_success": len(attempts),
+                   })
             return {
                 "status": "ok",
                 "content": content,
@@ -172,9 +217,21 @@ def call_llm_with_fallback(
                 "LLM call failed on %s/%s for user %s: %s",
                 provider, model, user_id, attempt["error"],
             )
+            _audit("WARNING", f"LLM call failed on {provider}/{model}",
+                   user_id=user_id, context={
+                       "provider": provider,
+                       "model": model,
+                       "role": user_role,
+                       "error": attempt["error"],
+                   })
             continue
 
     # Step 5: every provider in chain failed
+    _audit("ERROR", f"all {len(attempts)} provider(s) failed",
+           user_id=user_id, context={
+               "role": user_role,
+               "attempts": attempts,
+           })
     return {
         "status": "provider_unavailable",
         "message": (
