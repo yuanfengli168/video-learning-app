@@ -4,6 +4,11 @@
 >
 > For full milestone history, see [`doc/MVP2.0-first-designQuestions.md`](MVP2.0-first-designQuestions.md). For bug postmortems, see [`doc/Blockers.md`](Blockers.md).
 
+> **📌 Postscript (2026-08-24)**: This doc is frozen at the MVP2.0 milestone (2026-07-16). Significant work has happened on the **`mvp2-production-patches` branch** since — the pivot to admin-curated YouTube catalog, role-based access (ADMIN/PAID/FREE), and Day 1-3 of the go-live plan. See:
+> - [`doc/mvp2-production-patches-status.md`](mvp2-production-patches-status.md) — current branch state (1017 tests passing, 89% coverage)
+> - [`doc/mvp2-final-go-live-plan.md`](mvp2-final-go-live-plan.md) — 14-day plan that `mvp2-production-patches` is executing
+> - [`doc/public-repo-readiness.md`](public-repo-readiness.md) — 6 hardening recommendations for publishing this branch
+
 > **📌 Current snapshot (2026-07-15)**: Branch `MVP2.0` is **67 commits ahead of `main`**, all pushed. **552/552 tests passing**, 87% coverage maintained. MVP2.0.0 / 2.0.0a / 2.0.1 (language policy) / 2.0.2 (Discuss-tab citations) / 2.0.3 (tab switching) / 2.0.4 (per-step timing) / 2.0.5 (bulk-upload 400 fix) / 2.0.6 (logout fix) / 2.0.7 (distil smart picks removed; turbo renamed) / 2.0.8 (collapsible section-videos panel on video page; same-day amendment removed the per-step timing badge from the panel — timing still shown on the course page) are all shipped. The original "2.0.2 (i18n, mindmap tuning)" was re-scoped to a 2.0.0+ feature. Remaining MVP2.0 work: soft-delete (item 5 in MVP3.0-Status.md), bulk upload still single-process. See §19 for the latest item and §20 for the next-up plan, and §22.1 for the 2.0.8 amendment.
 
 

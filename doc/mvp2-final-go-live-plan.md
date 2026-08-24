@@ -308,8 +308,11 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 | | (e) Test: admin pastes URL → video appears → FREE user can browse | End-to-end works |
 | **Day 3** | (a) Add `yt-dlp` metadata-only fetcher + YouTube auto-captions fetch | Transcript comes from YouTube |
 | | (b) Background transcribe job using existing `transcribe_with_backend` | Whisper fallback ready |
-| **Day 4** | (a) LiteLLM proxy setup + rate limit per user + budget | LLM middleware live |
+| | **(c) Add 2 admin endpoints for caption management** (Day 3 actual shipped — see commit `26a6bd6`) | `POST /api/admin/videos/{id}/captions/retry`, `GET /api/admin/videos/{id}/captions/status` |
+| | **(d) Smart retry: fall back without language preference if YouTube 429s** (Day 3 actual — `.*` pattern trips rate limit) | Ollama quota tracker ready to extend |
+| **Day 4** | (a) LiteLLM proxy setup + rate limit per user + quota tracker | LLM middleware live |
 | | (b) Point `app.services.llm` at LiteLLM (config change) | All LLM calls rate-limited |
+| | **(c) Tier-based provider chains** (new — captured 2026-08-24): FREE→[groq], PAID/ADMIN→[ollama,openai] | Free never uses Ollama, Paid never uses Groq |
 | **Day 5** | (a) Add SQLite `events` table + logging helper | Events being recorded |
 | | (b) Simple web dashboard (read SQLite, render table) | First version of dashboard |
 | **Day 6** | (a) gunicorn 4 workers + update `start.sh` | Production-ready server |

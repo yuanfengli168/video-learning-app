@@ -2,33 +2,85 @@
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Goal**: Make this Mac Studio (`Yuanfengs-Mac-Studio.local`) a 24/7 production server for video-learning-app.
-> **Last updated**: 2026-08-18
+> **Last updated**: 2026-08-24
 
 ---
 
-## ✅ Done (committed or applied locally)
+## 🎯 Current state
 
-| # | Item | How | Commit / Note |
-|---|---|---|---|
-| 1 | Created branch `mvp2-production-patches` from `main` | `git checkout -b mvp2-production-patches` | Local only, not pushed |
-| 2 | Installed `ffmpeg` (Homebrew 9.0.1) | `brew install ffmpeg` | System-wide; needed by 3 failing tests + production transcoding |
-| 3 | Fixed 3 ffmpeg tests in `tests/test_webm_to_mp4_plugin.py` | Side-effect of ffmpeg install (no code change) | Tests that patched `subprocess.run` now reach the patch because `is_ffmpeg_available()` returns True |
-| 4 | Fixed `tests/test_whisper_picker.py::test_transcribe_endpoint_accepts_smart_turbo_pick` (missing monkeypatch) | Added `monkeypatch` fixture + injected dummy `mlx_whisper` module + mocked `platform.machine` | **`78a94bc`** |
-| 5 | Full test suite green: **625 passed, 9 skipped, 0 failed** | `./scripts/test.sh` | Was 620 passed + 4 failed |
+- **Tests**: 1017 passing, 0 failing, 89% coverage
+- **Branch**: ahead of `main` (pivot to admin-curated YouTube catalog)
+- **Feature status**: Day 1-3 shipped (Day 4 in progress)
 
 ---
 
-## ❌ Not done (TODO for this branch)
+## ✅ Done (committed)
+
+| # | Item | Commit |
+|---|---|---|
+| 1 | Branch `mvp2-production-patches` from `main` | initial |
+| 2 | Installed `ffmpeg` (Homebrew 9.0.1) + fixed 3 ffmpeg tests | local |
+| 3 | Fixed `tests/test_whisper_picker.py::test_transcribe_endpoint_accepts_smart_turbo_pick` | **`78a94bc`** |
+| 4 | (NOBUG) Update docs to reflect Day 2A completion + new helper script | `83e2d6f` |
+| 5 | **Day 1**: DB migrations + `app/auth/roles.py` (UserRole, VideoVisibility, Capability, ROLE_CAPABILITIES) + `app/auth/admin.py` (`require_capability`) + `users` table auto-create on first login | `14ce91d` + later commits |
+| 6 | **Day 2A**: Admin upload form (`/admin/upload`) — URL + title + visibility dropdown (PUBLIC/PAID_ONLY/ADMIN_ONLY). `POST /api/admin/videos/youtube` creates Video row with `status='pending'`, `youtube_id` set | `5e11620` + tests `c1cad7c` |
+| 7 | **Day 2A**: Catalog (`visible_videos_for_user`) excludes legacy uploads without `youtube_id` | `6507437` (NOBUG) |
+| 8 | **Day 2A**: Admin upload form posts via session cookie (not `firebase.auth()` which isn't loaded on that page) | `13c607d` (NOBUG) |
+| 9 | **Day 2B**: YouTube Data API v3 client (`app/services/youtube_api.py`) — `get_video_metadata`, `list_caption_tracks`, parse ISO8601 duration, pick best thumbnail. Custom exceptions | `15d357d` + tests |
+| 10 | **Day 2B**: Wire YouTube API enrichment into admin POST (title, duration, thumbnail, channel, caption_languages JSON). Best-effort — API failure doesn't block admin add. `enrichment_status` field in response | `c1cad7c` + tests |
+| 11 | **Day 2C Topic 1**: Catalog card polish — real YouTube thumbnail, channel name, duration overlay (m:ss format with `set` + `%02d`), course/section badge. Watch page renders YouTube iframe (`youtube-nocookie.com`) for `youtube_id` videos, falls back to `<video>` for legacy | `4e2812f` |
+| 12 | **Day 2C Topic 2**: Admin upload form gets Section picker (`<select>` grouped by `<optgroup>` per Course). New `app/services/section_picker.py` (resolve_section_for_new_video with 3-tier priority: explicit → first alphabetical → auto-create). Cross-admin defense (section_id from another admin's course → 400) | `7a90c88` |
+| 13 | **Day 3**: yt-dlp caption download (`app/services/youtube_captions.py` + `youtube_captions_job.py`). Replaces Whisper for auto-fire path when captions available (1-3s vs 5-15min). VTT parser handles real-world quirks. Smart retry logic — falls back without language preference if first attempt hits YouTube's 429. POST `/api/admin/videos/{id}/captions/retry` + GET `/api/admin/videos/{id}/captions/status` endpoints | `26a6bd6` |
+| 14 | (NOBUG doc) `doc/public-repo-readiness.md` — 6 hardening recommendations for public GitHub repo | `833387e` |
+
+---
+
+## 📅 In progress (Day 4+ — feature work)
+
+| # | Item | Plan |
+|---|---|---|
+| 15 | **Day 4 (next)**: LiteLLM abstraction — replace direct Ollama httpx calls. Per-user rate limiting (tier-based: FREE 5/min/30day, PAID 15/min/200day, ADMIN 60/min/1000day). Tier-based provider chains: FREE→[groq], PAID/ADMIN→[ollama,openai]. Ollama quota tracker (weekly 3000, 5h 800) — auto-fallback when near cap | 6 incremental commits, starting with adding litellm dep |
+| 16 | **Day 5**: SQLite `events` table + logging helper + simple web dashboard | per go-live plan |
+| 17 | **Day 6**: gunicorn 4 workers + update `start.sh` + Cloudflare Tunnel | per go-live plan |
+| 18 | **Day 8**: Replace `<video>` with YouTube embed iframe + jump-to-time via IFrame API (already partial via Day 2C) | per go-live plan |
+| 19 | **Day 9-13**: Test with 3 real YouTube videos, security hardening, soft launch, bug bash, polish, docs | per go-live plan |
+| 20 | **Day 14**: LAUNCH | 🎯 |
+
+---
+
+## ❌ Not done (TODO for this branch — operational, NOT features)
 
 | # | Item | What's needed | Who | Blocking? |
 |---|---|---|---|---|
-| 6 | **Login AuthKit buttons** | Create `.env` from `.env.example` and fill in the 6 Firebase fields. Restart server. | **User** | Yes — login is broken until `.env` is filled |
-| 7 | **LaunchDaemon install** | Run the `sudo tee ...` block to write `/Library/LaunchDaemons/com.video-learning-app.plist` (improved version with `KeepAlive=true` + proper logs) | **User** (needs sudo) | Yes — 24/7 auto-restart won't work |
-| 8 | **Reboot test** | `sudo shutdown -r now`, wait 2-3 min, reconnect via AnyDesk, run `curl http://localhost:8000/api/health` | **User** | Verifies item 7 works |
-| 9 | **Push branch to origin** | `git push -u origin mvp2-production-patches` | **AI (me)** | No — local commit is preserved |
-| 10 | **Cloudflare Tunnel** (NEW — for testers) | Install cloudflared, create tunnel, run as service so testers can reach the app | **User** | Yes — testers can't reach Mac Studio without this |
-| 11 | **Test from phone on cellular** | Open the tunnel URL on phone (NOT wifi), verify login + a video upload works end-to-end | **User** | Verifies item 10 works |
-| 12 | **Recruit 10 free testers** | Post on LinkedIn + Twitter with the tunnel URL, ask for feedback | **User** | Goes live |
+| 21 | **Login AuthKit buttons** | Create `.env` from `.env.example` and fill in the 6 Firebase fields. Restart server. | **User** | Yes — login is broken until `.env` is filled |
+| 22 | **LaunchDaemon install** | Run the `sudo tee ...` block to write `/Library/LaunchDaemons/com.video-learning-app.plist` (improved version with `KeepAlive=true` + proper logs) | **User** (needs sudo) | Yes — 24/7 auto-restart won't work |
+| 23 | **Reboot test** | `sudo shutdown -r now`, wait 2-3 min, reconnect via AnyDesk, run `curl http://localhost:8000/api/health` | **User** | Verifies item 22 works |
+| 24 | **Cloudflare Tunnel** (NEW — for testers) | Install cloudflared, create tunnel, run as service so testers can reach the app | **User** | Yes — testers can't reach Mac Studio without this |
+| 25 | **Test from phone on cellular** | Open the tunnel URL on phone (NOT wifi), verify login + add video + chat works end-to-end | **User** | Verifies item 24 works |
+| 26 | **Recruit 10 free testers** | Post on LinkedIn + Twitter with the tunnel URL, ask for feedback | **User** | Goes live |
+| 27 | **Cookie `Secure` flag env-driven** | Per `doc/public-repo-readiness.md` recommendation #1 (5 min) | AI (me) | No (defensive) |
+| 28 | **`DB_PATH` env var override** | Per `doc/public-repo-readiness.md` recommendation #2 (15 min) | AI (me) | No (defensive) |
+| 29 | **Rate-limit `/api/admin/*`** | Per `doc/public-repo-readiness.md` recommendation #3 (45 min, before launch) | AI (me) | Yes (Day 3 added outbound calls) |
+| 30 | **Dependabot on GitHub** | Enable via GitHub web UI → Settings → Security → Dependabot. Free for public repos | User (2 clicks) | No |
+| 31 | **gitleaks GitHub Action** | Per `doc/public-repo-readiness.md` recommendation #6 (20 min, optional) | AI (me) | No |
+
+---
+
+## 💡 Pricing model notes (Day 4 planning, captured 2026-08-24)
+
+User's insight on Ollama Pro economics — a single $20/month Ollama Pro account can support ~16 concurrent PAID users at peak:
+
+- **Per-paid-user rate limit**: 50 req / 5h, 150 req / week
+- **Math**: Ollama Pro gives 800 req / 5h, 3000 req / week
+- **16 paid users × 50/5h = 800/5h** (the cap)
+- **16 paid users × 150/week = 2400/week** (well under 3000)
+- **Tier-based chains**:
+  - FREE → `[groq]` only (Groq is "free" but less powerful)
+  - PAID/ADMIN → `[ollama, openai]` (Ollama = powerful default, OpenAI = paid fallback)
+  - **Never** send PAID users to Groq (less powerful, wrong tier)
+- **Quota tracker**: Auto-fallback from Ollama to OpenAI when 90% of weekly or 5h cap hit
+
+This is the core business logic Day 4 implements. Future paid-tier discussions: see `doc/mvp2-final-go-live-plan.md` §"v1.1 (after launch)" for tier 2/3 ideas (currently 1 paid tier at $14.99/mo).
 
 ---
 
@@ -47,15 +99,15 @@
 
 ```
 $ ./scripts/test.sh
-================= 625 passed, 9 skipped, 115 warnings in 8.75s =================
+================= 1017 passed, 13 skipped, 561 warnings in 15.38s =================
 
-Coverage: ~89% (was ~88% before the fix)
+Coverage: 89% (network code naturally hard to cover without integration tests)
 ```
 
 **Branch state**:
-- Local commits on `mvp2-production-patches`: **1** (`78a94bc`)
-- Files changed: `tests/test_whisper_picker.py` (+18 / -1)
-- Pushed to origin: **No** (waiting for your go-ahead)
+- Local commits on `mvp2-production-patches`: **14**
+- Files changed (cumulative this branch): 30+
+- Pushed to origin: **Yes** — `833387e` is HEAD
 
 ---
 

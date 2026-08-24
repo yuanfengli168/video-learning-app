@@ -1146,3 +1146,42 @@ an existing if/else).
 - **Total: ~250 lines of code changed, 0 new tests** (the existing 17 plugin tests still pass; the 633-test suite is green).
 
 [2.1.0.4]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.3..HEAD
+
+## [2.2.0] - 2026-08-24 — MVP2.0 Production Patches: pivot to admin-curated YouTube catalog (in progress)
+
+> **Branch**: `mvp2-production-patches` (based on `main`)
+> **Scope**: Convert this Mac Studio into a 24/7 production server for an admin-curated YouTube catalog. Users no longer upload videos — admins paste YouTube URLs.
+> **Tests**: 1017 passing, 89% coverage (was 633 / 92% before this branch)
+> **Versions shipped on this branch**: 14 commits ahead of `main`, all pushed
+
+**Note:** Versions below are unnumbered in-flux commits on `mvp2-production-patches`, listed in chronological order. Final version number (e.g. `2.2.0`) will be assigned when this branch merges to `main`.
+
+### ✨ Features
+
+- **Role-based access control (RBAC).** New `app/auth/roles.py` with `UserRole` (ADMIN/PAID/FREE), `VideoVisibility` (PUBLIC/PAID_ONLY/ADMIN_ONLY), `Capability` (CURATE_CATALOG, VIEW_ADMIN_DASHBOARD, etc.), and `ROLE_CAPABILITIES` mapping. `app/auth/admin.py` exposes `require_capability(...)` FastAPI dependency. Auto-creates `users` row on first login with default role=FREE.
+- **Admin upload form** (`/admin/upload`) — paste any YouTube URL, set title + visibility + section. New `POST /api/admin/videos/youtube` endpoint extracts video ID, fetches YouTube Data API v3 metadata, creates Video row with `status='pending'`.
+- **Admin Section picker** — `<select>` grouped by `<optgroup>` per Course. New `app/services/section_picker.py` (3-tier priority: explicit → first alphabetical → auto-create "Default Catalog"/"Uncategorized"). Cross-admin defense: section_id from another admin's course → 400.
+- **Catalog** — `visible_videos_for_user` excludes legacy uploads (no `youtube_id`) and respects visibility tier. Cards show real YouTube thumbnail, channel name, duration overlay (m:ss), course/section badge.
+- **Watch page** — renders YouTube iframe (`youtube-nocookie.com`) for `youtube_id` videos; falls back to HTML5 `<video>` for legacy uploads. IFrame API hooks for future jump-to-time.
+- **yt-dlp caption download** (`app/services/youtube_captions.py` + `youtube_captions_job.py`) — replaces Whisper for the auto-fire path when YouTube captions are available (1-3s vs 5-15min). Custom VTT parser handles real-world quirks (NOTE blocks, `<c>` tags, multi-line cues, SRT comma decimals). Smart retry: falls back without language preference if first attempt hits YouTube's 429 rate limit. New endpoints: `POST /api/admin/videos/{id}/captions/retry`, `GET /api/admin/videos/{id}/captions/status`.
+
+### 🐛 Bug fixes
+
+- **Admin upload form posts via session cookie** instead of `firebase.auth()` (which wasn't loaded on that page).
+- **Catalog excludes legacy uploads** without `youtube_id` (Day 1 default visibility 0 had surfaced them).
+
+### 📚 Docs
+
+- **`doc/public-repo-readiness.md`** (new) — 6 hardening recommendations for publishing this branch on GitHub: cookie `Secure` env-driven, `DB_PATH` env override, rate-limiting on `/api/admin/*`, Dependabot, gitleaks Action.
+- **`doc/security-hardening-mvp2.md`** (new) — 10 attack vectors, 7 mitigations applied, 7 recommended additions, threat model + incident response checklist.
+- **Doc freshness refresh** — `Readme.md`, `doc/MVP2.0-Status.md`, `doc/mvp2-final-go-live-plan.md`, `doc/mvp2-production-patches-status.md` updated to reflect 1017 tests + Day 1-3 state.
+
+### 🧪 Tests
+
+- **+394 tests** (633 → 1017): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker).
+- **89% coverage** maintained (network code naturally hard to cover without integration tests; we mock at the worker boundary).
+
+### 📋 In progress
+
+- **Day 4**: LiteLLM abstraction + tier-based provider chains + per-user rate limiting. See `doc/mvp2-final-go-live-plan.md`.
+- **Days 5-14**: Events table, gunicorn, Cloudflare Tunnel, security hardening, soft launch, public beta.

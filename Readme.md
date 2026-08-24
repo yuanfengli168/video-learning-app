@@ -1,12 +1,12 @@
 # Video Learning App
 
-![MVP2.1.0.2 Status](https://img.shields.io/badge/MVP2.1.0.2-shipped-brightgreen) ![Tests](https://img.shields.io/badge/tests-623%20passing-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Jinja2%20%7C%20SQLite%20%7C%20Ollama-blue) ![Branch](https://img.shields.io/badge/branch-MVP2.1-yellow)
+![MVP2.0 Production Patches](https://img.shields.io/badge/MVP2.0%20Production%20Patches-in%20progress-yellow) ![Tests](https://img.shields.io/badge/tests-1017%20passing-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-89%25-yellowgreen) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Jinja2%20%7C%20SQLite%20%7C%20Ollama%20%7C%20LiteLLM-blue) ![Branch](https://img.shields.io/badge/branch-mvp2--production--patches-yellow)
 
-An open-source, AI-powered web application designed to help users learn from online video classes. The app transcribes local video files, generates interactive learning materials (summaries, mindmaps, quizzes, flashcards), and provides a ChatGPT-style interface to chat with an AI about real-world applications of the concepts.
+An open-source, AI-powered web application designed to help users learn from curated YouTube videos. Admins curate a hand-picked catalog; users watch, chat, and use auto-generated learning materials (summaries, mindmaps, quizzes, flashcards). The app handles captions via YouTube's transcript API (via yt-dlp), falls back to local Whisper when needed, and uses a multi-provider LLM setup (Ollama + Groq + OpenAI) via LiteLLM.
 
 > **MVP1 is finished** ([scorecard](doc/MVP1.0-successfullyFinished.md)). **MVP2.0 is finished** ([scorecard](doc/MVP2.0-successfullyFinished.md)) on `main` — 9 versions shipped (2.0.0 → 2.0.8 + same-day 2.0.8 amendment), 552/552 tests passing, 92% coverage.
 >
-> **MVP2.1 is in progress** on the `MVP2.1` branch — 4 versions shipped so far: 2.1.0 (Plugin Tools tab + WebM→MP4), 2.1.0.1 (Tools tab UX fixes + Plugin worker pool, limit=3), 2.1.0.2 (backlog bug fixes: `Video.duration` schema, `file_size` not updated on swap, hardcoded `Content-Type: video/mp4`). 623/623 tests passing, 92% coverage. See [`doc/MVP2.1-Status.md`](doc/MVP2.1-Status.md) for the full per-version history, and [`doc/MVP2.1-all.md`](doc/MVP2.1-all.md) for what's next.
+> **MVP2.0 production-patches is in progress** on the `mvp2-production-patches` branch — pivots from user-uploaded videos to admin-curated YouTube catalog with role-based access (ADMIN/PAID/FREE). Day 1-3 shipped: role system, YouTube Data API enrichment, yt-dlp caption download. Day 4+ planned: LiteLLM abstraction, rate limiting, observability. **1017 tests passing, 89% coverage**. See [`doc/mvp2-production-patches-status.md`](doc/mvp2-production-patches-status.md) for current branch state, [`doc/mvp2-final-go-live-plan.md`](doc/mvp2-final-go-live-plan.md) for the 14-day plan.
 
 ## Quick Commands
 ```
