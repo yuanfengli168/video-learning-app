@@ -1151,8 +1151,8 @@ an existing if/else).
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Scope**: Convert this Mac Studio into a 24/7 production server for an admin-curated YouTube catalog. Users no longer upload videos — admins paste YouTube URLs.
-> **Tests**: 1017 passing, 89% coverage (was 633 / 92% before this branch)
-> **Versions shipped on this branch**: 14 commits ahead of `main`, all pushed
+> **Tests**: 1073 passing, 89% coverage (was 633 / 92% before this branch)
+> **Versions shipped on this branch**: 27 commits ahead of `main`, all pushed
 
 **Note:** Versions below are unnumbered in-flux commits on `mvp2-production-patches`, listed in chronological order. Final version number (e.g. `2.2.0`) will be assigned when this branch merges to `main`.
 
@@ -1164,6 +1164,8 @@ an existing if/else).
 - **Catalog** — `visible_videos_for_user` excludes legacy uploads (no `youtube_id`) and respects visibility tier. Cards show real YouTube thumbnail, channel name, duration overlay (m:ss), course/section badge.
 - **Watch page** — renders YouTube iframe (`youtube-nocookie.com`) for `youtube_id` videos; falls back to HTML5 `<video>` for legacy uploads. IFrame API hooks for future jump-to-time.
 - **yt-dlp caption download** (`app/services/youtube_captions.py` + `youtube_captions_job.py`) — replaces Whisper for the auto-fire path when YouTube captions are available (1-3s vs 5-15min). Custom VTT parser handles real-world quirks (NOTE blocks, `<c>` tags, multi-line cues, SRT comma decimals). Smart retry: falls back without language preference if first attempt hits YouTube's 429 rate limit. New endpoints: `POST /api/admin/videos/{id}/captions/retry`, `GET /api/admin/videos/{id}/captions/status`.
+- **Day 4 (LiteLLM migration, 7 commits)** — Replaced direct Ollama httpx calls with LiteLLM. Per-tier rate limits (FREE 5/min/30day, PAID 15/min/200day, ADMIN 60/min/1000day). Tier-based provider chains: FREE→[groq], PAID/ADMIN→[ollama, openai] — Free users never touch Ollama; Paid users never touch Groq. Ollama Pro quota tracker (5h 800 + weekly 3000, auto-fallback at 90%). New endpoints: `GET /api/admin/llm/budget` (JSON) + `GET /admin/budget` (HTML observability page with live quota bars + per-tier chains + verification recipe). Sidebar nav link "LLM Budget" added.
+- **Day 5 (Structured audit log, 5 commits)** — New `events` SQLite table (id, ts, level, source, message, user_id, video_id, context_json) with 6 indexes. `app/utils/events.py` → `log_event()` helper that never raises (broken audit log must never break a real request) + mirrors to stdlib logger. Wired into `youtube_captions_job` (7 event types: invalid JSON, retry, success, two error paths in main worker, retry worker crash) and `llm_providers` (5 event types via `_audit()` short-session helper: rate-limit, Ollama skip, success, per-provider fail, all-providers-fail). New `GET /admin/events?level=&source=&video_id=&page=` observability page with filterable dropdowns, level-colored badges, collapsible `context_json`, prev/next pagination. Sidebar nav link "Audit Log" added.
 
 ### 🐛 Bug fixes
 
@@ -1178,10 +1180,10 @@ an existing if/else).
 
 ### 🧪 Tests
 
-- **+394 tests** (633 → 1017): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker).
+- **+440 tests** (633 → 1073): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page).
 - **89% coverage** maintained (network code naturally hard to cover without integration tests; we mock at the worker boundary).
 
 ### 📋 In progress
 
-- **Day 4**: LiteLLM abstraction + tier-based provider chains + per-user rate limiting. See `doc/mvp2-final-go-live-plan.md`.
-- **Days 5-14**: Events table, gunicorn, Cloudflare Tunnel, security hardening, soft launch, public beta.
+- **Day 6**: gunicorn 4 workers + `start.sh` update + Cloudflare Tunnel. See `doc/mvp2-final-go-live-plan.md`.
+- **Days 7-14**: Buffer, IFrame API, real-video testing, security hardening, soft launch, public beta.

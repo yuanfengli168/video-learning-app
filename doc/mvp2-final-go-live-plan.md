@@ -314,7 +314,9 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 | | (b) Point `app.services.llm` at LiteLLM (config change) | All LLM calls rate-limited |
 | | **(c) Tier-based provider chains** (new — captured 2026-08-24): FREE→[groq], PAID/ADMIN→[ollama,openai] | Free never uses Ollama, Paid never uses Groq |
 | **Day 5** | (a) Add SQLite `events` table + logging helper | Events being recorded |
+| | **(a) Actual shipped** (5 commits `23cdaa3`…`be44c87`): `Event` model with 6 indexes; `app/utils/events.py` with `log_event()` / `recent_events()` / `distinct_sources()`; `log_event()` wired into `youtube_captions_job` (7 event types) and `llm_providers` (5 event types via `_audit()` short-session helper). `log_event()` never raises + mirrors to stdlib logger so existing log files keep working. | Verified live — `/admin/events` renders 3 seeded events |
 | | (b) Simple web dashboard (read SQLite, render table) | First version of dashboard |
+| | **(b) Actual shipped**: `GET /admin/events?level=&source=&video_id=&page=` with sidebar nav link. Tailwind table, level badges (red/yellow/blue/gray), collapsible `context_json` via `<details>`, filterable dropdowns, prev/next pagination (50/page) | Verified live |
 | **Day 6** | (a) gunicorn 4 workers + update `start.sh` | Production-ready server |
 | | (b) Cloudflare Tunnel setup + config | Public URL working |
 | **Day 7** | Buffer day (bugs, polish, testing) | Stable build |
