@@ -320,6 +320,10 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 | **Day 5 hotfix** | (a) Replace dead Groq model `llama-3.3-70b-versatile` (deprecated Aug 2026) with `groq/compound`. `commit 718bdbc` | Verified live: 7k-token transcript → HTTP 200 in 1.4s |
 | | (b) Route chat through LiteLLM wrapper (`chat_with_fallback()`). Chat was bypassing rate-limit / audit-log / per-tier chain entirely. `commit 111f1f5` + tests `40e920f` | Verified: chat now picks `groq/compound` for FREE users, `ollama/openai` for PAID/ADMIN |
 | | (c) Lower `rate_limit_free_per_day` 30 → 15 (Groq free tier is 250 req/day TOTAL per API key, not per user). `commit 40ac3ee` | Math: 10 free users × 15 = 150/day < 250/day cap |
+| **Day 5 hotfix2** | (a) Add `user_can_access_video(role, visibility)` helper — the right check for admin-curated videos (was: pre-Day-1 `course.user_id == uid` blocked every non-owner). `commit fc73f78` | 17 new tests in `test_roles.py` (full role×visibility matrix) |
+| | (b) Replace broken ownership check in 5 routes: 2 chat (`create_chat_session`, `create_video_chat_session`) + 1 asset-fetch (`get_asset`) + 2 transcript-fetch (`get_transcript`, `export_transcript`). `commits 155ee48` + `1fcf75f` | lyf99.2022 (FREE) can now chat + read materials on admin-curated PUBLIC videos |
+| | (c) JS bug fix: chat input is now re-enabled after an error so the user can retry without reloading. `commit c205f49` | Defense in depth — even if a future endpoint errors, input stays usable |
+| | (d) `app/services/video_status.py` reconciles `status='error'` → `'ready'` when all 5 required assets exist. Wired into `video_view` (one call per page load, no-op unless reconciling). `commit b468d39` | Reconciled 1 video in production (the one lyf99.2022 was looking at) |
 | **Day 6** | (a) gunicorn 4 workers + update `start.sh` | Production-ready server |
 | | (b) Cloudflare Tunnel setup + config | Public URL working |
 | **Day 7** | Buffer day (bugs, polish, testing) | Stable build |
