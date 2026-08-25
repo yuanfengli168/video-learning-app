@@ -83,7 +83,16 @@ class Settings(BaseSettings):
 
     # Per-provider default models. Picked for free-tier value (groq)
     # and quality (ollama glm-5.2, openai gpt-4o-mini).
-    llm_model_groq: str = "llama-3.3-70b-versatile"
+    #
+    # Why groq/compound (not llama-3.3-70b-versatile which Day 4 used):
+    # Groq deprecated all direct Llama models in Aug 2026. The current
+    # free text+json options are groq/compound, groq/compound-mini, and
+    # allam-2-7b (too small at 4k ctx). 'groq/compound' is Groq's
+    # flagship reasoning router — it auto-balances across available
+    # sub-models (gpt-oss-120b, etc.) and is the strongest free option
+    # for long transcripts. See doc/mvp2-final-go-live-plan.md §Groq
+    # strategy for full reasoning.
+    llm_model_groq: str = "groq/compound"
     llm_model_ollama: str = "glm-5.2:cloud"
     llm_model_openai: str = "gpt-4o-mini"
 
@@ -154,7 +163,7 @@ class Settings(BaseSettings):
         """Return the LiteLLM model name for a provider.
 
         Examples:
-            get_model_for_provider("groq") -> "llama-3.3-70b-versatile"
+            get_model_for_provider("groq") -> "groq/compound"
             get_model_for_provider("ollama") -> "glm-5.2:cloud"
             get_model_for_provider("openai") -> "gpt-4o-mini"
         """
