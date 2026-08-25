@@ -373,3 +373,51 @@ def test_generate_regenerates_overwrite(client: TestClient):
         )
     assert response.status_code == 200
     assert "New Summary" in response.json()["data"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 5 hotfix2: visibility-based access (was: course.user_id == uid)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_get_asset_allows_non_owner_for_public_video(client: TestClient):
+    """Day 5 hotfix2: a different FREE user can fetch a PUBLIC video's
+    materials. Pre-fix this returned 403 'Not your video' because the
+    ownership check only allowed the course owner to read materials."""
+    video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "user-other", "email": "other@x.com"},
+    ):
+        response = client.get(
+            f"/api/generate/{video_id}/assets/summary",
+            headers={"Authorization": "Bearer fake-user-other"},
+        )
+    assert response.status_code == 200
+    assert "summary" in response.json()["type"]
+
+
+def test_get_asset_blocks_non_owner_for_admin_only_video(client: TestClient):
+    """A non-admin FREE user is still blocked from ADMIN_ONLY videos."""
+    video_id = _setup_video_with_transcript(client)
+    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+
+    # Flip the video to ADMIN_ONLY after setup
+    from app.database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    db.execute(text("UPDATE videos SET visibility=2 WHERE id=:id"), {"id": video_id})
+    db.commit()
+    db.close()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "user-other", "email": "other@x.com"},
+    ):
+        response = client.get(
+            f"/api/generate/{video_id}/assets/summary",
+            headers={"Authorization": "Bearer fake-user-other"},
+        )
+    assert response.status_code == 403

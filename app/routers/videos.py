@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
+from app.auth.roles import user_can_access_video
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.jobs import (
@@ -859,11 +860,13 @@ async def get_transcript(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Verify ownership
-    section = db.get(Section, video.section_id)
-    course = db.get(Course, section.course_id)
-    if course.user_id != user.get("uid", ""):
-        raise HTTPException(status_code=403, detail="Not your video")
+    # Day 5 hotfix2: visibility-tier check.
+    if not user_can_access_video(user.get("role"), video.visibility):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to read this video's transcript "
+            f"(visibility={video.visibility}, your role={user.get('role')})",
+        )
 
     transcript_asset = db.execute(
         select(Asset).where(
@@ -918,11 +921,13 @@ async def export_transcript(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Verify ownership
-    section = db.get(Section, video.section_id)
-    course = db.get(Course, section.course_id)
-    if course.user_id != user.get("uid", ""):
-        raise HTTPException(status_code=403, detail="Not your video")
+    # Day 5 hotfix2: visibility-tier check.
+    if not user_can_access_video(user.get("role"), video.visibility):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to export this video's transcript "
+            f"(visibility={video.visibility}, your role={user.get('role')})",
+        )
 
     transcript_asset = db.execute(
         select(Asset).where(
