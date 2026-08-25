@@ -317,6 +317,9 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 | | **(a) Actual shipped** (5 commits `23cdaa3`…`be44c87`): `Event` model with 6 indexes; `app/utils/events.py` with `log_event()` / `recent_events()` / `distinct_sources()`; `log_event()` wired into `youtube_captions_job` (7 event types) and `llm_providers` (5 event types via `_audit()` short-session helper). `log_event()` never raises + mirrors to stdlib logger so existing log files keep working. | Verified live — `/admin/events` renders 3 seeded events |
 | | (b) Simple web dashboard (read SQLite, render table) | First version of dashboard |
 | | **(b) Actual shipped**: `GET /admin/events?level=&source=&video_id=&page=` with sidebar nav link. Tailwind table, level badges (red/yellow/blue/gray), collapsible `context_json` via `<details>`, filterable dropdowns, prev/next pagination (50/page) | Verified live |
+| **Day 5 hotfix** | (a) Replace dead Groq model `llama-3.3-70b-versatile` (deprecated Aug 2026) with `groq/compound`. `commit 718bdbc` | Verified live: 7k-token transcript → HTTP 200 in 1.4s |
+| | (b) Route chat through LiteLLM wrapper (`chat_with_fallback()`). Chat was bypassing rate-limit / audit-log / per-tier chain entirely. `commit 111f1f5` + tests `40e920f` | Verified: chat now picks `groq/compound` for FREE users, `ollama/openai` for PAID/ADMIN |
+| | (c) Lower `rate_limit_free_per_day` 30 → 15 (Groq free tier is 250 req/day TOTAL per API key, not per user). `commit 40ac3ee` | Math: 10 free users × 15 = 150/day < 250/day cap |
 | **Day 6** | (a) gunicorn 4 workers + update `start.sh` | Production-ready server |
 | | (b) Cloudflare Tunnel setup + config | Public URL working |
 | **Day 7** | Buffer day (bugs, polish, testing) | Stable build |
@@ -390,17 +393,29 @@ Full design lives in `doc/mvp2-llm-architecture.md`. Quick summary:
 
 | Tier | Provider | Model | Chats/day | Cost |
 |---|---|---|---|---|
-| **Free** | Groq | `openai/gpt-oss-120b` (primary) → `openai/gpt-oss-20b` (fallback) | 30/day | **$0** (Groq free tier) |
+| **Free** | Groq | `groq/compound` (router; auto-picks free sub-model) | 15/day | **$0** (Groq free tier) |
 | **Beta invite** | Groq | same, higher RPD limit via per-user key | 100/day | **$0** |
 | **Admin (testing)** | Ollama Pro | `glm-5.2:cloud` | unlimited | $20/mo Pro |
 | **Admin (production)** | Local on MBP | `qwen3:14b` | unlimited | **$0** (electricity) |
 
-**Material generation (admin only)**: `groq/qwen/qwen3.6-27b` (better JSON reliability, free).
+**Material generation (admin only)**: same `groq/compound` (used for admin summary generation too; switching provider just for material gen added complexity without measurable quality win).
 
 ### Why Groq for free tier?
-- **Free tier** = 30 RPM, 1K RPD, 8K TPM, 200K TPD per organization
+- **Free tier** = 30 RPM, **250 RPD** per API key (verified 2026-08-25), 70k TPM, 200K TPD per organization
 - **Fast inference** (Groq LPU) = <1 sec first token = great UX
 - **Cached tokens don't count** → our semantic cache saves quota for free
+
+### Why `groq/compound` (not a direct model)?
+- Groq deprecated all direct Llama models in Aug 2026. `groq/compound` is their flagship free reasoning router; it auto-picks from currently-available sub-models (gpt-oss-120b, etc.) and stays free as Groq's lineup changes.
+- We tested live: HTTP 200 in 1.4s for a 7k-token transcript, JSON mode works, no 404.
+- `compound-mini` is the faster cheaper sibling; we pick `compound` because accuracy > speed for 2hr transcripts.
+
+### Free tier cap math (Day 5 hotfix)
+- Groq free tier: **250 req/day TOTAL** per API key (shared by all FREE users)
+- Per-user cap lowered from 30 → 15/day (config: `rate_limit_free_per_day`)
+- 10 free users × 15 = 150/day peak → 100 req/day headroom under Groq's global cap
+- Conservative enough that we can soft-launch without hitting the global rate limit
+- **TODO (next MVP)**: add `GroqQuotaTracker` mirroring `OllamaQuotaTracker` so we can dynamically raise the per-user cap when global headroom remains, and auto-fallback when near cap
 
 ### Disclaimer (UI text for free users)
 

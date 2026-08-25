@@ -2,15 +2,15 @@
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Goal**: Make this Mac Studio (`Yuanfengs-Mac-Studio.local`) a 24/7 production server for video-learning-app.
-> **Last updated**: 2026-08-24
+> **Last updated**: 2026-08-25
 
 ---
 
 ## 🎯 Current state
 
-- **Tests**: 1073 passing, 0 failing, 89% coverage
+- **Tests**: 1080 passing, 0 failing, 89% coverage
 - **Branch**: ahead of `main` (pivot to admin-curated YouTube catalog)
-- **Feature status**: Day 1-5 shipped (Day 6 next)
+- **Feature status**: Day 1-5 shipped + Day 5 hotfix (Groq model swap + chat routing + rate-limit math)
 
 ---
 
@@ -33,8 +33,7 @@
 | 13 | **Day 3**: yt-dlp caption download (`app/services/youtube_captions.py` + `youtube_captions_job.py`). Replaces Whisper for auto-fire path when captions available (1-3s vs 5-15min). VTT parser handles real-world quirks. Smart retry logic — falls back without language preference if first attempt hits YouTube's 429. POST `/api/admin/videos/{id}/captions/retry` + GET `/api/admin/videos/{id}/captions/status` endpoints | `26a6bd6` |
 | 14 | (NOBUG doc) `doc/public-repo-readiness.md` — 6 hardening recommendations for public GitHub repo | `833387e` |
 | 15 | **Day 4 (7 commits)**: LiteLLM abstraction. Per-tier rate limits (FREE 5/min/30day, PAID 15/min/200day, ADMIN 60/min/1000day). Tier-based provider chains (FREE→[groq], PAID/ADMIN→[ollama,openai]). Ollama quota tracker (weekly 3000, 5h 800, auto-fallback at 90%). `GET /api/admin/llm/budget` endpoint + `/admin/budget` observability page | `e12f523`…`85ace1c` |
-| 16 | **Day 5 (5 commits)**: Structured audit log. New `events` table (id, ts, level, source, message, user_id, video_id, context_json). `app/utils/events.py` → `log_event()` helper (never raises; mirrors to stdlib logger). Wired into `youtube_captions_job` (7 event types) and `llm_providers` (5 event types via `_audit()` short-session helper). `GET /admin/events?level=&source=&video_id=&page=` observability page with filters, badges, collapsible context | `23cdaa3`…`be44c87` |
-
+| 16 | **Day 5 (5 commits)**: Structured audit log. New `events` table (id, ts, level, source, message, user_id, video_id, context_json). `app/utils/events.py` → `log_event()` helper (never raises; mirrors to stdlib logger). Wired into `youtube_captions_job` (7 event types) and `llm_providers` (5 event types via `_audit()` short-session helper). `GET /admin/events?level=&source=&video_id=&page=` observability page with filters, badges, collapsible context | `23cdaa3`…`be44c87` || 17 | **Day 5 hotfix (4 commits)**: (a) Replace dead Groq model `llama-3.3-70b-versatile` (deprecated Aug 2026) with `groq/compound`. (b) Route chat through LiteLLM wrapper `chat_with_fallback()` — was bypassing rate-limit + audit-log + per-tier chain. (c) New `tests/test_chat_with_fallback.py` (7 tests). (d) Lower `rate_limit_free_per_day` 30 → 15 (Groq free tier is 250 req/day TOTAL per API key, not per user — math: 10 free users × 15 = 150 < 250) | `718bdbc`…`40ac3ee` |
 ---
 
 ## 📅 In progress (Day 6 — feature work)

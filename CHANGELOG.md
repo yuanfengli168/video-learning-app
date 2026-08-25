@@ -1151,8 +1151,8 @@ an existing if/else).
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Scope**: Convert this Mac Studio into a 24/7 production server for an admin-curated YouTube catalog. Users no longer upload videos — admins paste YouTube URLs.
-> **Tests**: 1073 passing, 89% coverage (was 633 / 92% before this branch)
-> **Versions shipped on this branch**: 27 commits ahead of `main`, all pushed
+> **Tests**: 1080 passing, 89% coverage (was 633 / 92% before this branch)
+> **Versions shipped on this branch**: 31 commits ahead of `main`, all pushed
 
 **Note:** Versions below are unnumbered in-flux commits on `mvp2-production-patches`, listed in chronological order. Final version number (e.g. `2.2.0`) will be assigned when this branch merges to `main`.
 
@@ -1166,6 +1166,7 @@ an existing if/else).
 - **yt-dlp caption download** (`app/services/youtube_captions.py` + `youtube_captions_job.py`) — replaces Whisper for the auto-fire path when YouTube captions are available (1-3s vs 5-15min). Custom VTT parser handles real-world quirks (NOTE blocks, `<c>` tags, multi-line cues, SRT comma decimals). Smart retry: falls back without language preference if first attempt hits YouTube's 429 rate limit. New endpoints: `POST /api/admin/videos/{id}/captions/retry`, `GET /api/admin/videos/{id}/captions/status`.
 - **Day 4 (LiteLLM migration, 7 commits)** — Replaced direct Ollama httpx calls with LiteLLM. Per-tier rate limits (FREE 5/min/30day, PAID 15/min/200day, ADMIN 60/min/1000day). Tier-based provider chains: FREE→[groq], PAID/ADMIN→[ollama, openai] — Free users never touch Ollama; Paid users never touch Groq. Ollama Pro quota tracker (5h 800 + weekly 3000, auto-fallback at 90%). New endpoints: `GET /api/admin/llm/budget` (JSON) + `GET /admin/budget` (HTML observability page with live quota bars + per-tier chains + verification recipe). Sidebar nav link "LLM Budget" added.
 - **Day 5 (Structured audit log, 5 commits)** — New `events` SQLite table (id, ts, level, source, message, user_id, video_id, context_json) with 6 indexes. `app/utils/events.py` → `log_event()` helper that never raises (broken audit log must never break a real request) + mirrors to stdlib logger. Wired into `youtube_captions_job` (7 event types: invalid JSON, retry, success, two error paths in main worker, retry worker crash) and `llm_providers` (5 event types via `_audit()` short-session helper: rate-limit, Ollama skip, success, per-provider fail, all-providers-fail). New `GET /admin/events?level=&source=&video_id=&page=` observability page with filterable dropdowns, level-colored badges, collapsible `context_json`, prev/next pagination. Sidebar nav link "Audit Log" added.
+- **Day 5 hotfix (4 commits)** — Groq deprecated `llama-3.3-70b-versatile` in Aug 2026, breaking all FREE-tier LLM calls (`/admin/events` surfaced the 404). Fixes: (a) `groq/compound` chosen as the new free model — verified live, 1.4s response for 7k tokens, 131k ctx. (b) `chat_with_fallback()` wrapper routes `app/routers/chat.py::send_message` through `call_llm_with_fallback()` so chat now picks the tier chain + rate limit + audit log (was bypassing all three by calling `chat_with_ollama()` directly). (c) Lowered `rate_limit_free_per_day` from 30 → 15 (Groq free tier is 250 req/day TOTAL per API key, not per user). 7 new tests in `tests/test_chat_with_fallback.py`.
 
 ### 🐛 Bug fixes
 
@@ -1180,7 +1181,7 @@ an existing if/else).
 
 ### 🧪 Tests
 
-- **+440 tests** (633 → 1073): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page).
+- **+447 tests** (633 → 1080): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests).
 - **89% coverage** maintained (network code naturally hard to cover without integration tests; we mock at the worker boundary).
 
 ### 📋 In progress
