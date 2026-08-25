@@ -362,12 +362,16 @@ def chat_with_fallback(
             },
         )
 
-    # provider_unavailable — every provider in chain failed
+    # provider_unavailable — every provider in chain failed,
+    # OR an unrecognized status string from a future version of
+    # call_llm_with_fallback (defensive: don't crash on unknown keys).
     raise ChatCallError(
         status_code=503,
         detail={
             "error": "provider_unavailable",
-            "message": result["message"],
+            "message": result.get(
+                "message", f"Unrecognized status from LLM wrapper: {result.get('status')!r}"
+            ),
             "attempts": result.get("attempts", []),
         },
     )
