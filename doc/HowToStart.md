@@ -52,20 +52,26 @@ pip install -r requirements.txt
 This script:
 - checks Ollama is running (starts it if not)
 - activates the venv
-- starts `uvicorn app.main:app --reload` in the **foreground**
-  (you see every request in the terminal)
+- starts **`gunicorn -c gunicorn.conf.py`** (production stack, 4 workers × 2 threads)
+  in the **foreground** — you see the master's boot log and worker stderr
 - tees logs to `logs/server.log` as well
 - Press `Ctrl-C` to stop
 
-**Use this when developing** — `--reload` picks up code changes
-automatically, and the inline logs make debugging easier.
+> **Day 6+ note**: `start.sh` defaults to gunicorn (the same config used in
+> production). For dev hot-reload with auto-restart on code changes, run
+> `SERVER=uvicorn ./scripts/start.sh` instead — that re-enables uvicorn's
+> `--reload` flag. See [runbook-day6.md](runbook-day6.md) for the production
+> startup checklist and process model.
+
+**Use this when developing** — gunicorn runs the same worker class as prod
+(uvicorn's ASGI worker), so dev = prod for everything except `--reload`.
 
 ### Option B — manual (background, survives terminal close)
 
 ```bash
 cd ~/Desktop/Githubs/video-learning-app
 source venv/bin/activate
-nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > logs/server.log 2>&1 &
+nohup gunicorn -c gunicorn.conf.py > logs/server.log 2>&1 &
 echo "PID=$!"
 ```
 
@@ -82,7 +88,8 @@ explicitly stop it (see below).
 ```bash
 ./scripts/status.sh
 # or
-curl -s -o /dev/null -w "Status: %{http_code}\n" http://localhost:8000/login
+curl -s http://localhost:8000/api/health      # liveness  → {"status":"ok"}
+curl -s http://localhost:8000/api/ready       # readiness → {"status":"ready","db":"ok","ollama_ok":true,...}
 ```
 
 `status.sh` shows PID + port holders + smoke tests on `/`, `/login`,
@@ -100,21 +107,28 @@ curl -s -o /dev/null -w "Status: %{http_code}\n" http://localhost:8000/login
 
 ## Stop the server
 
-### If you started with `start.sh`
+### If you started with `start.sh` (foreground)
 
-Press `Ctrl-C` in the terminal where it's running.
+Press `Ctrl-C` in the terminal where it's running — gunicorn master
+traps the signal and gracefully drains all 4 workers within ~30 s.
 
-### If you started in the background
+### If you started in the background (gunicorn master + 4 workers)
 
 ```bash
 ./scripts/stop.sh
-# or
-pkill -f "uvicorn app.main"
+# or, just the gunicorn master (children get reaped automatically):
+pkill -f "gunicorn.*video-learning-app"
 ```
 
-`stop.sh` is more robust — it tries `SIGTERM` first, waits a second,
-escalates to `SIGKILL` if the process won't die, and force-kills
-anything still holding port 8000 as a final safety net.
+`stop.sh` is more robust — it tries `SIGTERM` first (gunicorn's `graceful_timeout`
+drains in-flight requests), waits 5 s, escalates to `SIGKILL` if the master won't
+die, and force-kills anything still holding port 8000 as a final safety net.
+
+For a clean restart (Day 6+ recommended workflow):
+
+```bash
+./scripts/restart.sh   # stop.sh + sleep 1 + start.sh
+```
 
 ---
 
@@ -162,7 +176,7 @@ ln -sf ~/path/to/your-firebase-key.json firebase-service-account.json
 
 ### "Port 8000 not reachable from another device"
 
-`uvicorn` binds to `0.0.0.0` (all interfaces) by default, so the server
+`gunicorn` binds to `0.0.0.0:8000` (all interfaces) by default, so the server
 is reachable from your local network. Find your Mac's IP:
 
 ```bash
@@ -206,8 +220,10 @@ Coverage: ~89%.
 
 | Want to… | Run |
 |---|---|
-| Start server (foreground, auto-reload) | `./scripts/start.sh` |
-| Start server (background, survives terminal) | `source venv/bin/activate && nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > logs/server.log 2>&1 &` |
+| Start server (foreground, gunicorn — same as prod) | `./scripts/start.sh` |
+| Start server (foreground, dev hot-reload) | `SERVER=uvicorn ./scripts/start.sh` |
+| Start server (background, survives terminal) | `source venv/bin/activate && nohup gunicorn -c gunicorn.conf.py > logs/server.log 2>&1 &` |
+| Restart cleanly (Day 6+ recommended) | `./scripts/restart.sh` |
 | Stop server | `./scripts/stop.sh` (or `Ctrl-C` if foreground) |
 | Check it's up | `./scripts/status.sh` |
 | See logs | `tail -f logs/server.log` |

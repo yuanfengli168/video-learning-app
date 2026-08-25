@@ -1151,8 +1151,8 @@ an existing if/else).
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Scope**: Convert this Mac Studio into a 24/7 production server for an admin-curated YouTube catalog. Users no longer upload videos — admins paste YouTube URLs.
-> **Tests**: 1107 passing, 89% coverage (was 633 / 92% before this branch)
-> **Versions shipped on this branch**: 38 commits ahead of `main`, all pushed
+> **Tests**: 1112 passing, 89% coverage (was 633 / 92% before this branch)
+> **Versions shipped on this branch**: 45 commits ahead of `main`, all pushed
 
 **Note:** Versions below are unnumbered in-flux commits on `mvp2-production-patches`, listed in chronological order. Final version number (e.g. `2.2.0`) will be assigned when this branch merges to `main`.
 
@@ -1169,6 +1169,7 @@ an existing if/else).
 - **Day 5 hotfix (4 commits)** — Groq deprecated `llama-3.3-70b-versatile` in Aug 2026, breaking all FREE-tier LLM calls (`/admin/events` surfaced the 404). Fixes: (a) `groq/compound` chosen as the new free model — verified live, 1.4s response for 7k tokens, 131k ctx. (b) `chat_with_fallback()` wrapper routes `app/routers/chat.py::send_message` through `call_llm_with_fallback()` so chat now picks the tier chain + rate limit + audit log (was bypassing all three by calling `chat_with_ollama()` directly). (c) Lowered `rate_limit_free_per_day` from 30 → 15 (Groq free tier is 250 req/day TOTAL per API key, not per user). 7 new tests in `tests/test_chat_with_fallback.py`.
 - **Day 5 hotfix2 (5 commits)** — lyf99.2022 (FREE) reported: chat input disabled + no transcript/materials visible on admin-curated PUBLIC videos. Root cause: pre-Day-1 `course.user_id == uid` ownership check (inherited from the old "users upload their own video" model) was never updated for admin-curated videos. Fixes: (a) New `user_can_access_video(role, visibility)` helper is the single source of truth. (b) 5 routes updated: `create_chat_session`, `create_video_chat_session`, `get_asset`, `get_transcript`, `export_transcript`. (c) JS bug fix: chat input is now re-enabled after an error so the user can retry. (d) New `app/services/video_status.py` reconciles `status='error'` → `'ready'` when all 5 required assets exist (so the materials section actually renders). 30 new tests (`test_roles.py` 17 + `test_generation.py` +2 + `test_video_status.py` 8 + existing chat tests updated).
 - **Day 5 hotfix3 (2 commits)** — lyf99.2022 reported `❌ [object Object]` from chat. Two root causes: (a) `groq/compound` (router) consistently returns 413 for our 3k-token system prompts — its sub-model has a small request-body limit; live-tested `groq/compound-mini` which works (HTTP 200 in 1.57s, 131k ctx). Switched `llm_model_groq` accordingly. (b) `new Error(err.detail)` where `err.detail` is a dict (added in hotfix2's `ChatCallError`) coerced the dict to `'[object Object]'`. Added `formatErrorDetail(detail, fallback)` JS helper that handles string + dict shapes (extracts `.message` from dict).
+- **Day 6 (7 commits)** — Production server stack. (a) `gunicorn>=23.0.0` dep + verified install. (b) `gunicorn.conf.py` (4 workers × 2 threads, 60s timeout, graceful shutdown, max_requests=1000 + jitter, `forwarded_allow_ips=*` for Cloudflare Tunnel). (c) `scripts/start.sh` rewritten (default gunicorn; `SERVER=uvicorn` env var for dev hot-reload) + `stop.sh` handles both. (d) New `/api/ready` k8s-style readiness endpoint (DB + events table + Ollama checks, 503 on DB unreachable); 5 new tests. (e) Cloudflare Tunnel verified end-to-end (live `https://*.trycloudflare.com` → gunicorn:8000, 200 in 0.68s); install script updated. (f) `scripts/restart.sh` + `doc/runbook-day6.md` (8 sections + process tree). (g) Doc refresh.
 
 ### 🐛 Bug fixes
 
@@ -1183,7 +1184,7 @@ an existing if/else).
 
 ### 🧪 Tests
 
-- **+474 tests** (633 → 1107): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests), Day 5 hotfix2 (`user_can_access_video` + `video_status` + 5 route fixes, 30 new tests), Day 5 hotfix3 (JS error helper, no new tests but a real-world verified e2e flow).
+- **+479 tests** (633 → 1112): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests), Day 5 hotfix2 (`user_can_access_video` + `video_status` + 5 route fixes, 30 new tests), Day 5 hotfix3 (JS error helper, no new tests but a real-world verified e2e flow), Day 6 (`/api/health` liveness + `/api/ready` readiness, 5 new tests).
 - **89% coverage** maintained (network code naturally hard to cover without integration tests; we mock at the worker boundary).
 
 ### 📋 In progress
