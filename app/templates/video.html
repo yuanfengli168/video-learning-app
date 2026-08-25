@@ -2030,6 +2030,21 @@ try { startAutoPollIfNeeded(); } catch (e) { console.warn('auto-poll init failed
 // build_video_system_prompt), so the AI can answer questions about
 // the video as a whole — not just one flashcard at a time.
 
+function formatErrorDetail(detail, fallback) {
+    // Day 5 hotfix3: FastAPI's `detail` field can be either a plain
+    // string (legacy) or a structured dict (new ChatCallError shape).
+    // Previously we did `new Error(err.detail)` which stringified
+    // dict → '[object Object]'. This helper turns either shape into
+    // a readable line of text for the toast/error UI.
+    if (detail == null) return fallback;
+    if (typeof detail === 'string') return detail;
+    if (typeof detail === 'object') {
+        // Prefer a human message; fall back to the error tag.
+        return detail.message || detail.error || JSON.stringify(detail);
+    }
+    return String(detail);
+}
+
 async function startDiscussSession() {
     if (discussSessionId) return;
     const messagesDiv = document.getElementById('discuss-messages');
@@ -2046,7 +2061,7 @@ async function startDiscussSession() {
         });
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to start discussion');
+            throw new Error(formatErrorDetail(err.detail, 'Failed to start discussion'));
         }
         const data = await resp.json();
         discussSessionId = data.session_id;
@@ -2231,7 +2246,7 @@ async function sendDiscussMessage() {
         });
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}));
-            throw new Error(err.detail || 'Chat request failed');
+            throw new Error(formatErrorDetail(err.detail, 'Chat request failed'));
         }
         const data = await resp.json();
         removeDiscussTyping();
