@@ -4,10 +4,11 @@
 # via Cloudflare Tunnel (free, no port forwarding required).
 #
 # Why this script exists:
-#   Mac Studio's uvicorn binds to 0.0.0.0:8000, but home routers / CGNAT
-#   hide it from the public internet. Cloudflare Tunnel creates an
-#   *outbound-only* encrypted tunnel from your Mac to Cloudflare's edge.
-#   Result: testers get a real https://<name>.trycloudflare.com URL.
+#   Mac Studio's gunicorn (Day 6) binds to 0.0.0.0:8000, but home
+#   routers / CGNAT hide it from the public internet. Cloudflare
+#   Tunnel creates an *outbound-only* encrypted tunnel from your
+#   Mac to Cloudflare's edge. Result: testers get a real
+#   https://<name>.trycloudflare.com URL.
 #
 # Usage:
 #   # Step 1 — quick test (no Cloudflare account needed):
@@ -62,11 +63,21 @@ if [ "$(uname)" != "Darwin" ]; then
   exit 1
 fi
 
-# Check if the app is running locally
+# Check if the app is running locally. We test BOTH endpoints:
+#   /api/health  — liveness; if this is down, the process is dead
+#   /api/ready   — readiness; if this is 503, the DB or Ollama is
+#                  unhealthy, so the tunnel would just proxy 503s
+# Cloudflare works either way, but we warn the user so they know
+# the upstream is broken before they debug the tunnel.
 if ! curl -sf "http://localhost:${APP_PORT}/api/health" >/dev/null 2>&1; then
   warn "App not responding on http://localhost:${APP_PORT}/api/health"
   warn "Start the app first:  bash scripts/start.sh"
   warn "Continuing anyway — Cloudflare will work but won't have anything to proxy"
+  echo ""
+elif ! curl -sf "http://localhost:${APP_PORT}/api/ready" >/dev/null 2>&1; then
+  warn "App /api/ready returned non-200 (DB or Ollama may be unhealthy)"
+  warn "Tunnel will still work, but requests will return 503 from upstream"
+  warn "See: curl http://localhost:${APP_PORT}/api/ready | python3 -m json.tool"
   echo ""
 fi
 
