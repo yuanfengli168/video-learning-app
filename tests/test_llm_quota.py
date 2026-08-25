@@ -53,7 +53,7 @@ def test_rate_limiter_counts_calls():
     assert usage["calls_in_last_min"] == 3
     assert usage["calls_today"] == 3
     assert usage["limit_per_min"] == 5   # FREE
-    assert usage["limit_per_day"] == 30  # FREE
+    assert usage["limit_per_day"] == 15  # FREE (Day 5 hotfix: was 30, lowered so 10 users × 15 < Groq's 250/day cap)
 
 
 # ─────────────────────────────────────────────────────────────────────────

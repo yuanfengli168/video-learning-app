@@ -116,10 +116,13 @@ class Settings(BaseSettings):
     # general HTTP requests. The limiter is in-memory; resets on
     # server restart (acceptable for MVP — see Day 4 plan).
     #
-    # Math: with PAID at 15/min × 200/day, one Ollama Pro account
-    # (800 req/5h, 3000 req/week) supports ~16 paid users at peak.
+    # Math (Day 5 hotfix): Groq's free tier is 250 req/day TOTAL across
+    # the API key (shared by all FREE users). Lowered FREE from 30→15/day
+    # so 10 free users × 15 = 150/day peak, leaving 100 req/day headroom
+    # under Groq's global cap. Raise again only after we add a per-key
+    # Groq quota tracker (see doc/mvp2-final-go-live-plan.md §Groq tracker).
     rate_limit_free_per_min: int = 5
-    rate_limit_free_per_day: int = 30
+    rate_limit_free_per_day: int = 15
     rate_limit_paid_per_min: int = 15
     rate_limit_paid_per_day: int = 200
     rate_limit_admin_per_min: int = 60
