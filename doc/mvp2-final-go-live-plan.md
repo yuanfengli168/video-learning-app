@@ -324,6 +324,8 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 | | (b) Replace broken ownership check in 5 routes: 2 chat (`create_chat_session`, `create_video_chat_session`) + 1 asset-fetch (`get_asset`) + 2 transcript-fetch (`get_transcript`, `export_transcript`). `commits 155ee48` + `1fcf75f` | lyf99.2022 (FREE) can now chat + read materials on admin-curated PUBLIC videos |
 | | (c) JS bug fix: chat input is now re-enabled after an error so the user can retry without reloading. `commit c205f49` | Defense in depth — even if a future endpoint errors, input stays usable |
 | | (d) `app/services/video_status.py` reconciles `status='error'` → `'ready'` when all 5 required assets exist. Wired into `video_view` (one call per page load, no-op unless reconciling). `commit b468d39` | Reconciled 1 video in production (the one lyf99.2022 was looking at) |
+| **Day 5 hotfix3** | (a) Fix JS: `formatErrorDetail(detail, fallback)` helper handles string vs dict error shapes. Root cause: `new Error(err.detail)` where `err.detail` is a dict → `'[object Object]'`. `commit 184c095` | lyf99.2022 now sees real error messages (e.g. "All 1 provider(s) failed") instead of "[object Object]" |
+| | (b) Switch `llm_model_groq` from `groq/compound` to `groq/compound-mini`. Root cause: `groq/compound` router picks a sub-model with a small request-body limit, 413s for our 3k-token system prompts. Live-tested: compound always 413, compound-mini always 200, direct models 200 but paid. `commit 4bc55d7` | lyf99.2022 now gets a real AI response in 1.57s on a video-scope chat |
 | **Day 6** | (a) gunicorn 4 workers + update `start.sh` | Production-ready server |
 | | (b) Cloudflare Tunnel setup + config | Public URL working |
 | **Day 7** | Buffer day (bugs, polish, testing) | Stable build |
@@ -409,10 +411,11 @@ Full design lives in `doc/mvp2-llm-architecture.md`. Quick summary:
 - **Fast inference** (Groq LPU) = <1 sec first token = great UX
 - **Cached tokens don't count** → our semantic cache saves quota for free
 
-### Why `groq/compound` (not a direct model)?
-- Groq deprecated all direct Llama models in Aug 2026. `groq/compound` is their flagship free reasoning router; it auto-picks from currently-available sub-models (gpt-oss-120b, etc.) and stays free as Groq's lineup changes.
-- We tested live: HTTP 200 in 1.4s for a 7k-token transcript, JSON mode works, no 404.
-- `compound-mini` is the faster cheaper sibling; we pick `compound` because accuracy > speed for 2hr transcripts.
+### Why `groq/compound-mini` (not `groq/compound`)?
+- Groq deprecated all direct Llama models in Aug 2026. Free text+json options: `groq/compound`, `groq/compound-mini`, `allam-2-7b` (4k ctx too small).
+- **Live test data (2026-08-25, 3k-token system prompt):** `groq/compound` always 413 (router picks sub-model with small request-body limit). `groq/compound-mini` always 200 (fast, 131k ctx, json_mode). Direct paid models (`openai/gpt-oss-20b`, `gpt-oss-120b`, `qwen/qwen3.6-27b`) also work but cost money.
+- We pick `groq/compound-mini`: free, fast, works for our use case. Tradeoff: can 429 for ~5min after a burst of free users (sub-model TPM cap) — user sees a 503 error. For soft-launch scale (10-20 users × 15 req/day), this should be rare.
+- **Future:** add `openai/gpt-oss-20b` as a paid fallback if 429s become a regular problem. ~$0.70/month for soft-launch usage.
 
 ### Free tier cap math (Day 5 hotfix)
 - Groq free tier: **250 req/day TOTAL** per API key (shared by all FREE users)
