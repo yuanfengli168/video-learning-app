@@ -2062,7 +2062,17 @@ async function startDiscussSession() {
             input.focus();
         }
     } catch (e) {
-        messagesDiv.innerHTML = `<p class="text-red-500 text-sm py-4 text-center">❌ ${escapeHtml(e.message)}</p>`;
+        // Day 5 hotfix2: re-enable input on error so the user can retry.
+        // Pre-fix: input stayed disabled and there was no way to retry
+        // without reloading the page. sendBtn was re-enabled in finally,
+        // but input was only enabled in the success path.
+        messagesDiv.innerHTML = `<p class="text-red-500 text-sm py-4 text-center">❌ ${escapeHtml(e.message)}<br><span class="text-xs text-gray-500">Try sending a message — we'll retry session creation.</span></p>`;
+        if (input) {
+            input.disabled = false;
+            // Clear discussSessionId sentinel on error so the next send
+            // attempt re-runs startDiscussSession().
+            discussSessionId = null;
+        }
     } finally {
         if (sendBtn) sendBtn.disabled = false;
     }
