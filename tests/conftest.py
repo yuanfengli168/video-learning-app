@@ -10,6 +10,26 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+# ── Custom markers (Day 6) ──────────────────────────────────────────────
+def pytest_configure(config):
+    """Register custom pytest markers used by Day 6 tests.
+
+    Without this, `pytest.mark.slow` and `pytest.mark.integration` emit
+    PytestUnknownMarkWarning. Defining them here:
+      - silences the warning
+      - documents the markers for new contributors
+      - lets `pytest -m "not slow"` work as documented in the runbook
+    """
+    config.addinivalue_line(
+        "markers",
+        "slow: marks tests as slow (deselect with '-m \"not slow\"' for fast iteration)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "integration: marks tests that spawn real subprocesses / network (Day 6 gunicorn boot tests)",
+    )
+
+
 # Set test environment BEFORE importing app modules
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("DEBUG", "false")
