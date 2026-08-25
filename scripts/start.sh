@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# start.sh — Start the Video Learning App locally
-# Usage:  bash scripts/start.sh
+# start.sh — Start the Video Learning App (Day 6, production-ready)
+# Usage:
+#   bash scripts/start.sh                  # production (gunicorn, default)
+#   SERVER=uvicorn bash scripts/start.sh    # dev (uvicorn --reload)
+#
+# Day 6: switched from raw `uvicorn --reload` to gunicorn. Why:
+#   - gunicorn manages 4 workers × 2 threads (8 concurrent requests)
+#   - auto-restarts crashed workers (uvicorn doesn't)
+#   - graceful shutdown on SIGTERM (matches Cloudflare Tunnel)
+#   - unified access log via stderr → logs/server.log
+#   - PID file at /tmp/gunicorn.pid (for stop.sh)
+#
+# SERVER env var lets us keep the dev workflow (`SERVER=uvicorn` for
+# hot-reload during local development) without two separate scripts.
+# Default is gunicorn — that's what production wants.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -38,34 +51,43 @@ if [[ ! -d "venv" ]]; then
     fail "Python venv not found. Run 'bash scripts/setup.sh' first."
     exit 1
 fi
-
 source venv/bin/activate
 ok "Virtual environment activated"
 
-# ── Start the app ────────────────────────────────────────────────────────────
+# ── Pick server (gunicorn for prod, uvicorn for dev) ────────────────────────
+SERVER="${SERVER:-gunicorn}"
+
 mkdir -p logs
 LOG_FILE="logs/server.log"
 
+# ── Stop any existing instance on port 8000 ─────────────────────────────────
+# (Cheap safety net — stop.sh is the proper way, but this also helps when
+# the user runs start.sh directly without stop.sh first.)
+if lsof -ti:8000 &>/dev/null; then
+    warn "Port 8000 already in use — killing old process"
+    lsof -ti:8000 | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
+
 echo ""
-echo "  🚀 Starting Video Learning App..."
+echo "  🚀 Starting Video Learning App (server: $SERVER)..."
 echo "  📡 http://localhost:8000"
 echo "  📚 Docs: http://localhost:8000/docs"
 echo "  📝 Logs: $LOG_FILE"
-echo "  ⏹️  Press Ctrl+C to stop"
+echo "  ⏹️  Stop: bash scripts/stop.sh"
 echo ""
 
-# Tee to log file so we can debug 500s after the terminal is gone
-#
-# h11_max_incomplete_event_size: h11's internal receive buffer defaults
-# to 16 KB. When a browser uploads a large multipart body (e.g. bulk
-# upload of 3+ files at 1+ GB), the buffer can briefly exceed 16 KB
-# between next_event() calls, which triggers h11.RemoteProtocolError.
-# uvicorn catches that and returns a plain-text 400 "Invalid HTTP
-# request received." — which the frontend JSON-parses and surfaces as
-# the cryptic "Bulk upload error: Unexpected token I in JSON at
-# position 0". We bump the limit to 64 MB so the buffer is never the
-# bottleneck for realistic upload sizes (10 GB max per file, well
-# under 64 MB). See doc/MVP2.0-Status.md §19 for the postmortem.
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 \
-    --h11-max-incomplete-event-size 67108864 \
-    2>&1 | tee -a "$LOG_FILE"
+# ── Start ───────────────────────────────────────────────────────────────────
+if [[ "$SERVER" == "gunicorn" ]]; then
+    # Production: gunicorn process manager with uvicorn workers
+    exec gunicorn -c gunicorn.conf.py app.main:app \
+        2>&1 | tee -a "$LOG_FILE"
+else
+    # Dev: uvicorn with hot-reload. Single process, single thread.
+    # h11_max_incomplete_event_size bumped to 64 MB so large multipart
+    # uploads (e.g. 3+ files at 1+ GB) don't trip h11's default 16 KB
+    # buffer. See doc/MVP2.0-Status.md §19.
+    exec uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 \
+        --h11-max-incomplete-event-size 67108864 \
+        2>&1 | tee -a "$LOG_FILE"
+fi
