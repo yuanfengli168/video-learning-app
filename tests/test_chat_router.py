@@ -81,7 +81,7 @@ def test_send_message(client: TestClient):
 
         # Send message
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             return_value="RAG is used in search engines...",
         ):
             response = client.post(
@@ -119,7 +119,7 @@ def test_send_message_ollama_failure(client: TestClient):
         session_id = session_resp.json()["session_id"]
 
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             side_effect=RuntimeError("Ollama down"),
         ):
             response = client.post(
@@ -143,7 +143,7 @@ def test_get_chat_session(client: TestClient):
         session_id = session_resp.json()["session_id"]
 
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             return_value="RAG is used in...",
         ):
             client.post(
@@ -389,7 +389,7 @@ def test_send_message_in_video_scope_session(client: TestClient):
         session_id = session_resp.json()["session_id"]
 
         # Mock the Ollama call
-        with patch("app.routers.chat.chat_with_ollama", return_value="The video covers RAG concepts."):
+        with patch("app.routers.chat.chat_with_fallback", return_value="The video covers RAG concepts."):
             response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "What does this video cover?"},
@@ -475,7 +475,7 @@ def test_video_scope_response_includes_empty_citations_list(client: TestClient):
     session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             return_value="这是普通的中文回答，没有时间戳。",
         ):
             response = client.post(
@@ -494,7 +494,7 @@ def test_video_scope_response_parses_mmss_citations(client: TestClient):
     session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             return_value="视频在 [3:45] 提到 Claude Code 需要付费。",
         ):
             response = client.post(
@@ -516,7 +516,7 @@ def test_video_scope_response_parses_hhmmss_citations(client: TestClient):
     session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             return_value="See [1:30:45] for the deep dive.",
         ):
             response = client.post(
@@ -535,7 +535,7 @@ def test_video_scope_response_parses_multiple_citations(client: TestClient):
     session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             return_value="At [0:30] we start, and at [5:00] we pivot.",
         ):
             response = client.post(
@@ -565,7 +565,7 @@ def test_flashcard_scope_response_has_empty_citations(client: TestClient):
         )
         session_id = session_resp.json()["session_id"]
         with patch(
-            "app.routers.chat.chat_with_ollama",
+            "app.routers.chat.chat_with_fallback",
             return_value="RAG is mentioned at [10:00] in the original paper.",
         ):
             response = client.post(

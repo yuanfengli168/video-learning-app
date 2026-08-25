@@ -20,6 +20,10 @@ from app.services.chat import (
     render_quiz_for_chat,
     transcript_to_chat_text,
 )
+# Day 5 hotfix: chat is now routed through the LiteLLM wrapper so rate
+# limits, audit logs, and per-tier provider chains apply uniformly.
+from app.services.llm_providers import ChatCallError, chat_with_fallback
+from app.utils.events import log_event
 from app.services.transcription import json_to_transcript
 from app.utils.validation import (
     ValidationError,
@@ -154,12 +158,40 @@ async def send_message(
             ollama_messages[-1]["content"]
         )
 
+    # Day 5 hotfix: route through LiteLLM (tier-aware fallback + audit log).
+    # chat_with_ollama() is still imported for any code that imports it,
+    # but the live path here uses chat_with_fallback() which:
+    #   1. applies per-user rate limit (5/min, 15/day for FREE)
+    #   2. picks tier chain (FREE → [groq]; PAID/ADMIN → [ollama, openai])
+    #   3. writes an audit-log row per call (success/failure/rate-limit)
+    #   4. raises structured ChatCallError on rate-limit (429) or
+    #      all-providers-failed (503)
+    from app.auth.admin import get_user_role_from_db
+
+    uid = user.get("uid", "")
+    user_role = int(get_user_role_from_db(uid, db))  # 0/1/2
+
     try:
-        ai_response = chat_with_ollama(
+        ai_response = chat_with_fallback(
             messages=ollama_messages,
             system_prompt=session.system_prompt,
+            user_role=user_role,
+            user_id=uid,
+            video_id=session.video_id,
         )
+    except ChatCallError as exc:
+        # Surface structured detail so the UI can render a useful toast.
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     except Exception as exc:
+        # Last-resort defense: an unexpected crash inside the wrapper.
+        log_event(
+            db, level="ERROR",
+            source="routers.chat",
+            message=f"unexpected chat error for session {session_id}",
+            user_id=uid,
+            video_id=session.video_id,
+            context={"error": str(exc), "type": type(exc).__name__},
+        )
         raise HTTPException(
             status_code=500, detail=f"Chat failed: {exc}"
         ) from exc

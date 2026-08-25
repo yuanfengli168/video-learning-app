@@ -273,3 +273,101 @@ def _summarize_exception(exc: Exception) -> str:
     if len(msg) > 200:
         msg = msg[:200] + "..."
     return f"{type(exc).__name__}: {msg}"
+
+# ─────────────────────────────────────────────────────────────────────────
+# Chat wrapper (Day 5 hotfix)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Why this exists:
+#   Pre-Day-5, app/routers/chat.py::send_message called chat_with_ollama()
+#   directly, bypassing the LiteLLM wrapper. That meant:
+#     - Free users hit Ollama (regardless of tier chain)
+#     - Chat had no rate limit
+#     - Chat had no audit log
+#     - Chat had no provider fallback
+#     - Chat broke entirely when Ollama was down (no free fallback)
+#
+#   This wrapper routes chat through call_llm_with_fallback(), so:
+#     - FREE users go through Groq (matches the rest of the app)
+#     - PAID/ADMIN users go through Ollama (then OpenAI if near cap)
+#     - Rate limits + audit log + fallback now apply uniformly
+#
+# Return type: str (the assistant's reply text).
+# On failure: raises ChatCallError with structured .detail (matches the
+# pattern in app/services/llm.py::LlmCallError so the router can map it
+# to an HTTPException with a sensible status code).
+
+
+class ChatCallError(Exception):
+    """Raised by chat_with_fallback on rate-limit or provider failure.
+
+    Attributes:
+        status_code: HTTP-style code (429 for rate-limit, 503 for unavailable)
+        detail: dict suitable for HTTPException(detail=...)
+    """
+
+    def __init__(self, status_code: int, detail: dict[str, Any]):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(f"chat failed ({status_code}): {detail}")
+
+
+def chat_with_fallback(
+    messages: list[dict[str, str]],
+    system_prompt: str = "",
+    *,
+    user_role: int,
+    user_id: str,
+    video_id: str | None = None,
+) -> str:
+    """Send a chat request through the tier-aware provider chain.
+
+    Args:
+        messages: List of {role, content} dicts (user/assistant history).
+        system_prompt: System prompt prepended to the conversation.
+        user_role: UserRole enum value (0=ADMIN, 1=PAID, 2=FREE).
+            Picks the provider chain + rate limit thresholds.
+        user_id: Firebase uid (for rate limiter + audit log).
+        video_id: Optional video_id for audit log linkage.
+
+    Returns:
+        The assistant's response text (string).
+
+    Raises:
+        ChatCallError 429: User is rate-limited (per-minute or per-day cap).
+        ChatCallError 503: All providers in the chain failed.
+    """
+    full_messages: list[dict[str, Any]] = []
+    if system_prompt:
+        full_messages.append({"role": "system", "content": system_prompt})
+    full_messages.extend(messages)
+
+    result = call_llm_with_fallback(
+        messages=full_messages,
+        user_role=user_role,
+        user_id=user_id,
+        json_mode=False,  # chat is free-form prose, not JSON
+    )
+
+    if result["status"] == "ok":
+        return result["content"]
+
+    if result["status"] == "rate_limited":
+        raise ChatCallError(
+            status_code=429,
+            detail={
+                "error": "rate_limited",
+                "message": result["message"],
+                "retry_after_seconds": result["retry_after_seconds"],
+            },
+        )
+
+    # provider_unavailable — every provider in chain failed
+    raise ChatCallError(
+        status_code=503,
+        detail={
+            "error": "provider_unavailable",
+            "message": result["message"],
+            "attempts": result.get("attempts", []),
+        },
+    )
