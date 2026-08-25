@@ -520,7 +520,7 @@ async def admin_get_llm_budget(
         },
         "alert_pct": 0.9,
         "providers": {
-          "groq":   "groq/compound",
+          "groq":   "groq/compound-mini",
           "ollama": "glm-5.2:cloud",
           "openai": "gpt-4o-mini"
         },

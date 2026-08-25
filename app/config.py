@@ -84,15 +84,24 @@ class Settings(BaseSettings):
     # Per-provider default models. Picked for free-tier value (groq)
     # and quality (ollama glm-5.2, openai gpt-4o-mini).
     #
-    # Why groq/compound (not llama-3.3-70b-versatile which Day 4 used):
-    # Groq deprecated all direct Llama models in Aug 2026. The current
-    # free text+json options are groq/compound, groq/compound-mini, and
-    # allam-2-7b (too small at 4k ctx). 'groq/compound' is Groq's
-    # flagship reasoning router — it auto-balances across available
-    # sub-models (gpt-oss-120b, etc.) and is the strongest free option
-    # for long transcripts. See doc/mvp2-final-go-live-plan.md §Groq
+    # Why groq/compound-mini (not groq/compound which Day 5 hotfix
+    # originally picked):
+    # Groq deprecated all direct Llama models in Aug 2026. The
+    # current free text+json options are:
+    #   - groq/compound       (router) — picks sub-models, 413s
+    #                           consistently for our 3k-token system
+    #                           prompts because the sub-model it picks
+    #                           has a small request limit
+    #   - groq/compound-mini  (router) — fast, handles our request size
+    #                           consistently, 131k ctx
+    #   - allam-2-7b          — 4k ctx, too small for transcripts
+    # We pick groq/compound-mini: free, 131k ctx, works for our
+    # 3k-token system prompts + 30k-token transcripts. On 429
+    # (sub-model rate-limited) we surface the error to the user
+    # rather than fall back to a paid model — keeps the free tier
+    # strictly $0. See doc/mvp2-final-go-live-plan.md §Groq
     # strategy for full reasoning.
-    llm_model_groq: str = "groq/compound"
+    llm_model_groq: str = "groq/compound-mini"
     llm_model_ollama: str = "glm-5.2:cloud"
     llm_model_openai: str = "gpt-4o-mini"
 
@@ -166,7 +175,7 @@ class Settings(BaseSettings):
         """Return the LiteLLM model name for a provider.
 
         Examples:
-            get_model_for_provider("groq") -> "groq/compound"
+            get_model_for_provider("groq") -> "groq/compound-mini"
             get_model_for_provider("ollama") -> "glm-5.2:cloud"
             get_model_for_provider("openai") -> "gpt-4o-mini"
         """
