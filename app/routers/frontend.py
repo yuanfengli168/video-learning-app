@@ -240,6 +240,12 @@ async def video_view(
             status_code=404,
         )
 
+    # Day 5 hotfix2: if the video is in 'error' but all required assets
+    # exist, flip it to 'ready' so the materials section actually
+    # renders. See app/services/video_status.py for the rationale.
+    from app.services.video_status import reconcile_video_status
+    reconcile_video_status(db, video)
+
     section = db.get(Section, video.section_id)
     course = db.get(Course, section.course_id) if section else None
 
