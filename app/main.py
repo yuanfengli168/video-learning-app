@@ -166,5 +166,106 @@ app.include_router(frontend_router.router)
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok", "app": settings.app_name}
+    """Liveness check — is the process up and responding?
+
+    Used by:
+      - Day 6: Cloudflare Tunnel health checks (does the upstream
+        accept connections?)
+      - External uptime monitors (Pingdom, UptimeRobot, etc.)
+      - Manual smoke test from terminal:  curl localhost:8000/api/health
+
+    Per k8s liveness-probe semantics: NO dependency checks here.
+    If we add DB/Ollama checks, an unhealthy DB would cause gunicorn
+    to kill this worker, which doesn't fix the DB. Use /api/ready
+    for dependency checks instead.
+
+    Returns 200 always (unless the process is so broken it can't
+    respond at all).
+    """
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "server": "gunicorn" if "gunicorn" in __import__("sys").argv[0] else "uvicorn",
+    }
+
+
+@app.get("/api/ready")
+async def readiness_check():
+    """Readiness check — can the process actually serve traffic?
+
+    Used by:
+      - Day 6: load balancers / Cloudflare Tunnel to decide whether
+        to route traffic to this worker
+      - Onboarding probes: 'is the DB reachable? is Ollama up?'
+
+    Difference from /api/health (liveness):
+      - /api/health: 'is the process alive?' — used to kill+restart
+      - /api/ready:  'should this process receive traffic?' — used
+        to add/remove from the routing pool
+
+    We check 3 things in order of severity:
+      1. DB query (SELECT 1) — must succeed; SQLite is local so this
+         rarely fails, but on a corrupted DB it will
+      2. Ollama reachability — non-fatal (PAID/ADMIN users get an
+         error if Ollama is down, but FREE users on Groq still work);
+         we report ollama.ok=False but still return 200 if the
+         DB is healthy
+      3. events table exists (defense — if init_db() didn't run,
+         queries will fail)
+
+    Returns 503 only when the DB is unreachable (the only thing
+    that makes the process truly unservable). Ollama is reported
+    in the body but doesn't change the status code.
+    """
+    # Use the *module* app.database rather than a from-import, so the
+    # tests/conftest.py patch on app_database.SessionLocal takes effect.
+    # (A `from app.database import SessionLocal` at module load time would
+    # bind to the original SessionLocal, defeating the test patch.)
+    from app import database as app_database_module
+
+    db_status = "ok"
+    db_error: str | None = None
+    ollama_ok = True
+    events_table_ok = True
+
+    # 1. DB connectivity
+    try:
+        db = app_database_module.SessionLocal()
+        try:
+            from sqlalchemy import text
+            db.execute(text("SELECT 1"))
+            # 2. events table exists
+            db.execute(text("SELECT 1 FROM events LIMIT 1"))
+        finally:
+            db.close()
+    except Exception as exc:
+        db_status = "error"
+        db_error = f"{type(exc).__name__}: {exc}"
+        # If DB is down, we can't trust anything — return 503
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "app": settings.app_name,
+                "db": {"status": db_status, "error": db_error},
+                "ollama_ok": False,
+                "events_table_ok": False,
+                "reason": "database_unreachable",
+            },
+        )
+
+    # 3. Ollama reachability (non-fatal — only matters for PAID/ADMIN)
+    try:
+        import httpx
+        resp = httpx.get(f"{settings.ollama_base_url}/api/tags", timeout=2.0)
+        ollama_ok = resp.status_code == 200
+    except Exception:
+        ollama_ok = False
+
+    return {
+        "status": "ready",
+        "app": settings.app_name,
+        "db": {"status": db_status},
+        "ollama_ok": ollama_ok,
+        "events_table_ok": events_table_ok,
+    }
