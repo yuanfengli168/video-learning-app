@@ -9,8 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
+from app.auth.roles import user_can_access_video
 from app.database import get_db
-from app.models import Asset, ChatMessage, ChatSession, Course, Section, Video
+from app.models import Asset, ChatMessage, ChatSession, Video
 from app.models.chat import SCOPE_VIDEO, VALID_SCOPES, VIDEO_SCOPE_CONCEPT_PLACEHOLDER
 from app.services.chat import (
     build_system_prompt,
@@ -70,11 +71,16 @@ async def create_chat_session(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Verify ownership
-    section = db.get(Section, video.section_id)
-    course = db.get(Course, section.course_id)
-    if course.user_id != user.get("uid", ""):
-        raise HTTPException(status_code=403, detail="Not your video")
+    # Day 5 hotfix2: replace the old `course.user_id == uid` check
+    # (which blocked every non-admin user from admin-curated videos)
+    # with a visibility-tier check. FREE users can chat about
+    # PUBLIC videos; PAID users can also chat about PAID_ONLY; etc.
+    if not user_can_access_video(user.get("role"), video.visibility):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to chat about this video "
+            f"(visibility={video.visibility}, your role={user.get('role')})",
+        )
 
     # Validate the concept before it goes into a system prompt
     try:
@@ -412,11 +418,14 @@ async def create_video_chat_session(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Verify ownership
-    section = db.get(Section, video.section_id)
-    course = db.get(Course, section.course_id)
-    if course.user_id != user.get("uid", ""):
-        raise HTTPException(status_code=403, detail="Not your video")
+    # Day 5 hotfix2: visibility-tier check instead of ownership.
+    # See note in create_chat_session() above.
+    if not user_can_access_video(user.get("role"), video.visibility):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to discuss this video "
+            f"(visibility={video.visibility}, your role={user.get('role')})",
+        )
 
     # Build the LLM context from the video's existing materials
     system_prompt = _build_video_chat_context(db, video)

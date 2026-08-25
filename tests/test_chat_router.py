@@ -362,8 +362,20 @@ def test_create_video_chat_session_video_not_found(client: TestClient):
 
 
 def test_create_video_chat_session_wrong_user(client: TestClient):
-    """Should return 403 for video not owned by the user."""
+    """Day 5 hotfix2: a non-owner FREE user can chat about a PUBLIC video
+    (the old 'course.user_id == uid' check wrongly blocked this). The
+    new visibility-tier check returns 200 for any user with appropriate role.
+
+    To still cover the 403 path, we set the video to ADMIN_ONLY visibility
+    AFTER _setup_video; then user-B (default FREE) gets 403."""
     video_id = _setup_video(client)
+    # Make the test video ADMIN_ONLY so FREE user-B is blocked
+    from app.database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    db.execute(text("UPDATE videos SET visibility=2 WHERE id=:id"), {"id": video_id})
+    db.commit()
+    db.close()
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "user-B"}):
         response = client.post(
             "/api/chat/video-sessions",
