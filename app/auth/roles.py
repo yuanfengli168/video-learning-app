@@ -270,3 +270,34 @@ def visibility_name(visibility: VideoVisibility | int | None) -> str:
         VideoVisibility.PAID_ONLY: "paid_only",
         VideoVisibility.ADMIN_ONLY: "admin_only",
     }.get(visibility, "unknown")
+
+
+def user_can_access_video(
+    user_role: "UserRole | int | None",
+    video_visibility: "VideoVisibility | int | None",
+) -> bool:
+    """Return True if a user with the given role can access a video of this visibility.
+
+    Day 5 hotfix: pre-Day-1 the access check was `course.user_id == user.uid`
+    (only the uploader could see their video). With admin-curated videos
+    (Day 2A onwards) the correct check is visibility-tier + role:
+
+      - PUBLIC video: anyone (including signed-out) can access
+      - PAID_ONLY: PAID + ADMIN roles
+      - ADMIN_ONLY: ADMIN role only
+
+    Usage:
+        if not user_can_access_video(user.get("role"), video.visibility):
+            raise HTTPException(status_code=403, detail="Not authorized for this video")
+
+    Admins (UserRole.ADMIN, value 0) implicitly access everything.
+    Unknown roles are denied (fail-safe — defaults to PUBLIC visibility).
+    """
+    if user_role is None:
+        return max_visibility_for_role(None) >= VideoVisibility(video_visibility or 0)
+    try:
+        if isinstance(user_role, int) and not isinstance(user_role, UserRole):
+            user_role = UserRole(user_role)
+    except ValueError:
+        return False
+    return max_visibility_for_role(user_role) >= VideoVisibility(video_visibility or 0)
