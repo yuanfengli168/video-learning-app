@@ -1151,8 +1151,8 @@ an existing if/else).
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Scope**: Convert this Mac Studio into a 24/7 production server for an admin-curated YouTube catalog. Users no longer upload videos — admins paste YouTube URLs.
-> **Tests**: 1112 passing, 89% coverage (was 633 / 92% before this branch)
-> **Versions shipped on this branch**: 45 commits ahead of `main`, all pushed
+> **Tests**: 1189 passing, 89% coverage (was 633 / 92% before this branch)
+> **Versions shipped on this branch**: 84 commits ahead of `main`, all pushed
 
 **Note:** Versions below are unnumbered in-flux commits on `mvp2-production-patches`, listed in chronological order. Final version number (e.g. `2.2.0`) will be assigned when this branch merges to `main`.
 

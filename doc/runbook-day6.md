@@ -31,10 +31,17 @@ bash scripts/status.sh
 
 Output looks like:
 ```
-✅ gunicorn running (PID=12345)
-✅ GET / → 200
-✅ GET /login → 200
-✅ GET /docs → 200
+--- Mac sleep state ---
+✅ Mac auto-sleep disabled (good for server use)
+✅ gunicorn running (5 processes; master PID=12345)
+--- Port 8000 ---
+... lsof output ...
+--- HTTP smoke test ---
+✅ GET /api/health → 200       (liveness probe — Day 6)
+✅ GET /api/ready  → 200       (readiness probe — Day 6; checks DB + events + Ollama)
+✅ GET /          → 200
+✅ GET /login     → 200
+✅ GET /docs      → 200
 ✅ POST .../retry-failed → 401 (auth check working)
 --- Last 5 log lines ---
 [2026-08-25 21:39:27 +0800] [28227] [INFO] Application startup complete.
@@ -43,7 +50,8 @@ Output looks like:
 ```
 
 If you see `❌ gunicorn not running`, jump to section 2.
-If you see `❌ GET / → 500`, jump to section 3.
+If you see `❌ GET /api/health → 503` or `❌ GET / → 500`, jump to section 3.
+If you see `⚠️ GET /api/ready → 503 (up but unhealthy)`, jump to section 3 — DB is unreachable.
 
 ---
 
@@ -81,6 +89,9 @@ holds a lock, every other write blocks. Fix:
 - **Wait 30s** — usually the lock releases
 - **Check who's holding it:**
   ```bash
+  # Mac Studio production: DB lives at /Volumes/Storage-Fast-NVMe/
+  lsof /Volumes/Storage-Fast-NVMe/video_learning.db
+  # Dev / fallback: relative path
   lsof video_learning.db
   ```
   You'll see the python process holding the .db file.

@@ -8,7 +8,7 @@
 
 ## 🎯 Current state
 
-- **Tests**: 1112 passing, 0 failing, 89% coverage
+- **Tests**: 1189 passing, 0 failing, 89% coverage
 - **Branch**: ahead of `main` (pivot to admin-curated YouTube catalog)
 - **Feature status**: Day 1-6 shipped (Day 7 buffer next)
 - **Server**: gunicorn 4 workers × 2 threads (since Day 6)
