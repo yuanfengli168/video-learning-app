@@ -38,9 +38,16 @@
             {% if video.youtube_id %}
             <!-- MVP2: YouTube embed (admin-curated catalog videos).
                  youtube-nocookie.com is the GDPR-friendly privacy-enhanced
-                 domain — no tracking cookies until the user clicks play. -->
+                 domain — no tracking cookies until the user clicks play.
+                 Day 8: added id="youtube-player" so yt_player.js can wrap
+                 it with the IFrame API (postMessage controls). Without this
+                 id, transcript-click and mindmap-click seek operations
+                 silently no-op because the iframe doesn't expose a DOM
+                 interface. The id also lets YTPlayer.init() detect the
+                 backend (iframe vs <video>) cleanly. -->
             <iframe
-                src="https://www.youtube-nocookie.com/embed/{{ video.youtube_id }}"
+                id="youtube-player"
+                src="https://www.youtube-nocookie.com/embed/{{ video.youtube_id }}?enablejsapi=1"
                 class="w-full aspect-video block"
                 frameborder="0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -470,6 +477,13 @@
     </div>
 </div>
 
+<!-- Day 8: yt_player.js wraps both <video> AND YouTube iframes with a
+     unified API (seekTo, play, pause, getCurrentTime, on('timeupdate')).
+     Must load BEFORE transcript-follow.js (which now reads player.currentTime
+     via the wrapper, not video.currentTime directly). Both defer so they
+     execute in order, DOMContentLoaded fires, then our inline <script>
+     below runs YTPlayer.init() and wires up the rest of the page. -->
+<script src="/static/js/yt_player.js" defer></script>
 <script src="/static/js/transcript-follow.js" defer></script>
 <script>
 const videoId = '{{ video.id }}';
@@ -769,14 +783,36 @@ function renderTranscript(segments) {
     // MVP2.0 item #2: single top-anchor mode — no dropdown, no localStorage,
     // no per-user email meta. The component reads segments from the global
     // `transcriptData` and pins the active line to the top of the panel.
-    if (window.TranscriptFollow) {
-        window.TranscriptFollow.init({
-            container: container,
-            video: document.querySelector('video'),
-            segmentsProvider: function () {
-                return (transcriptData && transcriptData.segments) || null;
-            },
-        });
+    // Day 8: wire transcript-follow to the YTPlayer wrapper instead of
+    // the raw <video> element. transcript-follow.js will read the player's
+    // currentTime via the wrapper, so it works for YouTube iframes too.
+    // We pass the player if it's already initialized; otherwise pass
+    // the native <video> fallback (the wrapper handles re-wiring via
+    // its onTimeUpdate hook once init resolves).
+    const initFollow = (player) => {
+        const followTarget = player || document.querySelector('video');
+        if (window.TranscriptFollow && followTarget) {
+            window.TranscriptFollow.init({
+                container: container,
+                video: followTarget,
+                segmentsProvider: function () {
+                    return (transcriptData && transcriptData.segments) || null;
+                },
+            });
+        }
+    };
+    if (window.YTPlayer) {
+        // Try to use the player wrapper; fall back to <video> if not yet ready
+        const inst = window.YTPlayer.getInstance();
+        if (inst) {
+            initFollow(inst);
+        } else {
+            window.YTPlayer.onReady(() => initFollow(window.YTPlayer.getInstance()));
+            // Also kick off init so it's wired up
+            window.YTPlayer.init().catch(() => { /* init failure: leave fallback */ });
+        }
+    } else {
+        initFollow(null);
     }
 }
 
@@ -787,8 +823,28 @@ function formatTime(seconds) {
 }
 
 function seekTo(seconds) {
+    // Day 8: use the unified YTPlayer wrapper instead of `video.currentTime`.
+    // The wrapper handles both <video> AND YouTube iframe backends.
+    // Falls back to the legacy direct-DOM path if YTPlayer.init() hasn't
+    // completed yet (race condition during page load).
+    const player = window.YTPlayer && window.YTPlayer.getInstance();
+    if (player) {
+        player.seekTo(seconds);
+        player.play().catch(() => { /* user-gesture restrictions may block autoplay */ });
+        return;
+    }
+    // Fallback for the brief window between <script defer> execution and
+    // YTPlayer.init() resolving the YouTube API handshake.
     const video = document.querySelector('video');
     if (video) { video.currentTime = seconds; video.play(); }
+    // If neither: this is a YouTube video and YTPlayer isn't ready yet.
+    // Queue the seek by retrying after init completes.
+    else if (window.YTPlayer) {
+        window.YTPlayer.init().then((p) => {
+            p.seekTo(seconds);
+            p.play().catch(() => {});
+        });
+    }
 }
 
 // ── Transcript search with highlight + navigation ──
@@ -1882,11 +1938,18 @@ function jumpToTopic(topicName) {
     // If we're in the fullscreen mindmap modal, close it first so the user
     // sees the video and transcript on the page below.
     closeMindmapFullscreen();
-    // Jump the video
-    const video = document.querySelector('video');
-    if (video) {
-        video.currentTime = ts.start;
-        video.pause();  // Pause at start so user can read the banner
+    // Jump the video (Day 8: uses YTPlayer wrapper, works for both backends)
+    const player = window.YTPlayer && window.YTPlayer.getInstance();
+    if (player) {
+        player.seekTo(ts.start);
+        player.pause();  // Pause at start so user can read the banner
+    } else {
+        // Fallback to legacy direct-DOM
+        const video = document.querySelector('video');
+        if (video) {
+            video.currentTime = ts.start;
+            video.pause();
+        }
     }
     // Show the banner
     showTopicBanner(displayName, ts.start, ts.end);
@@ -2851,6 +2914,33 @@ window.addEventListener('resize', () => {
         console.warn('Could not fetch default whisper model:', e);
     }
 })();
+
+// ── Day 8: Initialize YTPlayer + enable resume-from-last-position ──
+//
+// This kicks off the YouTube IFrame API handshake (if applicable) and
+// wires up localStorage-based resume. We do this at the very end of
+// the inline script so all the helpers above (seekTo, highlightTranscriptRange,
+// renderTranscript) are already defined before the first timeupdate fires.
+//
+// For YouTube videos: init() awaits the iframe_api script load (~500-1500ms on
+// first visit). Until it resolves, transcript clicks fall back to the legacy
+// `<video>` path (which silently no-ops on an iframe — see comment on seekTo).
+// That's a brief warmup window; users in practice don't click during it.
+//
+// enableResume() reads the last position from localStorage and:
+//   - if > 3 seconds into the video: seeks to that position on ready
+//   - saves the current position every 5s while playing
+//   - saves on tab hide / page unload (so closing the tab still resumes)
+if (window.YTPlayer) {
+    // Kick off init — failures are caught inside (we don't want a missing
+    // YouTube API to break the whole page)
+    window.YTPlayer.init().then((player) => {
+        // Wire up resume-from-last-position now that the player is ready
+        window.YTPlayer.enableResume(videoId);
+    }).catch((err) => {
+        console.warn('YTPlayer init failed (page still works, just no YouTube controls):', err);
+    });
+}
 </script>
 
 <!-- Delete confirmation modal — hidden by default, shown by

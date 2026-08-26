@@ -84,6 +84,7 @@
     let getSegments = null;
     let onTimeUpdate = null;
     let onSeeked = null;
+    let onTimeUpdateDispose = null;  // Day 8: for YTPlayer.onTimeUpdate() cleanup
     let onMouseEnter = null;
     let onMouseLeave = null;
     let rafId = null;        // one rAF in flight at a time
@@ -216,7 +217,13 @@
         if (!videoEl || !getSegments) return;
         const segs = getSegments();
         if (!segs) return;
-        highlightLine(findActiveSegment(videoEl.currentTime, segs), forceScroll);
+        // Day 8: read currentTime via getCurrentTime() if the wrapped
+        // YTPlayer is passed (works for both <video> AND YouTube iframe).
+        // Falls back to .currentTime for raw <video> elements (legacy).
+        const t = (typeof videoEl.getCurrentTime === 'function')
+            ? videoEl.getCurrentTime()
+            : (videoEl.currentTime || 0);
+        highlightLine(findActiveSegment(t, segs), forceScroll);
     }
 
     function init(opts) {
@@ -239,8 +246,18 @@
         const wrappedUpdate = function () { updateActiveLine(false); };
         onTimeUpdate = wrappedUpdate;
         onSeeked = wrappedUpdate;
-        videoEl.addEventListener('timeupdate', onTimeUpdate);
-        videoEl.addEventListener('seeked', onSeeked);
+
+        // Day 8: detect YTPlayer wrapper vs raw <video>. The wrapper
+        // exposes onTimeUpdate(handler) (YouTube iframes don't fire
+        // native timeupdate). For raw <video>, we use the DOM events.
+        if (typeof videoEl.onTimeUpdate === 'function' && videoEl.kind) {
+            // YTPlayer wrapper (has .kind === 'youtube' or 'native')
+            onTimeUpdateDispose = videoEl.onTimeUpdate(wrappedUpdate);
+        } else {
+            // Raw <video> — use DOM events (legacy path)
+            videoEl.addEventListener('timeupdate', onTimeUpdate);
+            videoEl.addEventListener('seeked', onSeeked);
+        }
 
         // Hover-to-pause: while the cursor is over the transcript
         // panel, suspend auto-scroll so the user can read without
@@ -270,8 +287,14 @@
 
     function destroy() {
         if (videoEl && onTimeUpdate) {
-            videoEl.removeEventListener('timeupdate', onTimeUpdate);
-            videoEl.removeEventListener('seeked', onSeeked);
+            // Day 8: dispose YTPlayer subscription if we used it
+            if (typeof onTimeUpdateDispose === 'function') {
+                onTimeUpdateDispose();
+                onTimeUpdateDispose = null;
+            } else {
+                videoEl.removeEventListener('timeupdate', onTimeUpdate);
+                videoEl.removeEventListener('seeked', onSeeked);
+            }
         }
         if (container) {
             if (onMouseEnter) container.removeEventListener('mouseenter', onMouseEnter);
