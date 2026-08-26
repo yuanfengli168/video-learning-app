@@ -2,7 +2,7 @@
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Goal**: Make this Mac Studio (`Yuanfengs-Mac-Studio.local`) a 24/7 production server for video-learning-app.
-> **Last updated**: 2026-08-25
+> **Last updated**: 2026-08-26
 
 ---
 
@@ -10,7 +10,7 @@
 
 - **Tests**: 1189 passing, 0 failing, 89% coverage
 - **Branch**: ahead of `main` (pivot to admin-curated YouTube catalog)
-- **Feature status**: Day 1-6 shipped (Day 7 buffer next)
+- **Feature status**: Day 1-7 shipped (Day 8 — YouTube iframe — next)
 - **Server**: gunicorn 4 workers × 2 threads (since Day 6)
 
 ---
@@ -38,12 +38,12 @@
 | 18 | **Day 5 hotfix2 (5 commits)** — lyf99.2022 reported: chat input disabled on admin-curated PUBLIC videos, no transcript/materials visible. Root cause: pre-Day-1 `course.user_id == uid` ownership check inherited from the old "users upload their own video" model; never updated for admin-curated videos. Fixed 5 routes (2 chat, 1 asset-fetch, 2 transcript-fetch) + JS bug where chat input never re-enabled on error + new `app/services/video_status.py` that auto-flips `status='error'` → `'ready'` when all 5 required assets exist. New helper `user_can_access_video(role, visibility)` is the single source of truth. 30 new tests across `test_roles.py` (17) + `test_generation.py` (+2) + `test_video_status.py` (8) | `fc73f78`…`b468d39` |
 | 19 | **Day 5 hotfix3 (3 commits)** — lyf99.2022 reported: chat shows `❌ [object Object]`. Root cause: `groq/compound` (router) consistently returns 413 for our 3k-token system prompts (sub-model limit too small) → `ChatCallError` → dict `detail` → JS `new Error(dict)` → `'[object Object]'`. Fixed: (a) added `formatErrorDetail()` JS helper that extracts `.message` from dict errors; (b) switched `llm_model_groq` from `groq/compound` to `groq/compound-mini` (live-tested: 200, 1.57s for video-scope chat). Tradeoff: compound-mini can 429 after a burst of free users (sub-model TPM cap) — no paid fallback per user direction, keep free tier strictly $0 | `184c095` + `4bc55d7` + (this) || 20 | **Day 6 (7 commits)** — Production server stack: (a) `gunicorn>=23.0.0` dep; (b) `gunicorn.conf.py` (4 workers × 2 threads, 60s timeout, graceful shutdown, max_requests recycling); (c) `start.sh` rewritten (default gunicorn; `SERVER=uvicorn` fallback for dev hot-reload) + `stop.sh` updated to handle both; (d) new `/api/ready` endpoint (k8s-style readiness with DB + events-table + Ollama checks, returns 503 on DB unreachable) + 5 new tests; (e) Cloudflare Tunnel verified end-to-end (live https://*.trycloudflare.com → gunicorn:8000, 200 in 0.68s) + install-cloudflare-tunnel.sh updated to check `/api/ready`; (f) `scripts/restart.sh` + `doc/runbook-day6.md` (8 sections + process tree diagram); (g) docs refresh. 5 new tests, +1 doc, +1 helper script | `61f2d89`…`5d0a0f0` (this doc) |---
 
-## 📅 In progress (Day 6 — feature work)
+## 📅 In progress (Day 7 — buffer, just shipped)
 
 | # | Item | Plan |
 |---|---|---|
-| 17 | **Day 6 (next)**: gunicorn 4 workers + update `start.sh` + Cloudflare Tunnel | per go-live plan |
-| 18 | **Day 8**: Replace `<video>` with YouTube embed iframe + jump-to-time via IFrame API (already partial via Day 2C) | per go-live plan |
+| 21 | **Day 7 (just shipped)**: Buffer day — fixed `status.sh` not detecting gunicorn (was Day 6 regression); added Mac sleep-state check; smoke-tested `/api/health` + `/api/ready`; covered youtube_captions.py integration path with 26 mocks (49% → 95%); doc freshness refresh. Commit `f82d216`. | done |
+| 18 | **Day 8 (next)**: Replace `<video>` with YouTube embed iframe + jump-to-time via IFrame API (already partial via Day 2C). Needs: full iframe on /video page, jump-to-timestamp from transcript click, postMessage listener for currentTime, persist last-watched timestamp. | per go-live plan |
 | 19 | **Day 9-13**: Test with 3 real YouTube videos, security hardening, soft launch, bug bash, polish, docs | per go-live plan |
 | 20 | **Day 14**: LAUNCH | 🎯 |
 

@@ -1184,10 +1184,15 @@ an existing if/else).
 
 ### 🧪 Tests
 
-- **+479 tests** (633 → 1112): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests), Day 5 hotfix2 (`user_can_access_video` + `video_status` + 5 route fixes, 30 new tests), Day 5 hotfix3 (JS error helper, no new tests but a real-world verified e2e flow), Day 6 (`/api/health` liveness + `/api/ready` readiness, 5 new tests).
+- **+556 tests** (633 → 1189): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests), Day 5 hotfix2 (`user_can_access_video` + `video_status` + 5 route fixes, 30 new tests), Day 5 hotfix3 (JS error helper, no new tests but a real-world verified e2e flow), Day 6 (`/api/health` liveness + `/api/ready` readiness, 5 new tests + 51 infra tests for gunicorn.conf.py, start/stop/restart.sh, and live-boot), Day 7 buffer (26 tests for `youtube_captions.fetch_youtube_captions()` integration path → module 49%→95% coverage).
 - **89% coverage** maintained (network code naturally hard to cover without integration tests; we mock at the worker boundary).
+
+### 🐛 Notable bug fixed Day 7
+
+- **`scripts/status.sh` didn't detect gunicorn.** After Day 6's gunicorn switch, the runbook's first command always reported "uvicorn not running" even when the app was perfectly healthy. Now matches both `video-learning-app` proc_name (gunicorn) and `uvicorn app.main` (dev). Also detects Mac auto-sleep state and smoke-tests `/api/health` + `/api/ready`.
 
 ### 📋 In progress
 
-- **Day 6**: gunicorn 4 workers + `start.sh` update + Cloudflare Tunnel. See `doc/mvp2-final-go-live-plan.md`.
-- **Days 7-14**: Buffer, IFrame API, real-video testing, security hardening, soft launch, public beta.
+- **Day 7**: Buffer day — done. See commit `f82d216`.
+- **Day 8**: Replace `<video>` with YouTube embed iframe + jump-to-time via IFrame API. See `doc/mvp2-final-go-live-plan.md`.
+- **Days 9-14**: Real-video testing, security hardening, soft launch, public beta.

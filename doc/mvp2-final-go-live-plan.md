@@ -332,6 +332,7 @@ Events table (SQLite) → Grafana dashboard (Docker, optional)
 | | **(b) Actual shipped** (commit `3e58c3f`): `brew install cloudflared` (v2026.8.2); live-tested `cloudflared tunnel --url http://localhost:8000` → got `https://ingredients-powder-quality-welcome.trycloudflare.com`; `curl $TUNNEL_URL/api/health` → HTTP 200 in 0.68s; updated `install-cloudflare-tunnel.sh` to also check `/api/ready`; appended Day 6 self-hosting section to `doc/deployment.md` | Verified: tunnel → gunicorn → 200 in <1s |
 | | (c) Runbook for 11pm incidents. `commit 5d0a0f0`: `scripts/restart.sh` (stop+start wrapper), `doc/runbook-day6.md` (8 sections + process tree diagram) | Operator can debug without prior context |
 | **Day 7** | Buffer day (bugs, polish, testing) | Stable build |
+| **Day 7 actual** | **Just shipped** (`f82d216`): (a) Cold-eyes review of `status.sh` caught a real bug — it didn't detect gunicorn after Day 6, so the runbook's first command always reported "uvicorn not running" at 11pm. Fixed to match `video-learning-app` proc_name; also added Mac auto-sleep detection (silent failure mode) + smoke-tests for `/api/health` + `/api/ready`. (b) Coverage scan → `youtube_captions.py` was the worst at 49%. Added `tests/test_youtube_captions_fetch.py` (26 tests, mocked yt-dlp) → module now at 95%. (c) Doc freshness refresh (CHANGELOG, Readme, status doc). 1189 tests passing, +26 from this commit | Stable build, runbook trustworthy, youtube_captions under test |
 
 ### Week 2
 

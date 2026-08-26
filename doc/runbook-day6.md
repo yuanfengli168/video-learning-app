@@ -205,7 +205,7 @@ time ollama run glm-5.2:cloud "hello"
 
 Common fixes:
 - **Restart the app** — fastest, recovers from most worker leaks
-- **Clear /tmp/uvicorn.log** if it's been growing (not Day 6; legacy)
+- **Clear `/tmp/uvicorn.log` if it's been growing** (legacy; Day 6+ uses `logs/server.log`)
 - **Vacuum the DB** (run `scripts/setup-backups.sh` which does this)
 
 ---
@@ -305,4 +305,4 @@ launchd (system)
 
 ## Last updated
 
-2026-08-25 (Day 6)
+2026-08-26 (Day 7 — status.sh gunicorn-detection bugfix, Mac sleep-state check, /api/health + /api/ready smoke tests)
