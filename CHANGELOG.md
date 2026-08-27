@@ -1151,8 +1151,8 @@ an existing if/else).
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Scope**: Convert this Mac Studio into a 24/7 production server for an admin-curated YouTube catalog. Users no longer upload videos — admins paste YouTube URLs.
-> **Tests**: 1189 passing, 89% coverage (was 633 / 92% before this branch)
-> **Versions shipped on this branch**: 84 commits ahead of `main`, all pushed
+> **Tests**: 1201 passing, 89% coverage (was 633 / 92% before this branch)
+> **Versions shipped on this branch**: 47 commits ahead of `main`, all pushed
 
 **Note:** Versions below are unnumbered in-flux commits on `mvp2-production-patches`, listed in chronological order. Final version number (e.g. `2.2.0`) will be assigned when this branch merges to `main`.
 
@@ -1184,7 +1184,7 @@ an existing if/else).
 
 ### 🧪 Tests
 
-- **+556 tests** (633 → 1189): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests), Day 5 hotfix2 (`user_can_access_video` + `video_status` + 5 route fixes, 30 new tests), Day 5 hotfix3 (JS error helper, no new tests but a real-world verified e2e flow), Day 6 (`/api/health` liveness + `/api/ready` readiness, 5 new tests + 51 infra tests for gunicorn.conf.py, start/stop/restart.sh, and live-boot), Day 7 buffer (26 tests for `youtube_captions.fetch_youtube_captions()` integration path → module 49%→95% coverage).
+- **+568 tests** (633 → 1201): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests), Day 5 hotfix2 (`user_can_access_video` + `video_status` + 5 route fixes, 30 new tests), Day 5 hotfix3 (JS error helper, no new tests but a real-world verified e2e flow), Day 6 (`/api/health` liveness + `/api/ready` readiness, 5 new tests + 51 infra tests for gunicorn.conf.py, start/stop/restart.sh, and live-boot), Day 7 buffer (26 tests for `youtube_captions.fetch_youtube_captions()` integration path → module 49%→95% coverage), Day 8 (YouTube IFrame API integration: 28 tests for `yt_player.js` wrapper), Day 9 hotfix (3 tests: NO_PROXY shell test + 2 session-expiry middleware tests).
 - **89% coverage** maintained (network code naturally hard to cover without integration tests; we mock at the worker boundary).
 
 ### 🐛 Notable bug fixed Day 7
@@ -1194,5 +1194,6 @@ an existing if/else).
 ### 📋 In progress
 
 - **Day 7**: Buffer day — done. See commit `f82d216`.
-- **Day 8**: Replace `<video>` with YouTube embed iframe + jump-to-time via IFrame API. See `doc/mvp2-final-go-live-plan.md`.
+- **Day 8**: YouTube IFrame API integration (`yt_player.js` wrapper for `<video>` AND YouTube iframes — transcript click and mindmap jump now work for both backends; resume-from-last-position via localStorage). Commits `115444d` + `9e79c36`.
+- **Day 9**: Buffer → real hotfix day after 10-min phone smoke test caught 3 bugs. Commit `6765fad`.
 - **Days 9-14**: Real-video testing, security hardening, soft launch, public beta.
