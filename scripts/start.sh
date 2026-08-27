@@ -77,6 +77,23 @@ echo "  📝 Logs: $LOG_FILE"
 echo "  ⏹️  Stop: bash scripts/stop.sh"
 echo ""
 
+# ── Disable macOS proxy auto-detection (Day 9 hotfix) ─────────────────────
+# Without NO_PROXY=*, every outbound HTTPS call (Groq, Ollama, Firebase,
+# YouTube, Cloudflare) goes through macOS's SCDynamicStore, which crashes
+# Python 3.14 with EXC_GUARD (bug_type=309). This was the cause of
+# worker SIGSEGVs starting 2026-08-26 — same crash signature across 3+ days.
+#
+# NO_PROXY=* tells httpx/urllib3 "skip system proxy discovery for ALL hosts"
+# — we don't use an HTTP proxy in this stack (Cloudflare Tunnel handles
+# ingress). Setting it globally before exec'ing gunicorn ensures every
+# worker inherits it.
+#
+# See doc/runbook-day6.md § "Worker keeps restarting (timeout=60s)" for
+# the SIGSEGV observation; see doc/mvp2-final-go-live-plan.md Day 9 for
+# the root-cause writeup.
+export NO_PROXY="*"
+export no_proxy="*"  # belt + suspenders (some libs check lowercase)
+
 # ── Start ───────────────────────────────────────────────────────────────────
 if [[ "$SERVER" == "gunicorn" ]]; then
     # Production: gunicorn process manager with uvicorn workers

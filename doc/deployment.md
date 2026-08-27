@@ -286,3 +286,32 @@ auto-starts on reboot. Verify with `sudo launchctl list | grep cloudflared`.
 - One caveat: Mac Studio is a single point of failure. Offsite
   backups via `scripts/setup-backups.sh` are essential.
 
+### Firebase Authorized Domains (Day 9 addendum)
+
+When you expose the app to a new domain (Cloudflare Tunnel, custom
+DNS, etc.), that domain must be added to Firebase's Authorized
+Domains list — otherwise login fails with:
+
+  This domain is not authorized for sign-in.
+  Add localhost to the authorized domains in
+  Firebase Console → Authentication → Settings.
+
+**How to add a new domain**:
+
+1. Open https://console.firebase.google.com/project/video-learning-app-3cf41/authentication/settings
+2. Scroll to **Authorized domains**
+3. Click **Add domain**
+4. For Cloudflare quick tunnels: add `trycloudflare.com` (Firebase
+   treats this as a wildcard prefix)
+5. For permanent custom domains: add each FQDN (e.g. `app.example.com`)
+6. Click **Add**
+
+This must be done in the Firebase Console (not in our code). The
+list survives across deploys — you only need to add each new domain
+once. The Day 6 + Day 8 verification flow hit this gap on first
+phone-test (2026-08-27) because `*.trycloudflare.com` wasn't on the
+list; a 30-second Firebase Console fix unblocked the test.
+
+If you add new deployment targets (custom domain, Render, etc.),
+update this list. The default `localhost` is always there.
+

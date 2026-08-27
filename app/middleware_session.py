@@ -200,29 +200,87 @@ class SessionExpiryMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Cookie is present. Verify it. If it's valid, let the request
-        # through unchanged. If it fails, redirect to /?session=expired.
+        # through unchanged. If verification fails, decide whether to
+        # bounce to /?session=expired or let the request through (so
+        # downstream code can return 401 cleanly).
         #
-        # We catch the broadest reasonable set of exceptions because
-        # token verification can fail in many ways (expired, malformed,
-        # revoked, network error reaching Firebase, etc.) and every
-        # one of them means "the cookie is no good — bounce the user".
+        # Day 9 hotfix: only bounce for token-specific failures
+        # (InvalidIdTokenError, ExpiredIdTokenError, RevokedIdTokenError,
+        # ValueError). Network/availability errors (UNAVAILABLE, internal
+        # Firebase errors) should NOT bounce — that was the bug where
+        # phone users got "session expired" on transient network blips
+        # while clicking a video. The previous `except Exception` was
+        # too broad and caught network failures as if they were bad
+        # cookies, redirecting users unnecessarily.
         #
-        # Implementation note: the docstring of verify_token() says it
-        # raises ValueError, but in practice the underlying Firebase
-        # Admin SDK raises firebase_admin.exceptions.FirebaseError
-        # (specifically InvalidIdTokenError, which is a subclass of
-        # FirebaseError, NOT ValueError). Catching only ValueError
-        # would miss real-world failures; catching (ValueError,
-        # FirebaseError) covers both the documented contract and the
-        # actual SDK behavior. The Firebase import is lazy so this
-        # module doesn't force firebase_admin to load on startup.
+        # Implementation: we import Firebase error types lazily (the
+        # firebase_admin module is heavy and we don't want to block
+        # startup). If they're not available, fall back to a tuple of
+        # the parent + ValueError so the basic case still works.
         try:
             verify_token(cookie_token)
-        except Exception:  # noqa: BLE001 — intentionally broad
+        except ValueError:
+            # Documented contract: verify_token raises ValueError on
+            # malformed/expired/revoked tokens.
             return RedirectResponse(
                 url="/?session=expired",
                 status_code=302,
             )
+        except _token_error_classes() as exc:
+            # Firebase-specific token errors (not network errors).
+            # We check this AFTER ValueError because InvalidIdTokenError
+            # is a subclass of FirebaseError which is not ValueError.
+            if _is_token_quality_error(exc):
+                return RedirectResponse(
+                    url="/?session=expired",
+                    status_code=302,
+                )
+            # Token quality unknown (likely a network/availability issue).
+            # Let the request through — downstream code will return 401
+            # on its own if needed, but the user won't see a phantom
+            # "session expired" toast from a transient blip.
+        except Exception:  # noqa: BLE001 — last-resort safety net
+            # Unknown error type. Be conservative: let it through rather
+            # than logging the user out. (Better to debug a 401 than to
+            # bounce users on every unknown Firebase SDK quirk.)
+            pass
 
-        # Cookie is valid — proceed normally.
+        # Cookie is valid (or we couldn't verify but chose not to bounce) —
+        # proceed normally.
         return await call_next(request)
+
+
+def _token_error_classes() -> tuple[type, ...]:
+    """Return Firebase token error classes (lazy import).
+
+    Returns an empty tuple if firebase_admin isn't available — the
+    ValueError catch above will still handle the common case.
+    """
+    try:
+        from firebase_admin import exceptions as fb_exc
+        return (fb_exc.FirebaseError,)
+    except ImportError:
+        return ()
+
+
+def _is_token_quality_error(exc: BaseException) -> bool:
+    """True if this FirebaseError means 'the token is bad', not 'network down'.
+
+    Token quality errors → bounce to /?session=expired:
+      - InvalidIdTokenError: token malformed or revoked
+      - ExpiredIdTokenError: token past its expiry (we set 1h, so this
+        means the user has been idle > 1h, or their clock drifted)
+      - RevokedIdTokenError: user logged out elsewhere
+
+    NOT token quality (let request through):
+      - UnavailableError: Firebase backend unreachable
+      - InternalError: something broke on Google's side
+      - DeadlineExceededError: token verification timed out
+    """
+    try:
+        from firebase_admin import exceptions as fb_exc
+    except ImportError:
+        return True  # conservative: treat unknown as token-quality
+    return isinstance(exc, (fb_exc.InvalidIdTokenError,
+                            fb_exc.ExpiredIdTokenError,
+                            fb_exc.RevokedIdTokenError))

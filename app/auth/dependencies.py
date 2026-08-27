@@ -97,6 +97,15 @@ async def get_current_user_optional(
     try:
         claims = verify_token(token)
     except ValueError:
+        # Documented contract: invalid/expired/revoked tokens raise ValueError.
+        return None
+    except Exception:  # noqa: BLE001 — see Day 9 hotfix note
+        # Day 9 hotfix: also swallow Firebase SDK errors (UNAVAILABLE,
+        # InternalError, etc.). These are network/availability issues,
+        # not token-quality issues. The user is treated as anonymous
+        # for this request — downstream code can render the "Sign in"
+        # prompt instead of crashing with a 500.
+        # See app/middleware_session.py for the matching fix.
         return None
 
     # Only ensure the row if we have a uid (defense in depth)

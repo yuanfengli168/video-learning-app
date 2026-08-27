@@ -150,6 +150,38 @@ class TestStartSh:
             "runbook day6 has 'tail -f logs/server.log' as step 1."
         )
 
+    def test_sets_no_proxy_to_disable_macos_proxy_lookup(self):
+        """Day 9 hotfix: set NO_PROXY=* before launching gunicorn.
+
+        Without this, every outbound HTTPS call (Groq, Ollama, Firebase,
+        YouTube) goes through SCDynamicStoreCopyProxiesWithOptions, which
+        crashes Python 3.14 with EXC_GUARD (bug_type=309) — see macOS
+        DiagnosticReports/Python-*.ips. The fix: skip proxy auto-discovery
+        so the crashing code path is never hit.
+
+        Regression guard: if someone removes the export NO_PROXY line,
+        this test fails BEFORE the Mac segfaults in production.
+        """
+        content = _script("start.sh").read_text()
+        # Look for the export line (must come BEFORE exec gunicorn)
+        no_proxy_match = re.search(r"^\s*export\s+NO_PROXY\s*=", content, re.MULTILINE)
+        exec_match = re.search(r"^\s*exec\s+gunicorn", content, re.MULTILINE)
+        assert no_proxy_match, (
+            "start.sh must `export NO_PROXY=*` before launching gunicorn — "
+            "without it, Python 3.14 + macOS workers crash in "
+            "SCDynamicStoreCopyProxiesWithOptions when making outbound HTTPS."
+        )
+        assert exec_match, "start.sh must exec gunicorn"
+        assert no_proxy_match.start() < exec_match.start(), (
+            "NO_PROXY must be exported BEFORE exec gunicorn — workers "
+            "inherit the parent's env, so the export must come before "
+            "the exec that replaces the shell."
+        )
+        # The value should be the wildcard (we don't use a proxy)
+        assert '"*"' in content or "'*'" in content, (
+            "NO_PROXY value must be '*' (skip proxy lookup for all hosts)"
+        )
+
 
 # ─── stop.sh structural checks ──────────────────────────────────────────
 

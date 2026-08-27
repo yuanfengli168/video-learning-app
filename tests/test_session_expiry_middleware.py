@@ -499,3 +499,98 @@ def test_session_expired_query_param_does_not_break_dashboard_for_anon(client: T
     response = client.get("/?session=expired", follow_redirects=False)
     assert response.status_code == 200
     assert "Your session has expired" in response.text
+
+
+# ── Day 9 hotfix: network/availability errors must NOT log users out ──────
+
+
+def _middleware_sees_firebase_unavailable():
+    """Patch verify_token to raise FirebaseError with code UNAVAILABLE.
+
+    Reproduces the Day 9 phone-test bug: phone user's network blipped
+    during token verification. Previously the middleware's broad
+    `except Exception` caught this and bounced the user to /?session=expired
+    — the user saw a phantom "session expired" toast while the cookie
+    was still valid. After the fix, the middleware lets the request
+    through (downstream code returns 401 at most, which is a normal
+    auth failure the client can retry).
+    """
+    from unittest.mock import MagicMock
+
+    class FakeFirebaseError(Exception):
+        """Stand-in for firebase_admin.exceptions.FirebaseError(UNAVAILABLE)."""
+        pass
+
+    mock = MagicMock(side_effect=FakeFirebaseError("Service Unavailable"))
+    return _MultiPatch([
+        patch("app.auth.firebase_admin.verify_token", mock),
+        patch("app.middleware_session.verify_token", mock),
+        patch("app.auth.dependencies.verify_token", mock),
+        patch("app.auth.session.verify_token", mock),
+    ])
+
+
+def test_unavailable_error_does_not_bounce_to_session_expired(client: TestClient):
+    """Day 9 hotfix: Firebase UNAVAILABLE error (network blip) must
+    NOT redirect to /?session=expired.
+
+    This is the bug from the 2026-08-27 phone test where clicking a
+    video on cellular triggered a network blip during token verification
+    → middleware bounced user with a phantom "session expired" toast.
+    """
+    # Seed a valid cookie + user so the route would otherwise let us in
+    with _middleware_sees_valid(FAKE_USER):
+        # First confirm: valid cookie DOES let us through
+        ok_response = client.get(
+            "/video/d71c3de8-5d55-4802-9314-ca481a7caaf2",
+            cookies={COOKIE_NAME: "valid-jwt"},
+            follow_redirects=False,
+        )
+        # May be 200 or 404 depending on video existence; what matters is
+        # it's not a 302 to /?session=expired
+        assert ok_response.status_code != 302, (
+            "Sanity check failed: valid cookie was bounced. "
+            "This test assumes the happy path works."
+        )
+
+    with _middleware_sees_firebase_unavailable():
+        # Same request, but now verify_token raises an "unavailable" error.
+        # Before the fix: middleware bounces to /?session=expired (302).
+        # After the fix: middleware lets it through (200/404/etc.).
+        response = client.get(
+            "/video/d71c3de8-5d55-4802-9314-ca481a7caaf2",
+            cookies={COOKIE_NAME: "valid-jwt"},
+            follow_redirects=False,
+        )
+        # Must NOT be a 302 to /?session=expired
+        assert response.status_code != 302, (
+            "Day 9 hotfix regression: middleware bounced the user "
+            "to /?session=expired on a Firebase UNAVAILABLE error. "
+            "This is the phone-test bug from 2026-08-27. The fix "
+            "should only bounce on token-quality errors "
+            "(InvalidIdTokenError, ExpiredIdTokenError, "
+            "RevokedIdTokenError, ValueError), not on network errors."
+        )
+        # Must not redirect anywhere (network error shouldn't change UX)
+        assert "location" not in {k.lower() for k in response.headers.keys()}
+
+
+def test_expired_token_still_bounces(client: TestClient):
+    """Sanity check: the fix didn't break the original behavior.
+
+    A genuinely expired/invalid token (ValueError) must STILL bounce
+    the user to /?session=expired. We only loosened for network errors;
+    token-quality errors still bounce.
+    """
+    with _middleware_sees_expired():
+        response = client.get(
+            "/video/d71c3de8-5d55-4802-9314-ca481a7caaf2",
+            follow_redirects=False,
+        )
+        # Should redirect to /?session=expired
+        assert response.status_code == 302, (
+            "Regression: valid (expired) tokens should still bounce "
+            "to /?session=expired. Only network errors should let "
+            "the request through."
+        )
+        assert "/?session=expired" in response.headers.get("location", "")
