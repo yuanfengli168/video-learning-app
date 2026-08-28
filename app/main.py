@@ -2,13 +2,16 @@
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
+from app.auth.admin import require_capability
+from app.auth.roles import Capability
 from app.database import init_db
 from app.middleware import SecurityHeadersMiddleware
 from app.middleware_session import SessionExpiryMiddleware
@@ -262,10 +265,156 @@ async def readiness_check():
     except Exception:
         ollama_ok = False
 
-    return {
+    # 4. SQLite integrity check (Day 10 hardening).
+    # Day 10 incident: a wiped DB had integrity=ok but 0 rows. integrity_check
+    # alone won't catch that, but a corrupted DB would fail here. Cheap to run
+    # (one page read), so we do it on every readiness probe.
+    integrity_ok = True
+    integrity_msg: str | None = None
+    try:
+        result = db.execute(text("PRAGMA integrity_check")).scalar()
+        if result != "ok":
+            integrity_ok = False
+            integrity_msg = str(result)[:200]
+    except Exception as exc:
+        integrity_ok = False
+        integrity_msg = f"{type(exc).__name__}: {exc}"
+
+    # 5. Backup freshness (Day 10 hardening).
+    # Read the probe's JSON; if the newest backup is older than 26h, the
+    # service is still "ready" (the live DB works) but degraded — we
+    # return 200 with backup_stale=True so monitoring can alert.
+    from app.services.backup_monitor import read_status_file
+    backup_summary: dict[str, Any] = {
+        "probe_present": False,
+        "is_healthy": False,
+        "newest_age_hours": None,
+        "is_stale": False,
+    }
+    backup_status = read_status_file()
+    if backup_status is not None:
+        backup_summary["probe_present"] = True
+        backup_summary["is_healthy"] = backup_status.is_healthy
+        if backup_status.files:
+            newest_age = backup_status.files[0].age_hours
+            backup_summary["newest_age_hours"] = round(newest_age, 2)
+            backup_summary["is_stale"] = newest_age > 26.0
+    else:
+        # No probe has ever run — treat as stale so the admin dashboard
+        # has something to alert on, but don't fail readiness (the
+        # service itself is fine).
+        backup_summary["is_stale"] = True
+        backup_summary["reason"] = "probe never ran"
+
+    response_body: dict[str, Any] = {
         "status": "ready",
         "app": settings.app_name,
         "db": {"status": db_status},
+        "integrity_ok": integrity_ok,
         "ollama_ok": ollama_ok,
         "events_table_ok": events_table_ok,
+        "backup": backup_summary,
     }
+    if not integrity_ok:
+        response_body["integrity_message"] = integrity_msg
+    return response_body
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Day 10 hardening — admin JSON endpoints for monitoring
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Two GET endpoints that return JSON for monitoring tools / scripts:
+#   - /api/admin/data-freshness  → MAX(updated_at) per table
+#   - /api/admin/backup-status   → the probe's JSON, machine-readable
+#
+# Both are gated by the ADMIN capability (CURATE_CATALOG is the proxy
+# today, but really these should require VIEW_ADMIN_DASHBOARD).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@app.get("/api/admin/data-freshness")
+async def api_admin_data_freshness(
+    admin_user: dict[str, Any] | None = Depends(
+        require_capability(Capability.VIEW_ADMIN_DASHBOARD)
+    ),
+):
+    """Return MAX(updated_at) per table so monitoring can alert on
+    'data hasn't changed in N days'.
+
+    Day 10 motivation: our wiped DB had no rows but a fresh schema,
+    so SELECT 1 succeeded. Watching row counts catches outright
+    wipes; watching `MAX(updated_at)` catches a subtler pattern —
+    a half-deleted DB where some rows remain but nothing has
+    been written in days.
+
+    Returns: { table: { row_count, max_updated_at, age_hours } ... }
+    """
+    from app import database as app_database_module
+    from sqlalchemy import text
+
+    db = app_database_module.SessionLocal()
+    try:
+        # Tables we care about. asset/chat have updates independent of
+        # course edits so they catch different problems.
+        tables = ["courses", "sections", "videos", "assets", "events", "users"]
+        out: dict[str, dict[str, Any]] = {}
+        for table in tables:
+            try:
+                row = db.execute(
+                    text(f"SELECT COUNT(*), MAX(updated_at) FROM {table}")
+                ).fetchone()
+            except Exception as exc:
+                # Table doesn't exist (e.g. older schema)
+                out[table] = {"row_count": None, "error": str(exc)}
+                continue
+            count = row[0] if row else 0
+            max_ts = row[1] if row and len(row) > 1 else None
+            # SQLite stores datetimes as strings; parse.
+            age_hours: float | None = None
+            if max_ts is not None:
+                try:
+                    # 'YYYY-MM-DD HH:MM:SS' or ISO 8601
+                    from datetime import datetime
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+                        try:
+                            dt = datetime.strptime(str(max_ts), fmt)
+                            age_hours = (datetime.now() - dt).total_seconds() / 3600
+                            break
+                        except ValueError:
+                            continue
+                except Exception:
+                    age_hours = None
+            out[table] = {
+                "row_count": count,
+                "max_updated_at": str(max_ts) if max_ts else None,
+                "age_hours": round(age_hours, 2) if age_hours is not None else None,
+            }
+        return out
+    finally:
+        db.close()
+
+
+@app.get("/api/admin/backup-status")
+async def api_admin_backup_status(
+    admin_user: dict[str, Any] | None = Depends(
+        require_capability(Capability.VIEW_ADMIN_DASHBOARD)
+    ),
+):
+    """Return the latest probe JSON. Same data as the dashboard, machine-readable.
+
+    If the probe has never run, returns 503 so monitors see a clear signal.
+    """
+    from app.services.backup_monitor import read_status_file
+
+    status = read_status_file()
+    if status is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "no_probe_data",
+                "reason": "backup probe has not written /tmp/video-app-backup-status.json yet",
+            },
+        )
+    import json
+    return json.loads(status.to_json())
