@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Backup Health — {{ app_name }}{% endblock %}
+{% block breadcrumb %}Admin / Backup Health{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    {# ── Top status banner ─────────────────────────────────────────── #}
+    {% if probe_never_ran %}
+    <div class="bg-amber-100 border border-amber-300 text-amber-900 rounded-xl p-6">
+        <div class="text-2xl mb-2">⚠️</div>
+        <h1 class="text-2xl font-bold mb-2">Probe has never run</h1>
+        <p class="text-sm">
+            The backup probe hasn't written
+            <code class="bg-amber-200 px-1 rounded">{{ status_path }}</code> yet.
+            Either <code>com.videoapp.backup-probe</code> isn't loaded, or
+            it failed on the first run. Check:
+        </p>
+        <pre class="mt-2 text-xs bg-amber-200 p-2 rounded">launchctl list | grep backup-probe
+tail -50 ~/Library/Logs/video-app-backup.log</pre>
+    </div>
+    {% elif status.is_healthy %}
+    <div class="bg-green-100 border border-green-300 text-green-900 rounded-xl p-6">
+        <div class="text-2xl mb-2">✅</div>
+        <h1 class="text-2xl font-bold mb-2">Backups healthy</h1>
+        <p class="text-sm">
+            Last probe ran {{ "%.1f"|format(latest_age_minutes) }} min ago.
+            Newest backup file is {{ "%.1f"|format(status.files[0].age_hours) }}h old.
+        </p>
+    </div>
+    {% else %}
+    <div class="bg-red-100 border border-red-300 text-red-900 rounded-xl p-6">
+        <div class="text-2xl mb-2">🚨</div>
+        <h1 class="text-2xl font-bold mb-2">Backup problems detected</h1>
+        <p class="text-sm mb-3">
+            Last probe ran {{ "%.1f"|format(latest_age_minutes) }} min ago.
+        </p>
+        <ul class="text-sm list-disc list-inside space-y-1">
+            {% for reason in status.reasons %}
+            <li>{{ reason }}</li>
+            {% endfor %}
+        </ul>
+        <p class="text-sm mt-3">
+            See <code class="bg-red-200 px-1 rounded">doc/data-recovery-2026-08-28.md</code>
+            for the Aug 28 incident that motivated this dashboard.
+        </p>
+    </div>
+    {% endif %}
+
+    {# ── Run-now action ────────────────────────────────────────────── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h2 class="text-lg font-semibold mb-1">Manual backup</h2>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    Run <code>backup-db.sh</code> synchronously. Useful when launchd is broken
+                    and you need a fresh snapshot before doing risky work.
+                </p>
+            </div>
+            <form method="post" action="/admin/backups/run">
+                <button type="submit"
+                    class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                    Run backup now
+                </button>
+            </form>
+        </div>
+    </div>
+
+    {# ── launchd job states ────────────────────────────────────────── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <h2 class="text-lg font-semibold mb-4">launchd jobs</h2>
+        {% if status %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-200 dark:border-gray-700">
+                        <th class="py-2 pr-4">Label</th>
+                        <th class="py-2 pr-4">State</th>
+                        <th class="py-2 pr-4">Last exit</th>
+                        <th class="py-2 pr-4">Health</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for job in status.jobs %}
+                    <tr class="border-b border-gray-100 dark:border-gray-700">
+                        <td class="py-2 pr-4 font-mono text-xs">{{ job.label }}</td>
+                        <td class="py-2 pr-4">
+                            <span class="px-2 py-0.5 rounded text-xs
+                                {% if job.state == 'running' %}bg-green-100 text-green-800
+                                {% elif job.state == 'waiting' %}bg-blue-100 text-blue-800
+                                {% else %}bg-red-100 text-red-800{% endif %}">
+                                {{ job.state }}
+                            </span>
+                        </td>
+                        <td class="py-2 pr-4 font-mono text-xs">
+                            {{ job.last_exit_code }}
+                        </td>
+                        <td class="py-2 pr-4">
+                            {% if job.is_healthy %}
+                            <span class="text-green-600">✓ OK</span>
+                            {% else %}
+                            <span class="text-red-600">✗ failing</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-500">Probe hasn't reported yet.</p>
+        {% endif %}
+    </div>
+
+    {# ── RAID volume ──────────────────────────────────────────────── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <h2 class="text-lg font-semibold mb-4">Backup RAID volume</h2>
+        {% if status and status.volume %}
+        {% set vol = status.volume %}
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+                <div class="text-xs text-gray-500">Mount</div>
+                <div class="font-mono text-sm">{{ vol.mount }}</div>
+            </div>
+            <div>
+                <div class="text-xs text-gray-500">Free</div>
+                <div class="text-2xl font-bold {% if vol.is_low %}text-red-600{% else %}text-green-600{% endif %}">
+                    {{ "%.1f"|format(vol.free_gb) }} GB
+                </div>
+            </div>
+            <div>
+                <div class="text-xs text-gray-500">Used</div>
+                <div class="text-lg">{{ "%.1f"|format(vol.used_bytes / (1024**3)) }} GB</div>
+            </div>
+            <div>
+                <div class="text-xs text-gray-500">Total</div>
+                <div class="text-lg">{{ "%.1f"|format(vol.total_bytes / (1024**3)) }} GB</div>
+            </div>
+        </div>
+        {% if vol.is_low %}
+        <p class="mt-3 text-sm text-red-600">
+            ⚠️ Below {{ 5.0 }} GB free — next backup may fail.
+        </p>
+        {% endif %}
+        {% elif status %}
+        <p class="text-sm text-red-600">RAID volume not mounted at /Volumes/Storage-Backup-HDD</p>
+        {% else %}
+        <p class="text-sm text-gray-500">Probe hasn't reported yet.</p>
+        {% endif %}
+    </div>
+
+    {# ── Backup files ──────────────────────────────────────────────── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <h2 class="text-lg font-semibold mb-4">Recent backup files
+            <span class="text-xs font-normal text-gray-500">(newest first, max 10 shown)</span>
+        </h2>
+        {% if status and status.files %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-200 dark:border-gray-700">
+                        <th class="py-2 pr-4">Kind</th>
+                        <th class="py-2 pr-4">Path</th>
+                        <th class="py-2 pr-4">Size</th>
+                        <th class="py-2 pr-4">Age</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in status.files[:10] %}
+                    <tr class="border-b border-gray-100 dark:border-gray-700">
+                        <td class="py-2 pr-4">
+                            <span class="px-2 py-0.5 rounded text-xs
+                                {% if f.kind == 'db-hot' %}bg-blue-100 text-blue-800
+                                {% elif f.kind == 'snapshot' %}bg-purple-100 text-purple-800
+                                {% elif f.kind == 'monthly' %}bg-orange-100 text-orange-800
+                                {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                {{ f.kind }}
+                            </span>
+                        </td>
+                        <td class="py-2 pr-4 font-mono text-xs break-all">{{ f.path }}</td>
+                        <td class="py-2 pr-4">{{ "%.1f"|format(f.size_bytes / (1024**2)) }} MB</td>
+                        <td class="py-2 pr-4">
+                            {% if f.age_hours > 26 %}
+                            <span class="text-red-600 font-semibold">{{ "%.1f"|format(f.age_hours) }}h</span>
+                            {% else %}
+                            {{ "%.1f"|format(f.age_hours) }}h
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-500">No backup files found.</p>
+        {% endif %}
+    </div>
+
+    {# ── Probe metadata ──────────────────────────────────────────── #}
+    {% if status %}
+    <div class="text-xs text-gray-400 text-center">
+        Probe last ran at {{ status.probe_ts_iso }}
+        (epoch {{ "%.0f"|format(status.probe_ts) }})
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

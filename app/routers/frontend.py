@@ -1,5 +1,6 @@
 """Frontend router — serves Jinja2 templates for the web UI."""
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -546,3 +547,124 @@ async def admin_events_page(
             },
         ),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /admin/backups  (Day 10 — backup health dashboard)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Day 10 incident (2026-08-28): the production DB was wiped silently.
+# Root cause #1: launchd backup jobs had been failing with exit 126
+# since Aug 22, with nobody watching. This dashboard surfaces that
+# state in the UI so a single human can spot it.
+#
+# Data source: /tmp/video-app-backup-status.json, written every 5 min
+# by scripts/backup/backup-probe.sh (launchd: com.videoapp.backup-probe).
+# The probe gathers launchd state, backup-file metadata, and RAID
+# free-space in one place. See app/services/backup_monitor.py.
+#
+
+
+@router.get("/admin/backups", response_class=HTMLResponse)
+async def admin_backups_page(
+    request: Request,
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+) -> HTMLResponse:
+    """Admin dashboard: backup health snapshot."""
+    from app.services.backup_monitor import read_status_file, STATUS_PATH
+
+    status = read_status_file()
+
+    # When the probe has never run (e.g. right after plist load),
+    # `status` is None — we still render the page but show a banner.
+    probe_never_ran = status is None
+
+    # Format the timestamp for the UI without coupling the template
+    # to time formatting details.
+    if status is not None:
+        latest_age_minutes: float | None = (time.time() - status.probe_ts) / 60.0
+    else:
+        latest_age_minutes = None
+
+    return templates.TemplateResponse(
+        request,
+        "admin_backups.html",
+        _ctx(
+            request,
+            user,
+            status=status,
+            probe_never_ran=probe_never_ran,
+            latest_age_minutes=latest_age_minutes,
+            status_path=str(STATUS_PATH),
+        ),
+    )
+
+
+@router.post("/admin/backups/run", response_class=HTMLResponse)
+async def admin_backups_run(
+    request: Request,
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+) -> HTMLResponse:
+    """Run backup-db.sh synchronously and redirect back to dashboard.
+
+    Why synchronous and not background: launchd does not give the
+    web process permission to launch another copy of bash from a
+    user-context TCC-restricted path. Running it inline from the
+    request thread is fine — it usually takes <2s (just sqlite3
+    .backup + integrity_check). We surface stderr in the response
+    body if it fails.
+
+    Day 10: this button is the manual escape hatch — if launchd
+    isn't running, you can still create a backup from the UI.
+    """
+    import subprocess
+    from pathlib import Path
+
+    script = Path("/Users/jackyli/Desktop/Githubs/video-learning-app/scripts/backup/backup-db.sh")
+    if not script.exists():
+        return templates.TemplateResponse(
+            request,
+            "admin_backups_run_result.html",
+            _ctx(
+                request,
+                user,
+                ok=False,
+                stderr=f"Script not found: {script}",
+                stdout="",
+            ),
+            status_code=500,
+        )
+
+    try:
+        result = subprocess.run(
+            ["/bin/bash", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        ok = result.returncode == 0
+        return templates.TemplateResponse(
+            request,
+            "admin_backups_run_result.html",
+            _ctx(
+                request,
+                user,
+                ok=ok,
+                stderr=result.stderr,
+                stdout=result.stdout,
+            ),
+            status_code=200 if ok else 500,
+        )
+    except subprocess.TimeoutExpired:
+        return templates.TemplateResponse(
+            request,
+            "admin_backups_run_result.html",
+            _ctx(
+                request,
+                user,
+                ok=False,
+                stderr="Backup timed out after 60s",
+                stdout="",
+            ),
+            status_code=500,
+        )
