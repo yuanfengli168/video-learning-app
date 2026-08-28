@@ -48,15 +48,15 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _create_course_and_section(client: TestClient):
+def _create_course_and_section(paid_client: TestClient):
     """Helper: create a course + section, return (course_id, section_id)."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "Whisper picker tests"},
             headers=_auth_headers(),
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "S1"},
             headers=_auth_headers(),
@@ -65,10 +65,10 @@ def _create_course_and_section(client: TestClient):
     return course_id, section_id
 
 
-def _upload_video(client: TestClient, section_id: str) -> str:
+def _upload_video(paid_client: TestClient, section_id: str) -> str:
     """Helper: upload a video, return its id."""
     with _mock_auth():
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"x" * 100), "video/mp4")},
             headers=_auth_headers(),
@@ -375,11 +375,11 @@ def test_default_is_base_on_arm64_without_mlx(monkeypatch):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_transcribe_with_backend_faster_whisper_success(client: TestClient, tmp_path):
+def test_transcribe_with_backend_faster_whisper_success(paid_client: TestClient, tmp_path):
     """transcribe_with_backend with a manual choice (faster-whisper) returns
     the expected shape: segments + language + duration + _meta."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     class _FakeSegment:
         def __init__(self, s, e, t):
@@ -604,10 +604,10 @@ def test_transcribe_with_backend_file_not_found():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_models_endpoint_returns_new_shape(client: TestClient):
+def test_models_endpoint_returns_new_shape(paid_client: TestClient):
     """/api/videos/models returns {choices, default, models: legacy}."""
     with _mock_auth():
-        resp = client.get("/api/videos/models", headers=_auth_headers())
+        resp = paid_client.get("/api/videos/models", headers=_auth_headers())
     assert resp.status_code == 200
     data = resp.json()
     assert "choices" in data
@@ -634,7 +634,7 @@ def test_models_endpoint_returns_new_shape(client: TestClient):
     }
 
 
-def test_models_endpoint_default_reflects_platform(client: TestClient, monkeypatch):
+def test_models_endpoint_default_reflects_platform(paid_client: TestClient, monkeypatch):
     """The 'default' field reflects the current platform's best option.
 
     We mock to make MLX unavailable (x86) and assert the default
@@ -647,7 +647,7 @@ def test_models_endpoint_default_reflects_platform(client: TestClient, monkeypat
     """
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "x86_64")
     with _mock_auth():
-        resp = client.get("/api/videos/models", headers=_auth_headers())
+        resp = paid_client.get("/api/videos/models", headers=_auth_headers())
     data = resp.json()
     # On x86 with no MLX, default is "base" (the recommended manual pick)
     assert data["default"] == "base"
@@ -658,12 +658,12 @@ def test_models_endpoint_default_reflects_platform(client: TestClient, monkeypat
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_transcribe_endpoint_accepts_manual_choice(client: TestClient):
+def test_transcribe_endpoint_accepts_manual_choice(paid_client: TestClient):
     """Manual pick ('base') is accepted and persisted correctly."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/videos/{video_id}/transcribe?model_name=base",
             headers=_auth_headers(),
         )
@@ -680,7 +680,7 @@ def test_transcribe_endpoint_accepts_manual_choice(client: TestClient):
 
 
 def test_transcribe_endpoint_accepts_smart_turbo_pick(
-    client: TestClient, monkeypatch,
+    paid_client: TestClient, monkeypatch,
 ):
     """The local-large-turbo smart pick is accepted and persisted with the
     mlx-community/whisper-large-v3-turbo model_id on Apple Silicon.
@@ -707,10 +707,10 @@ def test_transcribe_endpoint_accepts_smart_turbo_pick(
     monkeypatch.setitem(sys.modules, "mlx_whisper", types.ModuleType("mlx_whisper"))
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
 
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/videos/{video_id}/transcribe?model_name=local-large-turbo",
             headers=_auth_headers(),
         )
@@ -728,7 +728,7 @@ def test_transcribe_endpoint_accepts_smart_turbo_pick(
 
 
 def test_transcribe_endpoint_smart_turbo_falls_back_on_x86(
-    client: TestClient, monkeypatch,
+    paid_client: TestClient, monkeypatch,
 ):
     """The local-large-turbo smart pick on x86 falls back to 'base'.
 
@@ -739,10 +739,10 @@ def test_transcribe_endpoint_smart_turbo_falls_back_on_x86(
     non-MLX pick, since the distil smart pick is removed).
     """
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "x86_64")
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/videos/{video_id}/transcribe?model_name=local-large-turbo",
             headers=_auth_headers(),
         )
@@ -762,7 +762,7 @@ def test_transcribe_endpoint_smart_turbo_falls_back_on_x86(
 
 
 def test_transcribe_endpoint_smart_turbo_no_fallback_on_m1(
-    client: TestClient, monkeypatch,
+    paid_client: TestClient, monkeypatch,
 ):
     """The local-large-turbo smart pick on arm64+MLX does NOT fall back.
 
@@ -775,10 +775,10 @@ def test_transcribe_endpoint_smart_turbo_no_fallback_on_m1(
     import types
     monkeypatch.setitem(sys.modules, "mlx_whisper", types.ModuleType("mlx_whisper"))
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/videos/{video_id}/transcribe?model_name=local-large-turbo",
             headers=_auth_headers(),
         )
@@ -793,12 +793,12 @@ def test_transcribe_endpoint_smart_turbo_no_fallback_on_m1(
         assert v.whisper_fallback_reason is None
 
 
-def test_transcribe_endpoint_rejects_unknown_choice(client: TestClient):
+def test_transcribe_endpoint_rejects_unknown_choice(paid_client: TestClient):
     """Unknown choice key returns 400 with a list of valid choices."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/videos/{video_id}/transcribe?model_name=not-a-real-model",
             headers=_auth_headers(),
         )
@@ -817,12 +817,12 @@ def test_transcribe_endpoint_rejects_unknown_choice(client: TestClient):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_video_page_has_two_optgroups(client: TestClient):
+def test_video_page_has_two_optgroups(paid_client: TestClient):
     """The video page <select> must have exactly 2 <optgroup> children."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.get(f"/video/{video_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert resp.status_code == 200
     # Two <optgroup> tags
     assert resp.text.count("<optgroup") == 2, (
@@ -830,29 +830,29 @@ def test_video_page_has_two_optgroups(client: TestClient):
     )
 
 
-def test_video_page_optgroup_manual_contains_four_originals(client: TestClient):
+def test_video_page_optgroup_manual_contains_four_originals(paid_client: TestClient):
     """The 'Manual' optgroup contains tiny/base/small/medium."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.get(f"/video/{video_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     text = resp.text
     # All 4 manual options present
     for value in ("tiny", "base", "small", "medium"):
         assert f'value="{value}"' in text, f"Manual optgroup missing '{value}'"
 
 
-def test_video_page_optgroup_smart_contains_one_pick(client: TestClient):
+def test_video_page_optgroup_smart_contains_one_pick(paid_client: TestClient):
     """The 'Smart picks' optgroup contains the 1 remaining option.
 
     MVP2.0.7 (manualTodo 2.2): the 2 distil-large-v3 smart
     picks are removed. The 'Smart picks' optgroup now has
     just 'local-large-turbo' (MLX Whisper Large V3 Turbo).
     """
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.get(f"/video/{video_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     text = resp.text
     # Just the one remaining smart pick
     assert f'value="local-large-turbo"' in text, (
@@ -860,7 +860,7 @@ def test_video_page_optgroup_smart_contains_one_pick(client: TestClient):
     )
 
 
-def test_video_page_no_option_is_pre_selected(client: TestClient):
+def test_video_page_no_option_is_pre_selected(paid_client: TestClient):
     """The model dropdown has no hard-coded 'selected' attribute.
 
     The default selection for the MODEL dropdown is set by JS on
@@ -881,10 +881,10 @@ def test_video_page_no_option_is_pre_selected(client: TestClient):
     "selected" but don't have a literal ' selected' attribute on
     an option tag).
     """
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.get(f"/video/{video_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     text = resp.text
     # Extract just the model dropdown's <option> tags. The
     # #whisper-model select is followed by a #whisper-language
@@ -905,13 +905,13 @@ def test_video_page_no_option_is_pre_selected(client: TestClient):
     )
 
 
-def test_video_page_default_selector_js_present(client: TestClient):
+def test_video_page_default_selector_js_present(paid_client: TestClient):
     """The page must include the JS that fetches /api/videos/models and
     sets the dropdown to the server's recommended default."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
     with _mock_auth():
-        resp = client.get(f"/video/{video_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     text = resp.text
     assert "/api/videos/models" in text, (
         "JS that fetches /api/videos/models is missing from the page"
@@ -926,7 +926,7 @@ def test_video_page_default_selector_js_present(client: TestClient):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_smart_pick_end_to_end_visual_marker(client: TestClient):
+def test_smart_pick_end_to_end_visual_marker(paid_client: TestClient):
     """After a smart pick is processed, the video page shows the resolved
     backend so the user can see what actually ran.
 
@@ -935,12 +935,12 @@ def test_smart_pick_end_to_end_visual_marker(client: TestClient):
     exact UI (that's brittle); we just check that the backend label
     appears in the HTML somewhere when a smart pick was used.
     """
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     # Simulate the user picking the fast smart pick
     with _mock_auth():
-        client.post(
+        paid_client.post(
             f"/api/videos/{video_id}/transcribe?model_name=local-large-turbo",
             headers=_auth_headers(),
         )
@@ -968,7 +968,7 @@ def test_smart_pick_end_to_end_visual_marker(client: TestClient):
 
     # Now fetch the page
     with _mock_auth():
-        resp = client.get(f"/video/{video_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert resp.status_code == 200
     # The whisper_resolved_model "distil-large-v3" is on the row;
     # verify the page doesn't crash and the model name is accessible.

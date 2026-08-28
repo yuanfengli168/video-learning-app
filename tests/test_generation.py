@@ -33,7 +33,7 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _setup_video_with_transcript(client: TestClient) -> str:
+def _setup_video_with_transcript(paid_client: TestClient) -> str:
     """Helper: create course → section → video → transcript. Returns video_id.
 
     With the new background-task transcribe endpoint, we can't
@@ -41,11 +41,11 @@ def _setup_video_with_transcript(client: TestClient) -> str:
     to do the work synchronously and write the transcript asset.
     """
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
@@ -53,7 +53,7 @@ def _setup_video_with_transcript(client: TestClient) -> str:
         section_id = section_resp.json()["section_id"]
 
         fake_video = io.BytesIO(b"fake video content")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
@@ -85,14 +85,14 @@ def _setup_video_with_transcript(client: TestClient) -> str:
             "app.routers.videos._run_transcribe_job",
             side_effect=fake_transcribe_worker,
         ):
-            client.post(
+            paid_client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers=_auth_headers(),
             )
     return video_id
 
 
-def _run_generate_synchronously(client: TestClient, video_id: str, materials: dict) -> None:
+def _run_generate_synchronously(paid_client: TestClient, video_id: str, materials: dict) -> None:
     """Helper: run the (mocked) generate worker synchronously so we can
     immediately query the assets in the test.
 
@@ -135,18 +135,18 @@ def _run_generate_synchronously(client: TestClient, video_id: str, materials: di
                 db.commit()
     with patch("app.routers.generation._run_generate_job", side_effect=fake_generate_worker):
         with _mock_auth():
-            client.post(f"/api/generate/{video_id}", headers=_auth_headers())
+            paid_client.post(f"/api/generate/{video_id}", headers=_auth_headers())
 
 
 # ── /api/generate/{id} tests ───────────────────────────────────────────────
 
-def test_generate_returns_202_with_job(client: TestClient):
+def test_generate_returns_202_with_job(paid_client: TestClient):
     """POST /api/generate/{id} should return 202 + initial job state."""
-    video_id = _setup_video_with_transcript(client)
+    video_id = _setup_video_with_transcript(paid_client)
 
     with patch("app.routers.generation._run_generate_job"):
         with _mock_auth():
-            response = client.post(
+            response = paid_client.post(
                 f"/api/generate/{video_id}", headers=_auth_headers()
             )
     assert response.status_code == 202
@@ -158,28 +158,28 @@ def test_generate_returns_202_with_job(client: TestClient):
     assert data["job"]["status"] == "running"
 
 
-def test_generate_worker_saves_assets(client: TestClient):
+def test_generate_worker_saves_assets(paid_client: TestClient):
     """The (mocked) generate worker should write all asset types to DB."""
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
         # All 5 asset types should be queryable now
         for asset_type in ("summary", "mindmap", "flashcards", "quiz", "topic_timestamps"):
-            r = client.get(
+            r = paid_client.get(
                 f"/api/generate/{video_id}/assets/{asset_type}",
                 headers=_auth_headers(),
             )
             assert r.status_code == 200, f"asset {asset_type} not saved: {r.text}"
 
 
-def test_generate_saves_topic_timestamps(client: TestClient):
+def test_generate_saves_topic_timestamps(paid_client: TestClient):
     """Generate should save topic_timestamps asset."""
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/topic_timestamps",
             headers=_auth_headers(),
         )
@@ -192,14 +192,14 @@ def test_generate_saves_topic_timestamps(client: TestClient):
     assert data["data"][1]["topic"] == "Branch"
 
 
-def test_generate_no_transcript(client: TestClient):
+def test_generate_no_transcript(paid_client: TestClient):
     """Should return 400 if no transcript exists."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
@@ -207,32 +207,32 @@ def test_generate_no_transcript(client: TestClient):
         section_id = section_resp.json()["section_id"]
 
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
 
-        response = client.post(
+        response = paid_client.post(
             f"/api/generate/{video_id}", headers=_auth_headers()
         )
     assert response.status_code == 400
     assert "No transcript" in response.json()["detail"]
 
 
-def test_generate_video_not_found(client: TestClient):
+def test_generate_video_not_found(paid_client: TestClient):
     """Should return 404 for non-existent video."""
     with _mock_auth():
-        response = client.post(
+        response = paid_client.post(
             "/api/generate/nonexistent", headers=_auth_headers()
         )
     assert response.status_code == 404
 
 
-def test_generate_failure_marks_error_status(client: TestClient):
+def test_generate_failure_marks_error_status(paid_client: TestClient):
     """If the (background) generate worker fails, video status becomes 'error'."""
-    video_id = _setup_video_with_transcript(client)
+    video_id = _setup_video_with_transcript(paid_client)
 
     def fake_generate_worker_raises(vid: str, user_id: str, user_role: int) -> None:
         from app.jobs import get_job, finish_job
@@ -252,7 +252,7 @@ def test_generate_failure_marks_error_status(client: TestClient):
         side_effect=fake_generate_worker_raises,
     ):
         with _mock_auth():
-            response = client.post(
+            response = paid_client.post(
                 f"/api/generate/{video_id}", headers=_auth_headers()
             )
     # Endpoint returns 202 — the failure happens in the background.
@@ -260,7 +260,7 @@ def test_generate_failure_marks_error_status(client: TestClient):
 
     # The video's status field should now reflect the failure.
     with _mock_auth():
-        get_resp = client.get(
+        get_resp = paid_client.get(
             f"/api/videos/{video_id}", headers=_auth_headers()
         )
     assert get_resp.json()["status"] == "error"
@@ -268,12 +268,12 @@ def test_generate_failure_marks_error_status(client: TestClient):
 
 # ── /api/generate/{id}/assets/{type} tests ─────────────────────────────────
 
-def test_get_asset_summary(client: TestClient):
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+def test_get_asset_summary(paid_client: TestClient):
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/summary",
             headers=_auth_headers(),
         )
@@ -283,12 +283,12 @@ def test_get_asset_summary(client: TestClient):
     assert "Key points" in data["data"]
 
 
-def test_get_asset_flashcards(client: TestClient):
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+def test_get_asset_flashcards(paid_client: TestClient):
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/flashcards",
             headers=_auth_headers(),
         )
@@ -299,12 +299,12 @@ def test_get_asset_flashcards(client: TestClient):
     assert data["data"][0]["term"] == "AI"
 
 
-def test_get_asset_quiz(client: TestClient):
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+def test_get_asset_quiz(paid_client: TestClient):
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/quiz",
             headers=_auth_headers(),
         )
@@ -314,12 +314,12 @@ def test_get_asset_quiz(client: TestClient):
     assert data["data"][0]["question"] == "What?"
 
 
-def test_get_asset_mindmap(client: TestClient):
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+def test_get_asset_mindmap(paid_client: TestClient):
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/mindmap",
             headers=_auth_headers(),
         )
@@ -329,34 +329,34 @@ def test_get_asset_mindmap(client: TestClient):
     assert "# Topic" in data["data"]
 
 
-def test_get_asset_not_found(client: TestClient):
+def test_get_asset_not_found(paid_client: TestClient):
     """Should return 404 if asset not generated."""
-    video_id = _setup_video_with_transcript(client)
+    video_id = _setup_video_with_transcript(paid_client)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/summary",
             headers=_auth_headers(),
         )
     assert response.status_code == 404
 
 
-def test_get_asset_invalid_type(client: TestClient):
+def test_get_asset_invalid_type(paid_client: TestClient):
     """Should return 400 for invalid asset type."""
-    video_id = _setup_video_with_transcript(client)
+    video_id = _setup_video_with_transcript(paid_client)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/nonexistent_type",
             headers=_auth_headers(),
         )
     assert response.status_code == 400
 
 
-def test_generate_regenerates_overwrite(client: TestClient):
+def test_generate_regenerates_overwrite(paid_client: TestClient):
     """Generating again should overwrite existing assets."""
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     new_materials = {
         "summary": "# New Summary",
@@ -364,10 +364,10 @@ def test_generate_regenerates_overwrite(client: TestClient):
         "flashcards": [{"term": "ML", "definition": "Machine Learning"}],
         "quiz": [],
     }
-    _run_generate_synchronously(client, video_id, new_materials)
+    _run_generate_synchronously(paid_client, video_id, new_materials)
 
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/summary",
             headers=_auth_headers(),
         )
@@ -380,18 +380,18 @@ def test_generate_regenerates_overwrite(client: TestClient):
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def test_get_asset_allows_non_owner_for_public_video(client: TestClient):
+def test_get_asset_allows_non_owner_for_public_video(paid_client: TestClient):
     """Day 5 hotfix2: a different FREE user can fetch a PUBLIC video's
     materials. Pre-fix this returned 403 'Not your video' because the
     ownership check only allowed the course owner to read materials."""
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     with patch(
         "app.auth.dependencies.verify_token",
         return_value={"uid": "user-other", "email": "other@x.com"},
     ):
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/summary",
             headers={"Authorization": "Bearer fake-user-other"},
         )
@@ -399,10 +399,10 @@ def test_get_asset_allows_non_owner_for_public_video(client: TestClient):
     assert "summary" in response.json()["type"]
 
 
-def test_get_asset_blocks_non_owner_for_admin_only_video(client: TestClient):
+def test_get_asset_blocks_non_owner_for_admin_only_video(paid_client: TestClient):
     """A non-admin FREE user is still blocked from ADMIN_ONLY videos."""
-    video_id = _setup_video_with_transcript(client)
-    _run_generate_synchronously(client, video_id, FAKE_MATERIALS)
+    video_id = _setup_video_with_transcript(paid_client)
+    _run_generate_synchronously(paid_client, video_id, FAKE_MATERIALS)
 
     # Flip the video to ADMIN_ONLY after setup
     from app.database import SessionLocal
@@ -416,7 +416,7 @@ def test_get_asset_blocks_non_owner_for_admin_only_video(client: TestClient):
         "app.auth.dependencies.verify_token",
         return_value={"uid": "user-other", "email": "other@x.com"},
     ):
-        response = client.get(
+        response = paid_client.get(
             f"/api/generate/{video_id}/assets/summary",
             headers={"Authorization": "Bearer fake-user-other"},
         )

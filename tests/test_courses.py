@@ -16,19 +16,19 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _create_course_and_section(client: TestClient) -> tuple[str, str]:
+def _create_course_and_section(paid_client: TestClient) -> tuple[str, str]:
     """Helper: create a course + section, return (course_id, section_id).
 
     Used by the retry-failed tests so they don't have to repeat the
     boilerplate. Other tests in this file do it inline."""
     with _mock_auth():
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "ML"},
             headers=_auth_headers(),
         )
         course_id = create_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
@@ -37,18 +37,18 @@ def _create_course_and_section(client: TestClient) -> tuple[str, str]:
     return course_id, section_id
 
 
-def test_list_courses_empty(client: TestClient):
+def test_list_courses_empty(paid_client: TestClient):
     """List courses should return empty list for new user."""
     with _mock_auth():
-        response = client.get("/api/courses", headers=_auth_headers())
+        response = paid_client.get("/api/courses", headers=_auth_headers())
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_create_course(client: TestClient):
+def test_create_course(paid_client: TestClient):
     """Should create a course."""
     with _mock_auth():
-        response = client.post(
+        response = paid_client.post(
             "/api/courses",
             json={"title": "Machine Learning", "description": "ML course"},
             headers=_auth_headers(),
@@ -57,31 +57,31 @@ def test_create_course(client: TestClient):
     assert "course_id" in response.json()
 
 
-def test_list_courses_after_create(client: TestClient):
+def test_list_courses_after_create(paid_client: TestClient):
     """Should list created courses."""
     with _mock_auth():
-        client.post(
+        paid_client.post(
             "/api/courses",
             json={"title": "ML"},
             headers=_auth_headers(),
         )
-        response = client.get("/api/courses", headers=_auth_headers())
+        response = paid_client.get("/api/courses", headers=_auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
     assert data[0]["title"] == "ML"
 
 
-def test_get_course(client: TestClient):
+def test_get_course(paid_client: TestClient):
     """Should get a course by ID."""
     with _mock_auth():
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "ML", "description": "Test"},
             headers=_auth_headers(),
         )
         course_id = create_resp.json()["course_id"]
-        response = client.get(f"/api/courses/{course_id}", headers=_auth_headers())
+        response = paid_client.get(f"/api/courses/{course_id}", headers=_auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == "ML"
@@ -89,25 +89,25 @@ def test_get_course(client: TestClient):
     assert data["sections"] == []
 
 
-def test_get_course_not_found(client: TestClient):
+def test_get_course_not_found(paid_client: TestClient):
     """Should return 404 for non-existent course."""
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             "/api/courses/nonexistent-id", headers=_auth_headers()
         )
     assert response.status_code == 404
 
 
-def test_update_course(client: TestClient):
+def test_update_course(paid_client: TestClient):
     """Should update a course."""
     with _mock_auth():
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "Original"},
             headers=_auth_headers(),
         )
         course_id = create_resp.json()["course_id"]
-        response = client.put(
+        response = paid_client.put(
             f"/api/courses/{course_id}",
             json={"title": "Updated", "description": "New desc"},
             headers=_auth_headers(),
@@ -116,16 +116,16 @@ def test_update_course(client: TestClient):
     assert response.json()["status"] == "updated"
 
 
-def test_delete_course(client: TestClient):
+def test_delete_course(paid_client: TestClient):
     """Should delete a course (with cascade summary)."""
     with _mock_auth():
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "To Delete"},
             headers=_auth_headers(),
         )
         course_id = create_resp.json()["course_id"]
-        response = client.delete(
+        response = paid_client.delete(
             f"/api/courses/{course_id}", headers=_auth_headers()
         )
     assert response.status_code == 200
@@ -148,7 +148,7 @@ def test_delete_course(client: TestClient):
 
 
 def _create_section_with_videos(
-    client: TestClient,
+    paid_client: TestClient,
     course_id: str,
     section_title: str = "Section 1",
     video_titles: list[str] | None = None,
@@ -159,14 +159,14 @@ def _create_section_with_videos(
     if video_titles is None:
         video_titles = ["v1.mp4"]
     with _mock_auth():
-        sec_resp = client.post(
+        sec_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": section_title},
             headers=_auth_headers(),
         )
         section_id = sec_resp.json()["section_id"]
         for title in video_titles:
-            client.post(
+            paid_client.post(
                 f"/api/videos/upload/{section_id}",
                 files={"file": (title, _io.BytesIO(b"x" * 1024), "video/mp4")},
                 headers=_auth_headers(),
@@ -174,13 +174,13 @@ def _create_section_with_videos(
     return section_id
 
 
-def test_delete_section_success(client: TestClient):
+def test_delete_section_success(paid_client: TestClient):
     """Should delete a section and report the cascade summary."""
     import io as _io
     from app.database import SessionLocal
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     with _mock_auth():
-        client.post(
+        paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("to-delete.mp4", _io.BytesIO(b"x" * 1024), "video/mp4")},
             headers=_auth_headers(),
@@ -197,7 +197,7 @@ def test_delete_section_success(client: TestClient):
             db.commit()
 
     with _mock_auth():
-        resp = client.delete(
+        resp = paid_client.delete(
             f"/api/courses/{course_id}/sections/{section_id}",
             headers=_auth_headers(),
         )
@@ -212,11 +212,11 @@ def test_delete_section_success(client: TestClient):
     assert data["deleted"]["chat_sessions"] == 0
 
 
-def test_delete_section_empty(client: TestClient):
+def test_delete_section_empty(paid_client: TestClient):
     """A section with no videos deletes cleanly."""
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     with _mock_auth():
-        resp = client.delete(
+        resp = paid_client.delete(
             f"/api/courses/{course_id}/sections/{section_id}",
             headers=_auth_headers(),
         )
@@ -227,27 +227,27 @@ def test_delete_section_empty(client: TestClient):
     assert data["deleted"]["assets"] == 0
 
 
-def test_delete_section_not_found(client: TestClient):
+def test_delete_section_not_found(paid_client: TestClient):
     """Returns 404 for non-existent section."""
-    course_id, _ = _create_course_and_section(client)
+    course_id, _ = _create_course_and_section(paid_client)
     with _mock_auth():
-        resp = client.delete(
+        resp = paid_client.delete(
             f"/api/courses/{course_id}/sections/nonexistent-section",
             headers=_auth_headers(),
         )
     assert resp.status_code == 404
 
 
-def test_delete_section_wrong_course(client: TestClient):
+def test_delete_section_wrong_course(paid_client: TestClient):
     """Returns 404 if the section doesn't belong to the given course.
     The endpoint validates that section.course_id matches the URL's
     course_id, so a section from course A queried via course B's
     URL returns 404 (not 403) — the section is not visible from
     that course's namespace."""
-    course_id_a, section_id_a = _create_course_and_section(client)
-    course_id_b, _ = _create_course_and_section(client)
+    course_id_a, section_id_a = _create_course_and_section(paid_client)
+    course_id_b, _ = _create_course_and_section(paid_client)
     with _mock_auth():
-        resp = client.delete(
+        resp = paid_client.delete(
             # section_id_a belongs to course_id_a, but we ask via course_id_b
             f"/api/courses/{course_id_b}/sections/{section_id_a}",
             headers=_auth_headers(),
@@ -255,28 +255,28 @@ def test_delete_section_wrong_course(client: TestClient):
     assert resp.status_code == 404
 
 
-def test_delete_section_wrong_user(client: TestClient):
+def test_delete_section_wrong_user(paid_client: TestClient):
     """Returns 403 if the user doesn't own the course."""
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     with _patch(
         "app.auth.dependencies.verify_token",
         return_value={"uid": "user-B"},
     ):
-        resp = client.delete(
+        resp = paid_client.delete(
             f"/api/courses/{course_id}/sections/{section_id}",
             headers=_auth_headers(),
         )
     assert resp.status_code == 403
 
 
-def test_delete_section_unauthenticated(client: TestClient):
+def test_delete_section_unauthenticated(paid_client: TestClient):
     """Returns 401 without auth."""
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     # No _mock_auth() here
     # MVP2.0.6: conftest client fixture sets a default valid
     # cookie. Clear it for this unauthenticated test.
-    client.cookies.clear()
-    resp = client.delete(
+    paid_client.cookies.clear()
+    resp = paid_client.delete(
         f"/api/courses/{course_id}/sections/{section_id}",
     )
     assert resp.status_code == 401
@@ -285,7 +285,7 @@ def test_delete_section_unauthenticated(client: TestClient):
 # ── Updated course delete tests (cascade summary + file cleanup) ──────────
 
 
-def test_delete_course_with_sections_and_videos_cascades(client: TestClient):
+def test_delete_course_with_sections_and_videos_cascades(paid_client: TestClient):
     """Deleting a course removes all sections, videos, assets, and
     chat sessions in a single call. Verifies the cascade summary
     in the response is correct."""
@@ -295,20 +295,20 @@ def test_delete_course_with_sections_and_videos_cascades(client: TestClient):
 
     # Create a course with 2 sections, each with 1 video
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "Big Course"},
             headers=_auth_headers(),
         )
         course_id = course_resp.json()["course_id"]
         sec_ids = []
         for s_title in ["S1", "S2"]:
-            sec_resp = client.post(
+            sec_resp = paid_client.post(
                 f"/api/courses/{course_id}/sections",
                 json={"title": s_title}, headers=_auth_headers(),
             )
             sec_id = sec_resp.json()["section_id"]
             sec_ids.append(sec_id)
-            client.post(
+            paid_client.post(
                 f"/api/videos/upload/{sec_id}",
                 files={"file": (f"v-{s_title}.mp4", _io.BytesIO(b"x"*1024), "video/mp4")},
                 headers=_auth_headers(),
@@ -330,7 +330,7 @@ def test_delete_course_with_sections_and_videos_cascades(client: TestClient):
         db.commit()
 
     with _mock_auth():
-        resp = client.delete(
+        resp = paid_client.delete(
             f"/api/courses/{course_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 200
@@ -354,7 +354,7 @@ def test_delete_course_with_sections_and_videos_cascades(client: TestClient):
         assert db.get(ChatSession, session_id) is None
 
 
-def test_delete_course_missing_files_on_disk(client: TestClient):
+def test_delete_course_missing_files_on_disk(paid_client: TestClient):
     """If the on-disk files are already gone (admin cleanup),
     the delete should still succeed and report files_missing."""
     import io as _io
@@ -362,9 +362,9 @@ def test_delete_course_missing_files_on_disk(client: TestClient):
     from app.database import SessionLocal
     from app.models import Video
 
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     with _mock_auth():
-        client.post(
+        paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("gone.mp4", _io.BytesIO(b"x"*1024), "video/mp4")},
             headers=_auth_headers(),
@@ -376,7 +376,7 @@ def test_delete_course_missing_files_on_disk(client: TestClient):
         assert not Path(v.file_path).exists()
 
     with _mock_auth():
-        resp = client.delete(
+        resp = paid_client.delete(
             f"/api/courses/{course_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 200
@@ -385,48 +385,48 @@ def test_delete_course_missing_files_on_disk(client: TestClient):
     assert data["deleted"]["files_missing"] == 1
 
 
-def test_delete_course_unauthenticated(client: TestClient):
+def test_delete_course_unauthenticated(paid_client: TestClient):
     """Returns 401 without auth."""
-    course_id, _ = _create_course_and_section(client)
+    course_id, _ = _create_course_and_section(paid_client)
     # MVP2.0.6: conftest client fixture sets a default valid
     # cookie. Clear it for this unauthenticated test.
-    client.cookies.clear()
-    resp = client.delete(f"/api/courses/{course_id}")
+    paid_client.cookies.clear()
+    resp = paid_client.delete(f"/api/courses/{course_id}")
     assert resp.status_code == 401
 
 
-def test_delete_course_not_found(client: TestClient):
+def test_delete_course_not_found(paid_client: TestClient):
     """Returns 404 for non-existent course."""
     with _mock_auth():
-        resp = client.delete(
+        resp = paid_client.delete(
             "/api/courses/nonexistent-id", headers=_auth_headers(),
         )
     assert resp.status_code == 404
 
 
-def test_delete_course_wrong_user(client: TestClient):
+def test_delete_course_wrong_user(paid_client: TestClient):
     """Returns 403 if the user doesn't own the course."""
-    course_id, _ = _create_course_and_section(client)
+    course_id, _ = _create_course_and_section(paid_client)
     with _patch(
         "app.auth.dependencies.verify_token",
         return_value={"uid": "user-B"},
     ):
-        resp = client.delete(
+        resp = paid_client.delete(
             f"/api/courses/{course_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 403
 
 
-def test_create_section(client: TestClient):
+def test_create_section(paid_client: TestClient):
     """Should create a section in a course."""
     with _mock_auth():
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "ML"},
             headers=_auth_headers(),
         )
         course_id = create_resp.json()["course_id"]
-        response = client.post(
+        response = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1", "order_index": 0},
             headers=_auth_headers(),
@@ -435,22 +435,22 @@ def test_create_section(client: TestClient):
     assert "section_id" in response.json()
 
 
-def test_list_section_videos_empty(client: TestClient):
+def test_list_section_videos_empty(paid_client: TestClient):
     """Should return empty list for a section with no videos."""
     with _mock_auth():
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "ML"},
             headers=_auth_headers(),
         )
         course_id = create_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        response = client.get(
+        response = paid_client.get(
             f"/api/courses/{course_id}/sections/{section_id}/videos",
             headers=_auth_headers(),
         )
@@ -458,13 +458,13 @@ def test_list_section_videos_empty(client: TestClient):
     assert response.json() == []
 
 
-def test_course_ownership(client: TestClient):
+def test_course_ownership(paid_client: TestClient):
     """Should not allow access to another user's course."""
     with patch(
         "app.auth.dependencies.verify_token",
         return_value={"uid": "user-A"},
     ):
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "A's course"},
             headers=_auth_headers(),
@@ -475,18 +475,18 @@ def test_course_ownership(client: TestClient):
         "app.auth.dependencies.verify_token",
         return_value={"uid": "user-B"},
     ):
-        response = client.get(
+        response = paid_client.get(
             f"/api/courses/{course_id}", headers=_auth_headers()
         )
     assert response.status_code == 403
 
 
-def test_unauthorized_access(client: TestClient):
+def test_unauthorized_access(paid_client: TestClient):
     """Should return 401 without auth."""
     # MVP2.0.6: conftest client fixture sets a default valid
     # cookie. Clear it for this unauthenticated test.
-    client.cookies.clear()
-    response = client.get("/api/courses")
+    paid_client.cookies.clear()
+    response = paid_client.get("/api/courses")
     assert response.status_code == 401
 
 
@@ -497,7 +497,7 @@ from unittest.mock import patch as _patch
 
 
 def _make_failed_video(
-    client: TestClient,
+    paid_client: TestClient,
     course_id: str,
     section_id: str,
     title: str,
@@ -511,7 +511,7 @@ def _make_failed_video(
     something to find.
     """
     with _mock_auth():
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": (f"{title}.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
@@ -538,19 +538,19 @@ def _make_failed_video(
     return video_id
 
 
-def test_retry_failed_section_no_failed_videos(client: TestClient):
+def test_retry_failed_section_no_failed_videos(paid_client: TestClient):
     """When no videos are failed, the endpoint returns retried=0."""
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     # Upload a fresh video (not failed) so the section has videos
     with _mock_auth():
-        client.post(
+        paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("good.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
         )
 
     with _mock_auth():
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
             headers=_auth_headers(),
         )
@@ -560,7 +560,7 @@ def test_retry_failed_section_no_failed_videos(client: TestClient):
     assert data["video_ids"] == []
 
 
-def test_retry_failed_section_retries_failed_videos(client: TestClient):
+def test_retry_failed_section_retries_failed_videos(paid_client: TestClient):
     """When there ARE failed videos, the endpoint queues them all.
 
     The BackgroundTasks run synchronously in TestClient, so by the
@@ -570,13 +570,13 @@ def test_retry_failed_section_retries_failed_videos(client: TestClient):
     'ready' (depending on whether the worker completed fast
     enough in the test).
     """
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     # Add 3 videos, mark 2 of them as failed
-    _make_failed_video(client, course_id, section_id, "broken-1")
-    _make_failed_video(client, course_id, section_id, "broken-2")
+    _make_failed_video(paid_client, course_id, section_id, "broken-1")
+    _make_failed_video(paid_client, course_id, section_id, "broken-2")
     # And one good one (no failed job)
     with _mock_auth():
-        client.post(
+        paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("good.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
@@ -602,7 +602,7 @@ def test_retry_failed_section_retries_failed_videos(client: TestClient):
         "app.routers.generation._run_generate_job",
         side_effect=fake_worker,
     ):
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
             headers=_auth_headers(),
         )
@@ -612,25 +612,25 @@ def test_retry_failed_section_retries_failed_videos(client: TestClient):
     assert len(data["video_ids"]) == 2
 
 
-def test_retry_failed_section_404_wrong_section(client: TestClient):
+def test_retry_failed_section_404_wrong_section(paid_client: TestClient):
     """Returns 404 if the section doesn't belong to the course."""
-    course_id, _ = _create_course_and_section(client)
+    course_id, _ = _create_course_and_section(paid_client)
     with _mock_auth():
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/courses/{course_id}/sections/nonexistent-section/retry-failed",
             headers=_auth_headers(),
         )
     assert resp.status_code == 404
 
 
-def test_retry_failed_section_403_wrong_user(client: TestClient):
+def test_retry_failed_section_403_wrong_user(paid_client: TestClient):
     """Returns 403 if the user doesn't own the course."""
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     with _patch(
         "app.auth.dependencies.verify_token",
         return_value={"uid": "user-B"},
     ):
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
             headers=_auth_headers(),
         )
@@ -638,7 +638,7 @@ def test_retry_failed_section_403_wrong_user(client: TestClient):
 
 
 def _make_transcribe_failed_video(
-    client: TestClient,
+    paid_client: TestClient,
     course_id: str,
     section_id: str,
     title: str,
@@ -651,7 +651,7 @@ def _make_transcribe_failed_video(
     transcribe (which then auto-pipelines to generate).
     """
     with _mock_auth():
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": (f"{title}.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
@@ -674,14 +674,14 @@ def _make_transcribe_failed_video(
     return video_id
 
 
-def test_retry_failed_section_retries_transcribe_failure(client: TestClient):
+def test_retry_failed_section_retries_transcribe_failure(paid_client: TestClient):
     """A transcribe-failed video (e.g. 0-byte file) gets retried by
     the same endpoint. This is the regression test for the bug
     the user reported: clicking the button when the only failed
     video was a transcribe failure did nothing visible."""
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     video_id = _make_transcribe_failed_video(
-        client, course_id, section_id, "zero-byte-broken"
+        paid_client, course_id, section_id, "zero-byte-broken"
     )
 
     def fake_transcribe(vid: str, model: str) -> None:
@@ -703,7 +703,7 @@ def test_retry_failed_section_retries_transcribe_failure(client: TestClient):
         "app.routers.videos._run_transcribe_job",
         side_effect=fake_transcribe,
     ):
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
             headers=_auth_headers(),
         )
@@ -715,16 +715,16 @@ def test_retry_failed_section_retries_transcribe_failure(client: TestClient):
     assert video_id in data["video_ids"]
 
 
-def test_retry_failed_section_response_shape(client: TestClient):
+def test_retry_failed_section_response_shape(paid_client: TestClient):
     """The response includes the split counts so the UI can show
     'Retrying N (3 transcribe, 1 generate)'."""
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     # One transcribe failure, one generate failure
     transcribe_id = _make_transcribe_failed_video(
-        client, course_id, section_id, "transcribe-broken"
+        paid_client, course_id, section_id, "transcribe-broken"
     )
     generate_id = _make_failed_video(
-        client, course_id, section_id, "generate-broken"
+        paid_client, course_id, section_id, "generate-broken"
     )
 
     def fake_worker(*args, **kwargs):
@@ -737,7 +737,7 @@ def test_retry_failed_section_response_shape(client: TestClient):
         "app.routers.generation._run_generate_job",
         side_effect=fake_worker,
     ):
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
             headers=_auth_headers(),
         )
@@ -748,7 +748,7 @@ def test_retry_failed_section_response_shape(client: TestClient):
     assert set(data["video_ids"]) == {transcribe_id, generate_id}
 
 
-def test_delete_course_oserror_on_unlink_is_swallowed(client: TestClient):
+def test_delete_course_oserror_on_unlink_is_swallowed(paid_client: TestClient):
     """If unlink() raises OSError (e.g. permission denied), the delete
     should still succeed — we report files_missing=1 instead of
     crashing. Verified by mocking Path.unlink to raise."""
@@ -758,9 +758,9 @@ def test_delete_course_oserror_on_unlink_is_swallowed(client: TestClient):
     from app.database import SessionLocal
     from app.models import Video
 
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     with _mock_auth():
-        client.post(
+        paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("locked.mp4", io.BytesIO(b"x"*1024), "video/mp4")},
             headers=_auth_headers(),
@@ -773,7 +773,7 @@ def test_delete_course_oserror_on_unlink_is_swallowed(client: TestClient):
         raise OSError("Permission denied")
     with _patch_local.object(Path, "unlink", fake_unlink):
         with _mock_auth():
-            resp = client.delete(
+            resp = paid_client.delete(
                 f"/api/courses/{course_id}", headers=_auth_headers(),
             )
     assert resp.status_code == 200
@@ -782,15 +782,15 @@ def test_delete_course_oserror_on_unlink_is_swallowed(client: TestClient):
     assert data["deleted"]["files_missing"] == 1
 
 
-def test_delete_section_oserror_on_unlink_is_swallowed(client: TestClient):
+def test_delete_section_oserror_on_unlink_is_swallowed(paid_client: TestClient):
     """Same OSError swallow test, for the section delete endpoint."""
     import io
     from pathlib import Path
     from unittest.mock import patch as _patch_local
 
-    course_id, section_id = _create_course_and_section(client)
+    course_id, section_id = _create_course_and_section(paid_client)
     with _mock_auth():
-        client.post(
+        paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("locked.mp4", io.BytesIO(b"x"*1024), "video/mp4")},
             headers=_auth_headers(),
@@ -800,7 +800,7 @@ def test_delete_section_oserror_on_unlink_is_swallowed(client: TestClient):
         raise OSError("Permission denied")
     with _patch_local.object(Path, "unlink", fake_unlink):
         with _mock_auth():
-            resp = client.delete(
+            resp = paid_client.delete(
                 f"/api/courses/{course_id}/sections/{section_id}",
                 headers=_auth_headers(),
             )

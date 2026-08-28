@@ -52,21 +52,21 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _setup_video(client: TestClient) -> str:
+def _setup_video(paid_client: TestClient) -> str:
     """Helper: create course → section → video. Returns video_id."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake video content")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
@@ -120,7 +120,7 @@ def test_transcribe_started_at_migration_registered():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_transcribe_worker_stamps_started_at_before_whisper_loads(client, db_session):
+def test_transcribe_worker_stamps_started_at_before_whisper_loads(paid_client, db_session):
     """The transcribe worker must stamp transcribe_started_at at the
     very TOP of _run_transcribe_job (BEFORE whisper loads), so the
     transcribe duration includes the model load time. If stamped
@@ -135,7 +135,7 @@ def test_transcribe_worker_stamps_started_at_before_whisper_loads(client, db_ses
     from app.models import Video
     from app.jobs import start_job, serialize_job
 
-    video_id = _setup_video(client)
+    video_id = _setup_video(paid_client)
     with db_session as db:
         video = db.get(Video, video_id)
         # Register the job (the worker looks for it)
@@ -213,7 +213,7 @@ def test_transcribe_worker_stamps_started_at_before_whisper_loads(client, db_ses
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_course_page_renders_both_per_step_times(client: TestClient):
+def test_course_page_renders_both_per_step_times(paid_client: TestClient):
     """When transcribe_started_at, transcribed_at, and generated_at
     are all set, the course page renders 'Ready · T:0:55, G:0:44'
     (or the actual computed durations)."""
@@ -221,7 +221,7 @@ def test_course_page_renders_both_per_step_times(client: TestClient):
     from datetime import datetime, timedelta, timezone
     from app.models import Video
 
-    video_id = _setup_video(client)
+    video_id = _setup_video(paid_client)
     base_time = datetime(2026, 7, 15, 10, 0, 0)
     with SessionLocal() as db:
         v = db.get(Video, video_id)
@@ -234,7 +234,7 @@ def test_course_page_renders_both_per_step_times(client: TestClient):
 
     with _mock_auth():
         course_id = SessionLocal().query(Course).filter_by(user_id=FAKE_USER["uid"]).first().id
-        resp = client.get(f"/course/{course_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
 
     assert resp.status_code == 200
     # T:0:55 (transcribe duration)
@@ -249,7 +249,7 @@ def test_course_page_renders_both_per_step_times(client: TestClient):
     assert "T:0:55, G:0:44" in resp.text
 
 
-def test_course_page_legacy_fallback(client: TestClient):
+def test_course_page_legacy_fallback(paid_client: TestClient):
     """For legacy rows (uploaded before MVP2.0.4), transcribe_started_at
     is NULL. The page should fall back to the old
     generated_at - created_at formula so the badge still shows
@@ -258,7 +258,7 @@ def test_course_page_legacy_fallback(client: TestClient):
     from datetime import datetime, timedelta, timezone
     from app.models import Video
 
-    video_id = _setup_video(client)
+    video_id = _setup_video(paid_client)
     base_time = datetime(2026, 7, 15, 10, 0, 0)
     with SessionLocal() as db:
         v = db.get(Video, video_id)
@@ -272,7 +272,7 @@ def test_course_page_legacy_fallback(client: TestClient):
 
     with _mock_auth():
         course_id = SessionLocal().query(Course).filter_by(user_id=FAKE_USER["uid"]).first().id
-        resp = client.get(f"/course/{course_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
 
     assert resp.status_code == 200
     # Should fall back to 1:39 (generated_at - created_at)
@@ -284,7 +284,7 @@ def test_course_page_legacy_fallback(client: TestClient):
     assert "G:" not in resp.text, "should not use G: format on legacy rows"
 
 
-def test_course_page_hides_timing_for_non_ready_status(client: TestClient):
+def test_course_page_hides_timing_for_non_ready_status(paid_client: TestClient):
     """The timing suffix must only show when status == 'ready'. A
     video in 'transcribing' / 'generating' / 'error' should not
     show any timing (per user choice: 'hide it' on 2026-07-15)."""
@@ -292,7 +292,7 @@ def test_course_page_hides_timing_for_non_ready_status(client: TestClient):
     from datetime import datetime, timedelta, timezone
     from app.models import Video
 
-    video_id = _setup_video(client)
+    video_id = _setup_video(paid_client)
     base_time = datetime(2026, 7, 15, 10, 0, 0)
     with SessionLocal() as db:
         v = db.get(Video, video_id)
@@ -306,7 +306,7 @@ def test_course_page_hides_timing_for_non_ready_status(client: TestClient):
 
     with _mock_auth():
         course_id = SessionLocal().query(Course).filter_by(user_id=FAKE_USER["uid"]).first().id
-        resp = client.get(f"/course/{course_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
 
     assert resp.status_code == 200
     # No T: or G: on a transcribing video

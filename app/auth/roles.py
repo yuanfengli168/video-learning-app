@@ -129,7 +129,24 @@ class Capability(str, Enum):
     """Re-run the LLM on a video to regenerate materials (admin/paid)."""
 
     CURATE_CATALOG = "curate_catalog"
-    """Add a new YouTube video to the catalog (admin only)."""
+    """Add a new YouTube video to the GLOBAL catalog (admin only)."""
+
+    MANAGE_OWN_COURSE = "manage_own_course"
+    """Create/edit one's own courses + sections + upload to them (paid + admin).
+
+    Distinct from CURATE_CATALOG (which adds to the global catalog and
+    is admin-only). PAID users can manage their own space but cannot
+    add to the curated catalog everyone sees.
+    """
+
+    RUN_PLUGIN = "run_plugin"
+    """Run a media plugin (e.g. webm_to_mp4 transcoding) on a video.
+
+    Admin-only because plugins spawn ffmpeg subprocesses with
+    significant CPU + disk cost. Day 9 hotfix: was previously
+    open to anyone signed in (security gap, would let free users
+    DoS the server by queuing transcodes).
+    """
 
     MANAGE_USERS = "manage_users"
     """Change user roles, view user list, audit log (admin only)."""
@@ -153,6 +170,8 @@ ROLE_CAPABILITIES: dict[UserRole, frozenset[Capability]] = {
         Capability.UPLOAD_VIDEO,
         Capability.REGEN_MATERIALS,
         Capability.CURATE_CATALOG,
+        Capability.MANAGE_OWN_COURSE,
+        Capability.RUN_PLUGIN,
         Capability.MANAGE_USERS,
         Capability.VIEW_ADMIN_DASHBOARD,
     }),
@@ -163,13 +182,15 @@ ROLE_CAPABILITIES: dict[UserRole, frozenset[Capability]] = {
         Capability.CHAT_PAID,
         Capability.UPLOAD_VIDEO,
         Capability.REGEN_MATERIALS,
-        # No CURATE_CATALOG, no MANAGE_USERS, no admin dashboard
+        # Day 9 hotfix: PAID can manage own courses + sections
+        Capability.MANAGE_OWN_COURSE,
+        # No CURATE_CATALOG, no MANAGE_USERS, no admin dashboard, no RUN_PLUGIN
     }),
 
     UserRole.FREE: frozenset({
         Capability.VIEW_VIDEO,
         Capability.CHAT_FREE,
-        # No upload, no regen, no curate, no manage
+        # No upload, no regen, no curate, no manage_own, no run_plugin
     }),
 }
 

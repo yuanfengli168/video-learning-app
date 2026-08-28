@@ -192,6 +192,75 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         plugin_pool.synchronous_mode = original_sync
 
 
+# MVP2.1.0.4: capability-gated routes (plugins, uploads, course/section
+# creation) require ADMIN/PAID role. The base `client` fixture is
+# FREE by default (no users row → FREE). These wrappers bump the
+# test user's role in the DB and clear the role cache so the
+# request is authorized.
+#
+# Tests use a wide variety of fake uids via `patch(...verify_token,
+# return_value={"uid": "..."})`. To make this fixture useful across
+# all of them, we insert + upgrade every known test uid at once.
+# Tests that *want* a FREE user (the few that explicitly test
+# 403 behaviour) don't use this fixture — they use plain `client`.
+_TEST_UIDS = (
+    "test-uid",            # conftest's `client` fixture (cookie)
+    "test-user-uid",       # _mock_auth() default in some test files
+    "user-A",              # test_course_ownership, chat tests
+    "user-B",              # cross-user tests
+    "uid-admin",           # admin-only tests
+    "u1",                  # test_job_progress
+    "attacker",            # test_job_progress (negative tests)
+)
+
+
+@pytest.fixture(scope="function")
+def admin_client(client: TestClient, db_session: Session) -> TestClient:
+    """Test client authenticated as ADMIN (role=0)."""
+    from sqlalchemy import text
+    from app.auth.admin import clear_role_cache
+
+    for uid in _TEST_UIDS:
+        db_session.execute(
+            text("INSERT OR IGNORE INTO users (user_id, email, role) VALUES (:uid, :email, 0)"),
+            {"uid": uid, "email": f"{uid}@test.com"},
+        )
+    # UPDATE uses named binding params; we expand the IN list manually
+    # rather than passing a list (SQLAlchemy 2.x's `text` doesn't accept
+    # plain lists as bound params — they must be dicts or tuples).
+    placeholders = ",".join(f":u{i}" for i in range(len(_TEST_UIDS)))
+    params = {f"u{i}": uid for i, uid in enumerate(_TEST_UIDS)}
+    db_session.execute(
+        text(f"UPDATE users SET role=0 WHERE user_id IN ({placeholders})"),
+        params,
+    )
+    db_session.commit()
+    clear_role_cache()
+    return client
+
+
+@pytest.fixture(scope="function")
+def paid_client(client: TestClient, db_session: Session) -> TestClient:
+    """Test client authenticated as PAID (role=1)."""
+    from sqlalchemy import text
+    from app.auth.admin import clear_role_cache
+
+    for uid in _TEST_UIDS:
+        db_session.execute(
+            text("INSERT OR IGNORE INTO users (user_id, email, role) VALUES (:uid, :email, 1)"),
+            {"uid": uid, "email": f"{uid}@test.com"},
+        )
+    placeholders = ",".join(f":u{i}" for i in range(len(_TEST_UIDS)))
+    params = {f"u{i}": uid for i, uid in enumerate(_TEST_UIDS)}
+    db_session.execute(
+        text(f"UPDATE users SET role=1 WHERE user_id IN ({placeholders})"),
+        params,
+    )
+    db_session.commit()
+    clear_role_cache()
+    return client
+
+
 @pytest.fixture(autouse=True)
 def no_auto_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     """Globally mock _run_auto_pipeline to a no-op for all tests.

@@ -4,8 +4,9 @@
 
 {% block content %}
 <div class="space-y-6">
-    <!-- Upload Zone -->
-    {% if user %}
+    <!-- Upload Zone — only for users with UPLOAD_VIDEO capability (PAID+ADMIN).
+         Free users see a CTA to upgrade instead. -->
+    {% if user_capabilities and "upload_video" in user_capabilities %}
     {% set all_sections = [] %}
     {% for c in courses %}
         {% for s in c.sections %}
@@ -44,6 +45,14 @@
                 {% endif %}
             </p>
         {% endif %}
+    </div>
+    {% elif user %}
+    {# Signed in but no UPLOAD_VIDEO capability → FREE user. Show upgrade CTA. #}
+    <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
+        <div class="text-4xl mb-2">⭐</div>
+        <p class="text-lg font-medium text-gray-700 dark:text-gray-300">Uploading is a paid feature</p>
+        <p class="text-sm text-gray-500 mt-1">Browse the curated catalog below or upgrade your plan to upload your own videos.</p>
+        <a href="/pricing" class="inline-block mt-3 px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">See plans</a>
     </div>
     {% else %}
     <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 text-center">
@@ -133,12 +142,14 @@
         {% endif %}
     </div>
 
-    <!-- Your Courses -->
+    <!-- Your Courses — only PAID+ADMIN can create courses (MANAGE_OWN_COURSE). -->
     {% if user %}
     <div>
         <div class="flex items-center justify-between mb-3">
             <h2 class="text-lg font-semibold">Your Courses</h2>
+            {% if user_capabilities and "manage_own_course" in user_capabilities %}
             <button onclick="showCreateCourse()" class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ New Course</button>
+            {% endif %}
         </div>
 
         <!-- Create course form (hidden by default) -->

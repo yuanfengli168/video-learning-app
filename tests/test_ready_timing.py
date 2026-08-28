@@ -45,14 +45,14 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _create_course_and_section(client: TestClient):
+def _create_course_and_section(paid_client: TestClient):
     """Helper: create a course + section, return (course_id, section_id)."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "Timing tests"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "S1"},
             headers=_auth_headers(),
@@ -61,10 +61,10 @@ def _create_course_and_section(client: TestClient):
     return course_id, section_id
 
 
-def _upload_video(client: TestClient, section_id: str) -> str:
+def _upload_video(paid_client: TestClient, section_id: str) -> str:
     """Helper: upload a video, return its id."""
     with _mock_auth():
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"x" * 100), "video/mp4")},
             headers=_auth_headers(),
@@ -125,7 +125,7 @@ def test_completion_timestamps_migration_is_registered():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_transcribe_worker_sets_transcribed_at_on_success(client: TestClient):
+def test_transcribe_worker_sets_transcribed_at_on_success(paid_client: TestClient):
     """_run_transcribe_job must set transcribed_at when it succeeds.
 
     The worker uses `from faster_whisper import WhisperModel` *inside*
@@ -134,8 +134,8 @@ def test_transcribe_worker_sets_transcribed_at_on_success(client: TestClient):
     the only way to intercept the real worker's Whisper call without
     also patching out the whole worker.
     """
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     # Build a fake WhisperModel whose .transcribe() returns our
     # canned segments + a DurationInfo with the expected fields.
@@ -184,11 +184,11 @@ def test_transcribe_worker_sets_transcribed_at_on_success(client: TestClient):
         assert v.status == "ready"
 
 
-def test_transcribe_worker_does_not_set_transcribed_at_on_failure(client: TestClient):
+def test_transcribe_worker_does_not_set_transcribed_at_on_failure(paid_client: TestClient):
     """If the worker raises, transcribed_at must stay None (don't
     stamp a timestamp for a job that never actually completed)."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     class _BrokenWhisperModel:
         def __init__(self, *args, **kwargs):
@@ -214,7 +214,7 @@ def test_transcribe_worker_does_not_set_transcribed_at_on_failure(client: TestCl
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _seed_ready_transcript(client: TestClient, video_id: str) -> None:
+def _seed_ready_transcript(paid_client: TestClient, video_id: str) -> None:
     """Helper: pre-write a transcript asset, set video.status=ready, AND
     start the generate job tracker so _run_generate_job has a job to find.
 
@@ -247,11 +247,11 @@ def _seed_ready_transcript(client: TestClient, video_id: str) -> None:
         db.commit()
 
 
-def test_generate_worker_sets_generated_at_on_success(client: TestClient):
+def test_generate_worker_sets_generated_at_on_success(paid_client: TestClient):
     """_run_generate_job must set generated_at when it succeeds."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
-    _seed_ready_transcript(client, video_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
+    _seed_ready_transcript(paid_client, video_id)
 
     fake_materials = {
         "summary": "# Summary",
@@ -279,11 +279,11 @@ def test_generate_worker_sets_generated_at_on_success(client: TestClient):
         assert v.status == "ready"
 
 
-def test_generate_worker_does_not_set_generated_at_on_failure(client: TestClient):
+def test_generate_worker_does_not_set_generated_at_on_failure(paid_client: TestClient):
     """If the LLM call raises, generated_at must stay None."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
-    _seed_ready_transcript(client, video_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
+    _seed_ready_transcript(paid_client, video_id)
 
     def fake_broken(*args, **kwargs):
         raise RuntimeError("LLM crashed")
@@ -308,11 +308,11 @@ def test_generate_worker_does_not_set_generated_at_on_failure(client: TestClient
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_course_page_shows_ready_with_timing_when_generated_at_set(client: TestClient):
+def test_course_page_shows_ready_with_timing_when_generated_at_set(paid_client: TestClient):
     """A video with both created_at and generated_at set must render
     as 'ready · M:SS' (or H:MM:SS) on the section page."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     # Stamp the timestamps directly so we don't need to run the workers.
     with _get_session_local()() as db:
@@ -324,7 +324,7 @@ def test_course_page_shows_ready_with_timing_when_generated_at_set(client: TestC
         db.commit()
 
     with _mock_auth():
-        resp = client.get(f"/course/{course_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
     assert resp.status_code == 200
     # The badge text is "ready · 9:08"
     assert "ready · 9:08" in resp.text, (
@@ -334,10 +334,10 @@ def test_course_page_shows_ready_with_timing_when_generated_at_set(client: TestC
     )
 
 
-def test_course_page_shows_ready_with_hours_when_over_60_minutes(client: TestClient):
+def test_course_page_shows_ready_with_hours_when_over_60_minutes(paid_client: TestClient):
     """A video that took > 1 hour should render as H:MM:SS, not just M:SS."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     with _get_session_local()() as db:
         v = db.get(Video, video_id)
@@ -347,20 +347,20 @@ def test_course_page_shows_ready_with_hours_when_over_60_minutes(client: TestCli
         db.commit()
 
     with _mock_auth():
-        resp = client.get(f"/course/{course_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
     assert resp.status_code == 200
     assert "ready · 2:05:33" in resp.text, (
         "videos that took > 1 hour should render as H:MM:SS, not M:SS"
     )
 
 
-def test_course_page_omits_timing_for_legacy_videos_without_generated_at(client: TestClient):
+def test_course_page_omits_timing_for_legacy_videos_without_generated_at(paid_client: TestClient):
     """A video that was uploaded before MVP3.0 has no generated_at
     column populated. The badge must still show 'ready', just without
     the timing suffix — otherwise legacy videos would render as
     'ready · 0:00' which is misleading."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     with _get_session_local()() as db:
         v = db.get(Video, video_id)
@@ -369,7 +369,7 @@ def test_course_page_omits_timing_for_legacy_videos_without_generated_at(client:
         db.commit()
 
     with _mock_auth():
-        resp = client.get(f"/course/{course_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
     assert resp.status_code == 200
     # Find the badge for this video
     # The badge text is rendered inside a <span class="text-xs px-2 py-1 rounded ...">
@@ -385,12 +385,12 @@ def test_course_page_omits_timing_for_legacy_videos_without_generated_at(client:
     )
 
 
-def test_course_page_omits_timing_for_non_ready_statuses(client: TestClient):
+def test_course_page_omits_timing_for_non_ready_statuses(paid_client: TestClient):
     """Videos in transcribing / generating / error / pending must show
     the status as today, without any timing suffix — the timing only
     applies to fully-ready videos."""
-    course_id, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    course_id, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     with _get_session_local()() as db:
         v = db.get(Video, video_id)
@@ -400,7 +400,7 @@ def test_course_page_omits_timing_for_non_ready_statuses(client: TestClient):
         db.commit()
 
     with _mock_auth():
-        resp = client.get(f"/course/{course_id}", headers=_auth_headers())
+        resp = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
     assert resp.status_code == 200
     # The transcribing badge must show "transcribing", not "transcribing · X:XX"
     assert "transcribing" in resp.text

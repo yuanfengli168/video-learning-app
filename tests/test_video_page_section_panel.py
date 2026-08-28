@@ -37,24 +37,24 @@ def _auth_headers():
 
 
 def _create_course_section_videos(
-    client: TestClient, video_titles: list[str],
+    paid_client: TestClient, video_titles: list[str],
 ) -> tuple[str, str, list[str]]:
     """Helper: create a course, a section, and N videos in the
     section. Returns (course_id, section_id, [video_id, ...])."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "Test course"},
             headers=_auth_headers(),
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Section 1"}, headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         video_ids = []
         for title in video_titles:
-            upload_resp = client.post(
+            upload_resp = paid_client.post(
                 f"/api/videos/upload/{section_id}",
                 files={"file": (f"{title}.mp4", io.BytesIO(b"x" * 100), "video/mp4")},
                 headers=_auth_headers(),
@@ -66,28 +66,28 @@ def _create_course_section_videos(
 # ── Tests for the panel rendering ─────────────────────────────────────────
 
 
-def test_section_videos_panel_renders(client: TestClient):
+def test_section_videos_panel_renders(paid_client: TestClient):
     """The <details id="section-videos-panel"> element is present on
     the video page when the video belongs to a section.
     """
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"},
             headers=_auth_headers(),
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "S1"}, headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lec.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     # The panel exists
     assert 'id="section-videos-panel"' in response.text
@@ -95,15 +95,15 @@ def test_section_videos_panel_renders(client: TestClient):
     assert "Section videos" in response.text
 
 
-def test_section_videos_panel_shows_all_videos(client: TestClient):
+def test_section_videos_panel_shows_all_videos(paid_client: TestClient):
     """The panel lists every video in the section, including the
     currently-playing one."""
     _, _, video_ids = _create_course_section_videos(
-        client, ["Lecture 1", "Lecture 2", "Lecture 3"],
+        paid_client, ["Lecture 1", "Lecture 2", "Lecture 3"],
     )
     # Open the page for video 1
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     assert response.status_code == 200
     # All 3 video titles should be in the response (and the
     # panel's count text should be "3")
@@ -112,15 +112,15 @@ def test_section_videos_panel_shows_all_videos(client: TestClient):
     assert "section-video-count\">3<" in response.text or "(3)" in response.text
 
 
-def test_section_videos_panel_current_video_highlighted(client: TestClient):
+def test_section_videos_panel_current_video_highlighted(paid_client: TestClient):
     """The currently-playing video is visually highlighted (bg-indigo-50
     + border-l-4 border-indigo-500) in the panel.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["Alpha", "Beta", "Gamma"],
+        paid_client, ["Alpha", "Beta", "Gamma"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[1]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[1]}", headers=_auth_headers())
     assert response.status_code == 200
     # The Beta video's <a> should have the highlight classes
     text = response.text
@@ -147,16 +147,16 @@ def test_section_videos_panel_current_video_highlighted(client: TestClient):
     )
 
 
-def test_section_videos_panel_data_sort_key_present(client: TestClient):
+def test_section_videos_panel_data_sort_key_present(paid_client: TestClient):
     """Each video <a> in the panel has a data-sort-key attribute
     (pre-computed natural sort key from the Jinja filter) so the
     client-side sort function works.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["First video", "Second video"],
+        paid_client, ["First video", "Second video"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     text = response.text
     # Find all data-sort-key attributes in the section-videos panel
     sort_keys = re.findall(r'data-sort-key="([^"]+)"', text)
@@ -170,15 +170,15 @@ def test_section_videos_panel_data_sort_key_present(client: TestClient):
     )
 
 
-def test_section_videos_panel_data_date_present(client: TestClient):
+def test_section_videos_panel_data_date_present(paid_client: TestClient):
     """Each video <a> in the panel has a data-date attribute
     (ISO 8601 string) so the client-side date sort function works.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["First", "Second"],
+        paid_client, ["First", "Second"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     text = response.text
     # Find all data-date attributes in the section-videos panel
     dates = re.findall(r'data-date="([^"]+)"', text)
@@ -192,15 +192,15 @@ def test_section_videos_panel_data_date_present(client: TestClient):
         )
 
 
-def test_section_videos_sort_dropdown_present(client: TestClient):
+def test_section_videos_sort_dropdown_present(paid_client: TestClient):
     """The <select id="section-videos-sort"> element is present with
     the 4 sort options: name-asc, name-desc, date-asc, date-desc.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["Test video"],
+        paid_client, ["Test video"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     text = response.text
     assert 'id="section-videos-sort"' in text
     # All 4 sort options must be present
@@ -211,7 +211,7 @@ def test_section_videos_sort_dropdown_present(client: TestClient):
         assert label in text, f"Sort label '{label}' missing"
 
 
-def test_section_videos_empty_state_message(client: TestClient):
+def test_section_videos_empty_state_message(paid_client: TestClient):
     """When the section has only ONE video (the current one), the
     panel shows the 'No other videos' empty state.
 
@@ -223,10 +223,10 @@ def test_section_videos_empty_state_message(client: TestClient):
     We test that with 2+ videos, no empty-state message is shown.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["Only video"],
+        paid_client, ["Only video"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     text = response.text
     # With 1 video, no "No other videos" message
     assert "No other videos in this section" not in text
@@ -234,16 +234,16 @@ def test_section_videos_empty_state_message(client: TestClient):
     assert "Only video" in text
 
 
-def test_section_videos_panel_collapsed_by_default(client: TestClient):
+def test_section_videos_panel_collapsed_by_default(paid_client: TestClient):
     """The panel's <details> element does NOT have the `open` attribute
     by default — the user has to click the summary to expand it.
     The state is persisted in localStorage on the first interaction.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["A", "B"],
+        paid_client, ["A", "B"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     text = response.text
     # The <details> tag should NOT have `open` attribute
     details_match = re.search(
@@ -261,15 +261,15 @@ def test_section_videos_panel_collapsed_by_default(client: TestClient):
 # ── Tests for the JavaScript sort function (regex-only) ───────────────────
 
 
-def test_section_videos_sort_function_present(client: TestClient):
+def test_section_videos_sort_function_present(paid_client: TestClient):
     """The sortSectionVideos() function is defined in the page's
     inline <script> block.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["A"],
+        paid_client, ["A"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     text = response.text
     assert "function sortSectionVideos" in text, (
         "sortSectionVideos() function must be defined in the inline script"
@@ -279,17 +279,17 @@ def test_section_videos_sort_function_present(client: TestClient):
     )
 
 
-def test_section_videos_localstorage_keys_present(client: TestClient):
+def test_section_videos_localstorage_keys_present(paid_client: TestClient):
     """The JavaScript uses a localStorage key prefix of
     'videoPageSectionVideos_<section_id>_sort' to persist sort
     direction. This is verified by checking the script content
     includes the key prefix.
     """
     _, _, video_ids = _create_course_section_videos(
-        client, ["A"],
+        paid_client, ["A"],
     )
     with _mock_auth():
-        response = client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_ids[0]}", headers=_auth_headers())
     text = response.text
     assert "videoPageSectionVideos_" in text, (
         "Script must use 'videoPageSectionVideos_' as the localStorage prefix"
@@ -309,7 +309,7 @@ def test_section_videos_localstorage_keys_present(client: TestClient):
 # does NOT show timing, and the course page DOES.
 
 
-def test_section_videos_panel_omits_per_step_timing_badge(client: TestClient):
+def test_section_videos_panel_omits_per_step_timing_badge(paid_client: TestClient):
     """The video page's section-videos panel does NOT show the
     per-step timing badge (T:..., G:...) — the panel is for
     quick context switching, not status reporting.
@@ -329,7 +329,7 @@ def test_section_videos_panel_omits_per_step_timing_badge(client: TestClient):
     from datetime import datetime, timedelta
 
     course_id, section_id, video_ids = _create_course_section_videos(
-        client, ["Quick switch test"],
+        paid_client, ["Quick switch test"],
     )
     video_id = video_ids[0]
     # Move the video to 'ready' state with the timestamps
@@ -351,7 +351,7 @@ def test_section_videos_panel_omits_per_step_timing_badge(client: TestClient):
         db.close()
 
     with _mock_auth():
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     text = response.text
     # Extract the section-videos panel's <div data-video-list>
     # block so we only assert against the panel, not the
@@ -389,7 +389,7 @@ def test_section_videos_panel_omits_per_step_timing_badge(client: TestClient):
     assert "ready" in panel_html
 
 
-def test_course_page_still_shows_per_step_timing_badge(client: TestClient):
+def test_course_page_still_shows_per_step_timing_badge(paid_client: TestClient):
     """The course page KEEPS the per-step timing badge. This is
     the other half of the MVP2.0.8 amendment contract: the
     course page (where users scan the full section) shows
@@ -400,10 +400,10 @@ def test_course_page_still_shows_per_step_timing_badge(client: TestClient):
     might also strip the badge from the course page.
     """
     course_id, section_id, video_ids = _create_course_section_videos(
-        client, ["Course page timing test"],
+        paid_client, ["Course page timing test"],
     )
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             f"/course/{course_id}", headers=_auth_headers(),
         )
     assert response.status_code == 200

@@ -12,8 +12,9 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.admin import require_capability
 from app.auth.dependencies import get_current_user
-from app.auth.roles import user_can_access_video
+from app.auth.roles import Capability, user_can_access_video
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.jobs import (
@@ -105,7 +106,7 @@ async def upload_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(require_capability(Capability.UPLOAD_VIDEO)),
 ) -> dict[str, Any]:
     """Upload a video and queue auto-transcribe + auto-generate.
 
@@ -208,7 +209,7 @@ async def upload_bulk_videos(
     files: list[UploadFile],
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(require_capability(Capability.UPLOAD_VIDEO)),
 ) -> dict[str, Any]:
     """Upload multiple videos at once and queue auto-processing for each.
 

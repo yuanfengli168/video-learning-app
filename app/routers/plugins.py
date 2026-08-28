@@ -32,7 +32,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth.admin import require_capability
 from app.auth.dependencies import get_current_user
+from app.auth.roles import Capability
 from app.config import settings
 from app.database import get_db
 from app.models.plugin_run import PluginRun
@@ -53,7 +55,7 @@ router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 
 @router.get("")
 async def list_plugins(
-    _user: str = Depends(get_current_user),
+    _user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
 ) -> dict:
     """List the available plugins, with availability info.
 
@@ -89,7 +91,7 @@ async def list_plugins(
 async def run_a_plugin(
     name: str,
     video_id: str,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Run a plugin on a video (NOW VIA WORKER POOL — MVP2.1.0.1).
@@ -169,7 +171,7 @@ async def run_a_plugin(
 @router.get("/runs/{run_id}")
 async def get_plugin_run(
     run_id: str,
-    _user: str = Depends(get_current_user),
+    _user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Get the status of a single plugin run.
@@ -211,7 +213,7 @@ class RevealRequest(BaseModel):
 @router.get("/runs/by-video/{video_id}")
 async def get_most_recent_run_for_video(
     video_id: str,
-    _user: str = Depends(get_current_user),
+    _user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Return the most recent PluginRun for this video, or null.
@@ -266,7 +268,7 @@ async def get_most_recent_run_for_video(
 @router.post("/reveal")
 async def reveal_in_file_manager(
     body: RevealRequest,
-    _user: str = Depends(get_current_user),
+    _user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
 ) -> dict:
     """Reveal a file in Finder / Explorer / file manager.
 
@@ -395,7 +397,7 @@ class SwapToMp4Request(BaseModel):
 @router.post("/swap-to-mp4")
 async def swap_to_mp4(
     body: SwapToMp4Request,
-    _user: str = Depends(get_current_user),
+    _user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
     db: Session = Depends(get_db),
 ) -> dict:
     """Swap a video's file_path from WebM to MP4 (or any file).

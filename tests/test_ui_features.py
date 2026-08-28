@@ -15,59 +15,59 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def test_video_page_has_transcribe_button(client: TestClient):
+def test_video_page_has_transcribe_button(paid_client: TestClient):
     """Video page should have a Transcribe button."""
     import io
 
     with _mock_auth():
         # Create course + section + video
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake video content")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     assert "transcribe-btn" in response.text
     assert "Transcribe" in response.text
 
 
-def test_video_page_has_whisper_model_selector(client: TestClient):
+def test_video_page_has_whisper_model_selector(paid_client: TestClient):
     """Video page should have a Whisper model dropdown."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     assert "whisper-model" in response.text
@@ -77,29 +77,29 @@ def test_video_page_has_whisper_model_selector(client: TestClient):
     assert "medium" in response.text
 
 
-def test_video_page_has_search_navigation(client: TestClient):
+def test_video_page_has_search_navigation(paid_client: TestClient):
     """Video page should have search navigation (prev/next/clear)."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     assert "search-nav" in response.text
@@ -107,29 +107,29 @@ def test_video_page_has_search_navigation(client: TestClient):
     assert "clearSearch" in response.text
 
 
-def test_video_page_has_mindmap_fullscreen_button(client: TestClient):
+def test_video_page_has_mindmap_fullscreen_button(paid_client: TestClient):
     """Video page should have a mindmap fullscreen expand button."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     assert "openMindmapFullscreen" in response.text
@@ -137,39 +137,39 @@ def test_video_page_has_mindmap_fullscreen_button(client: TestClient):
     assert "Expand to Full Screen" in response.text
 
 
-def test_video_page_has_summary_loading_function(client: TestClient):
+def test_video_page_has_summary_loading_function(paid_client: TestClient):
     """Video page should have loadSummary function."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     assert "loadSummary" in response.text
     assert "simpleMarkdown" in response.text
 
 
-def test_dashboard_has_create_course_js(client: TestClient):
+def test_dashboard_has_create_course_js(paid_client: TestClient):
     """Dashboard should use JS fetch for course creation (not HTMX)."""
     with _mock_auth():
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
 
     assert response.status_code == 200
     assert "createCourse" in response.text
@@ -177,44 +177,44 @@ def test_dashboard_has_create_course_js(client: TestClient):
     assert "hx-post" not in response.text
 
 
-def test_course_page_has_upload_function(client: TestClient):
+def test_course_page_has_upload_function(paid_client: TestClient):
     """Course page should have uploadVideo function."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        response = client.get(f"/course/{course_id}", headers=_auth_headers())
+        response = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     assert "uploadVideo" in response.text
     assert "createSection" in response.text
 
-def test_video_page_has_topic_banner(client: TestClient):
+def test_video_page_has_topic_banner(paid_client: TestClient):
     """Video page should have a topic notification banner (hidden by default)."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Banner element
@@ -223,29 +223,29 @@ def test_video_page_has_topic_banner(client: TestClient):
     assert "topic-banner-time" in response.text
 
 
-def test_video_page_has_topic_click_functions(client: TestClient):
+def test_video_page_has_topic_click_functions(paid_client: TestClient):
     """Video page should have JS functions for clicking mindmap topics."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Required functions for the topic click flow
@@ -260,31 +260,31 @@ def test_video_page_has_topic_click_functions(client: TestClient):
     assert "topicTimestamps" in response.text
 
 
-def test_video_page_preloads_markmap_script(client: TestClient):
+def test_video_page_preloads_markmap_script(paid_client: TestClient):
     """Video page should pre-load the Markmap CDN script on page load to
     avoid the multi-second cold start when the user first clicks the
     mindmap tab."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # The page should pre-load the Markmap script
@@ -294,30 +294,30 @@ def test_video_page_preloads_markmap_script(client: TestClient):
     assert "mindmap-loading" in response.text or "Loading mindmap" in response.text
 
 
-def test_mindmap_node_has_click_tooltip_and_pointer_cursor(client: TestClient):
+def test_mindmap_node_has_click_tooltip_and_pointer_cursor(paid_client: TestClient):
     """Mindmap nodes should show a pointer cursor and a tooltip saying
     'Click to watch this part of the video'."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Pointer cursor
@@ -328,7 +328,7 @@ def test_mindmap_node_has_click_tooltip_and_pointer_cursor(client: TestClient):
     assert "closeMindmapFullscreen()" in response.text
 
 
-def test_video_page_has_mindmap_parent_map_ancestor_lookup(client: TestClient):
+def test_video_page_has_mindmap_parent_map_ancestor_lookup(paid_client: TestClient):
     """When a user clicks a leaf node that has no exact timestamp, the
     page should walk up the mindmap tree to find the closest ancestor
     that does. This prevents the 'No timestamp info' error for deeply
@@ -337,24 +337,24 @@ def test_video_page_has_mindmap_parent_map_ancestor_lookup(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Parent map builder and ancestor walker must exist
@@ -367,31 +367,31 @@ def test_video_page_has_mindmap_parent_map_ancestor_lookup(client: TestClient):
     assert "findTopicTimestampWithAncestors(topicName, mindmapParentMap)" in response.text
 
 
-def test_video_page_has_graceful_toast_not_alert(client: TestClient):
+def test_video_page_has_graceful_toast_not_alert(paid_client: TestClient):
     """The page should show a non-blocking toast (not an alert) when no
     timestamp is found, so the user can keep interacting with the mindmap.
     """
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Toast helper exists
@@ -402,7 +402,7 @@ def test_video_page_has_graceful_toast_not_alert(client: TestClient):
     assert "alert(`No timestamp info" not in response.text
 
 
-def test_topic_banner_is_between_video_and_transcript(client: TestClient):
+def test_topic_banner_is_between_video_and_transcript(paid_client: TestClient):
     """The topic banner should be placed BELOW the video player and
     ABOVE the transcript, so the user can see it without scrolling to
     the top of the page on small screens.
@@ -410,24 +410,24 @@ def test_topic_banner_is_between_video_and_transcript(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     text = response.text
@@ -445,31 +445,31 @@ def test_topic_banner_is_between_video_and_transcript(client: TestClient):
     )
 
 
-def test_show_topic_banner_does_not_scroll_to_top(client: TestClient):
+def test_show_topic_banner_does_not_scroll_to_top(paid_client: TestClient):
     """When a mindmap node is clicked, the banner appears between the
     video and transcript, so we should scroll the BANNER into view (not
     the top of the page)."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # showTopicBanner should scrollIntoView on the banner itself, not the window
@@ -490,30 +490,30 @@ def test_show_topic_banner_does_not_scroll_to_top(client: TestClient):
     assert "window.scrollTo({top: 0" not in body
 
 
-def test_open_mindmap_fullscreen_auto_fits(client: TestClient):
+def test_open_mindmap_fullscreen_auto_fits(paid_client: TestClient):
     """The fullscreen mindmap should auto-fit on open so the user sees
     the full mindmap immediately (not the top-left corner)."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # The fullscreen function should use the same Markmap class direct
@@ -541,7 +541,7 @@ def test_open_mindmap_fullscreen_auto_fits(client: TestClient):
     assert 'type="text/template"' not in body, "should not use autoloader template"
 
 
-def test_mindmap_disables_builtin_zoom_and_pan(client: TestClient):
+def test_mindmap_disables_builtin_zoom_and_pan(paid_client: TestClient):
     """Regression test: markmap's built-in d3-zoom would fight (and win
     over) our manual drag handler, causing the mindmap to 'snap back' to
     the fitted transform on the first drag. We disable it by passing
@@ -552,24 +552,24 @@ def test_mindmap_disables_builtin_zoom_and_pan(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     text = response.text
@@ -588,7 +588,7 @@ def test_mindmap_disables_builtin_zoom_and_pan(client: TestClient):
     )
 
 
-def test_mindmap_uses_outer_g_for_drag_transform(client: TestClient):
+def test_mindmap_uses_outer_g_for_drag_transform(paid_client: TestClient):
     """After disabling markmap's built-in zoom/pan, our manual drag
     handler needs to mutate a different <g> than the one markmap
     controls. fitMindmapSVG now writes the transform onto the OUTER
@@ -598,24 +598,24 @@ def test_mindmap_uses_outer_g_for_drag_transform(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # fitMindmapSVG should write onto the outer <g> via the
@@ -626,31 +626,31 @@ def test_mindmap_uses_outer_g_for_drag_transform(client: TestClient):
     )
 
 
-def test_close_mindmap_fullscreen_refits_inline(client: TestClient):
+def test_close_mindmap_fullscreen_refits_inline(paid_client: TestClient):
     """When the user closes the fullscreen mindmap, the inline mindmap
     should be re-fit in case the body layout shifted (e.g., scrollbar
     appeared/disappeared)."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # The closeMindmapFullscreen function should refit the inline mindmap
@@ -667,37 +667,37 @@ def test_close_mindmap_fullscreen_refits_inline(client: TestClient):
     assert ".fit()" in body, "should call .fit() on the inline mindmap"
 
 
-def test_mindmap_refits_on_window_resize(client: TestClient):
+def test_mindmap_refits_on_window_resize(paid_client: TestClient):
     """The inline mindmap should re-fit when the window is resized,
     because Tailwind breakpoints can change the container's width."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # The page should have a window resize listener that re-fits the mindmap
     assert "addEventListener('resize'" in response.text
 
 
-def test_inline_mindmap_attach_interaction_for_pan_and_zoom(client: TestClient):
+def test_inline_mindmap_attach_interaction_for_pan_and_zoom(paid_client: TestClient):
     """The inline mindmap tab must attach the drag/pan/scroll-zoom
     interaction (not just the click handler). Previously only the
     fullscreen view had pan, so users couldn't drag the inline mindmap
@@ -705,23 +705,23 @@ def test_inline_mindmap_attach_interaction_for_pan_and_zoom(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Find the renderMindmap function body and verify it calls
@@ -743,30 +743,30 @@ def test_inline_mindmap_attach_interaction_for_pan_and_zoom(client: TestClient):
     )
 
 
-def test_render_mindmap_does_not_refit_after_300ms(client: TestClient):
+def test_render_mindmap_does_not_refit_after_300ms(paid_client: TestClient):
     """renderMindmap used to call mm.fit() again at 300ms as a safety
     net, which would re-center the mindmap and blow away any pan/zoom
     the user did in the first 300ms. That safety net has been removed."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     import re
@@ -784,7 +784,7 @@ def test_render_mindmap_does_not_refit_after_300ms(client: TestClient):
     )
 
 
-def test_attach_mindmap_interaction_uses_per_container_state(client: TestClient):
+def test_attach_mindmap_interaction_uses_per_container_state(paid_client: TestClient):
     """attachMindmapInteraction must use per-container state (stored on
     the DOM node), so the inline and fullscreen views have independent
     drag state. Previously they shared module-level variables, which
@@ -792,23 +792,23 @@ def test_attach_mindmap_interaction_uses_per_container_state(client: TestClient)
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     import re
@@ -830,7 +830,7 @@ def test_attach_mindmap_interaction_uses_per_container_state(client: TestClient)
     assert "let startY" not in body
 
 
-def test_resize_listener_skips_when_size_unchanged(client: TestClient):
+def test_resize_listener_skips_when_size_unchanged(paid_client: TestClient):
     """The window resize listener should skip the re-fit if the
     inline mindmap container's size hasn't actually changed. Otherwise
     every scrollbar appearance triggers a re-fit that blows away the
@@ -838,23 +838,23 @@ def test_resize_listener_skips_when_size_unchanged(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Find the resize handler
@@ -874,21 +874,21 @@ def test_resize_listener_skips_when_size_unchanged(client: TestClient):
     assert "w === _lastInlineSize.w && h === _lastInlineSize.h" in body
 
 
-def test_dashboard_upload_zone_shows_section_picker_when_sections_exist(client: TestClient):
+def test_dashboard_upload_zone_shows_section_picker_when_sections_exist(paid_client: TestClient):
     """When the user has courses with sections, the dashboard upload
     zone should show a section picker dropdown instead of the
     'create a course first' alert."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        client.post(
+        paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     # Section picker should be present
     assert 'id="dashboard-upload-section"' in response.text
@@ -901,15 +901,15 @@ def test_dashboard_upload_zone_shows_section_picker_when_sections_exist(client: 
     assert "create a course and section first" not in response.text
 
 
-def test_dashboard_upload_zone_shows_help_when_no_sections(client: TestClient):
+def test_dashboard_upload_zone_shows_help_when_no_sections(paid_client: TestClient):
     """When the user has a course but no sections, the dashboard
     upload zone should show a 'create a section' hint linking to the
     course page (not the misleading 'create a course' message)."""
     with _mock_auth():
-        client.post(
+        paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     # No section picker
     assert 'id="dashboard-upload-section"' not in response.text
@@ -918,11 +918,11 @@ def test_dashboard_upload_zone_shows_help_when_no_sections(client: TestClient):
     assert "Go to ML" in response.text
 
 
-def test_dashboard_upload_zone_shows_create_course_when_no_courses(client: TestClient):
+def test_dashboard_upload_zone_shows_create_course_when_no_courses(paid_client: TestClient):
     """When the user has no courses, the dashboard upload zone should
     show the 'create a course' hint with a button."""
     with _mock_auth():
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     # No section picker
     assert 'id="dashboard-upload-section"' not in response.text
@@ -932,21 +932,21 @@ def test_dashboard_upload_zone_shows_create_course_when_no_courses(client: TestC
     assert "showCreateCourse" in response.text
 
 
-def test_dashboard_has_real_upload_function_not_alert(client: TestClient):
+def test_dashboard_has_real_upload_function_not_alert(paid_client: TestClient):
     """The dashboard must have a real uploadToSection function (not
     the old stub that just showed an alert). Also: it must support
     drag-and-drop."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        client.post(
+        paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     # Real upload function
     assert "function uploadToSection" in response.text
@@ -963,20 +963,20 @@ def test_dashboard_has_real_upload_function_not_alert(client: TestClient):
     assert "function handleUpload" not in response.text
 
 
-def test_dashboard_upload_status_element_exists(client: TestClient):
+def test_dashboard_upload_status_element_exists(paid_client: TestClient):
     """A #dashboard-upload-status element must exist so the user
     gets feedback during/after upload (success or failure)."""
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        client.post(
+        paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert 'id="dashboard-upload-status"' in response.text
 
@@ -984,7 +984,7 @@ def test_dashboard_upload_status_element_exists(client: TestClient):
 # ── Progress bar + ETA UI (background jobs) ──
 
 
-def test_video_page_has_progress_bar_html(client: TestClient):
+def test_video_page_has_progress_bar_html(paid_client: TestClient):
     """Video page should define renderProgressBar() and pollJobStatus() JS helpers.
 
     These are wired to the /api/videos/{id}/status endpoint, which is
@@ -993,24 +993,24 @@ def test_video_page_has_progress_bar_html(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # JS function definitions are present
@@ -1029,7 +1029,7 @@ def test_video_page_has_progress_bar_html(client: TestClient):
     assert "data.eta_text" in response.text
 
 
-def test_video_page_has_discuss_tab_and_send(client: TestClient):
+def test_video_page_has_discuss_tab_and_send(paid_client: TestClient):
     """Video page should render the Discuss tab and its send handler.
 
     MVP2.0 ship: the 💬 Discuss tab is the whole-video chat surface
@@ -1037,24 +1037,24 @@ def test_video_page_has_discuss_tab_and_send(client: TestClient):
     """
     import io
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Discuss tab button + content + send handler
@@ -1066,29 +1066,29 @@ def test_video_page_has_discuss_tab_and_send(client: TestClient):
     assert "startDiscussSession" in response.text
 
 
-def test_video_page_has_citation_renderer_for_discuss(client: TestClient):
+def test_video_page_has_citation_renderer_for_discuss(paid_client: TestClient):
     """Video page should have the JS to render [M:SS] markers as clickable
     links in the Discuss tab (MVP3.0 Part B, manualTodo [jul14] #6)."""
     import io
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # The renderer + client-side fallback regex must be present so the
@@ -1114,7 +1114,7 @@ def test_video_page_has_citation_renderer_for_discuss(client: TestClient):
     assert "highlightTranscriptRange" in response.text
 
 
-def test_video_page_video_system_prompt_documents_citation_format(client: TestClient):
+def test_video_page_video_system_prompt_documents_citation_format(paid_client: TestClient):
     """The system prompt for video-scope chats must explicitly document
     the [M:SS] citation format so the LLM cites consistently. We assert
     on the prompt text in app/services/chat.py because the prompt is
@@ -1136,7 +1136,7 @@ def test_video_page_video_system_prompt_documents_citation_format(client: TestCl
     assert "honestly" in VIDEO_CHAT_SYSTEM_PROMPT.lower()
 
 
-def test_video_page_switchTab_hides_all_six_panels(client: TestClient):
+def test_video_page_switchTab_hides_all_six_panels(paid_client: TestClient):
     """REGRESSION (MVP2.0.2 hotfix, see doc/MVP2.0-Status.md §17,
     then re-fixed in MVP2.1.0.3 for the new 'tools' tab):
     switchTab() must hide ALL SIX tab panels (summary, flashcards,
@@ -1163,24 +1163,24 @@ def test_video_page_switchTab_hides_all_six_panels(client: TestClient):
     """
     import io
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # Extract the switchTab function body so we can assert on the

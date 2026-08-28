@@ -154,10 +154,10 @@ class _MultiPatch:
 # ── End-to-end behavior via TestClient ───────────────────────────────────────
 
 
-def test_protected_video_route_with_expired_cookie_redirects(client: TestClient):
+def test_protected_video_route_with_expired_cookie_redirects(paid_client: TestClient):
     """GET /video/{id} with a bad cookie should 302 to /?session=expired."""
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/video/00000000-0000-0000-0000-000000000000",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -166,10 +166,10 @@ def test_protected_video_route_with_expired_cookie_redirects(client: TestClient)
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_protected_course_route_with_expired_cookie_redirects(client: TestClient):
+def test_protected_course_route_with_expired_cookie_redirects(paid_client: TestClient):
     """GET /course/{id} with a bad cookie should also redirect."""
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/course/00000000-0000-0000-0000-000000000000",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -178,10 +178,10 @@ def test_protected_course_route_with_expired_cookie_redirects(client: TestClient
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_protected_chat_history_with_expired_cookie_redirects(client: TestClient):
+def test_protected_chat_history_with_expired_cookie_redirects(paid_client: TestClient):
     """/chat-history with a bad cookie redirects to dashboard."""
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/chat-history",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -190,7 +190,7 @@ def test_protected_chat_history_with_expired_cookie_redirects(client: TestClient
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_dashboard_with_expired_cookie_redirects(client: TestClient):
+def test_dashboard_with_expired_cookie_redirects(paid_client: TestClient):
     """GET / with a bad cookie also redirects to itself with ?session=expired.
 
     This is the special-case behavior: a logged-in user returning to
@@ -198,7 +198,7 @@ def test_dashboard_with_expired_cookie_redirects(client: TestClient):
     silent "no courses" dashboard.
     """
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -207,7 +207,7 @@ def test_dashboard_with_expired_cookie_redirects(client: TestClient):
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_protected_route_with_valid_cookie_is_not_redirected(client: TestClient):
+def test_protected_route_with_valid_cookie_is_not_redirected(paid_client: TestClient):
     """A valid cookie should pass through to the normal handler.
 
     We use a UUID that's guaranteed not to exist, so the route
@@ -215,7 +215,7 @@ def test_protected_route_with_valid_cookie_is_not_redirected(client: TestClient)
     middleware didn't intercept the request with a 302.
     """
     with _middleware_sees_valid():
-        response = client.get(
+        response = paid_client.get(
             "/video/00000000-0000-0000-0000-000000000000",
             cookies={COOKIE_NAME: "valid-token"},
             follow_redirects=False,
@@ -224,7 +224,7 @@ def test_protected_route_with_valid_cookie_is_not_redirected(client: TestClient)
     assert "location" not in {k.lower() for k in response.headers.keys()}
 
 
-def test_protected_video_route_with_no_cookie_redirects(client: TestClient):
+def test_protected_video_route_with_no_cookie_redirects(paid_client: TestClient):
     """MVP2.0.6: anonymous visit to /video/{id} (no cookie) now
     redirects to /?session=expired, instead of rendering a
     phantom page where the HTML shell loads but every API call
@@ -236,8 +236,8 @@ def test_protected_video_route_with_no_cookie_redirects(client: TestClient):
     """
     # MVP2.0.6: the conftest client fixture sets a default valid
     # cookie. Clear it so we can test the no-cookie path.
-    client.cookies.clear()
-    response = client.get(
+    paid_client.cookies.clear()
+    response = paid_client.get(
         "/video/00000000-0000-0000-0000-000000000000",
         follow_redirects=False,
     )
@@ -245,12 +245,12 @@ def test_protected_video_route_with_no_cookie_redirects(client: TestClient):
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_protected_course_route_with_no_cookie_redirects(client: TestClient):
+def test_protected_course_route_with_no_cookie_redirects(paid_client: TestClient):
     """MVP2.0.6: anonymous visit to /course/{id} (no cookie)
     also redirects. Same rationale as the video test above.
     """
-    client.cookies.clear()
-    response = client.get(
+    paid_client.cookies.clear()
+    response = paid_client.get(
         "/course/00000000-0000-0000-0000-000000000000",
         follow_redirects=False,
     )
@@ -258,12 +258,12 @@ def test_protected_course_route_with_no_cookie_redirects(client: TestClient):
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_protected_chat_history_route_with_no_cookie_redirects(client: TestClient):
+def test_protected_chat_history_route_with_no_cookie_redirects(paid_client: TestClient):
     """MVP2.0.6: anonymous visit to /chat-history (no cookie)
     also redirects. Same rationale as the video test above.
     """
-    client.cookies.clear()
-    response = client.get(
+    paid_client.cookies.clear()
+    response = paid_client.get(
         "/chat-history",
         follow_redirects=False,
     )
@@ -271,7 +271,7 @@ def test_protected_chat_history_route_with_no_cookie_redirects(client: TestClien
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_dashboard_with_no_cookie_is_not_redirected(client: TestClient):
+def test_dashboard_with_no_cookie_is_not_redirected(paid_client: TestClient):
     """Anonymous visit to the dashboard is still allowed (no
     redirect) so the user sees the "Sign in" prompt. This is
     the special case — the dashboard is the public landing
@@ -281,7 +281,7 @@ def test_dashboard_with_no_cookie_is_not_redirected(client: TestClient):
     protected routes (/course/, /video/, /chat-history), NOT
     the dashboard.
     """
-    response = client.get(
+    response = paid_client.get(
         "/",
         follow_redirects=False,
     )
@@ -290,7 +290,7 @@ def test_dashboard_with_no_cookie_is_not_redirected(client: TestClient):
     assert "location" not in {k.lower() for k in response.headers.keys()}
 
 
-def test_api_route_with_expired_cookie_is_not_redirected(client: TestClient):
+def test_api_route_with_expired_cookie_is_not_redirected(paid_client: TestClient):
     """API routes keep their existing 401 behavior — no HTML redirect.
 
     The middleware must NEVER redirect API requests, even when the
@@ -302,7 +302,7 @@ def test_api_route_with_expired_cookie_is_not_redirected(client: TestClient):
     ValueError, and that's a separate concern from #7).
     """
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/api/courses",
             cookies={COOKIE_NAME: "this-is-not-a-real-jwt"},
             follow_redirects=False,
@@ -313,7 +313,7 @@ def test_api_route_with_expired_cookie_is_not_redirected(client: TestClient):
     assert "text/html" not in response.headers.get("content-type", "")
 
 
-def test_login_route_with_expired_cookie_is_not_redirected(client: TestClient):
+def test_login_route_with_expired_cookie_is_not_redirected(paid_client: TestClient):
     """/login must always be reachable, even with a bad cookie.
 
     This is critical: a user whose session just expired needs to be
@@ -321,7 +321,7 @@ def test_login_route_with_expired_cookie_is_not_redirected(client: TestClient):
     create a redirect loop.
     """
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/login",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -330,10 +330,10 @@ def test_login_route_with_expired_cookie_is_not_redirected(client: TestClient):
     assert "text/html" in response.headers.get("content-type", "")
 
 
-def test_static_route_with_expired_cookie_is_not_redirected(client: TestClient):
+def test_static_route_with_expired_cookie_is_not_redirected(paid_client: TestClient):
     """/static/* assets are public; bad cookie must not block them."""
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/static/css/transcript-follow.css",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -344,7 +344,7 @@ def test_static_route_with_expired_cookie_is_not_redirected(client: TestClient):
     assert response.status_code != 302
 
 
-def test_api_auth_session_with_expired_cookie_is_not_redirected(client: TestClient):
+def test_api_auth_session_with_expired_cookie_is_not_redirected(paid_client: TestClient):
     """POST /api/auth/session is how users GET a cookie; never redirect.
 
     The middleware explicitly skips this path so a user whose cookie
@@ -355,7 +355,7 @@ def test_api_auth_session_with_expired_cookie_is_not_redirected(client: TestClie
     ValueError, and that's a separate concern from #7).
     """
     with _middleware_sees_expired():
-        response = client.post(
+        response = paid_client.post(
             "/api/auth/session",
             json={"id_token": "fake-id-token"},
             cookies={COOKIE_NAME: "expired-or-malformed"},
@@ -366,7 +366,7 @@ def test_api_auth_session_with_expired_cookie_is_not_redirected(client: TestClie
     assert response.status_code == 401
 
 
-def test_redirect_response_carries_security_headers(client: TestClient):
+def test_redirect_response_carries_security_headers(paid_client: TestClient):
     """The 302 redirect must still have the baseline security headers.
 
     Without this, an attacker could chain the redirect into an XSS
@@ -375,7 +375,7 @@ def test_redirect_response_carries_security_headers(client: TestClient):
     its dispatch wraps the redirect response too.
     """
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/video/00000000-0000-0000-0000-000000000000",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -390,7 +390,7 @@ def test_redirect_response_carries_security_headers(client: TestClient):
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
-def test_cookie_is_not_cleared_on_redirect(client: TestClient):
+def test_cookie_is_not_cleared_on_redirect(paid_client: TestClient):
     """The redirect must NOT delete the cookie in its response.
 
     Reasons documented in app/middleware_session.py:
@@ -400,7 +400,7 @@ def test_cookie_is_not_cleared_on_redirect(client: TestClient):
     3. POST /api/auth/session will overwrite the cookie on next login.
     """
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/video/00000000-0000-0000-0000-000000000000",
             cookies={COOKIE_NAME: "expired-or-malformed"},
             follow_redirects=False,
@@ -414,14 +414,14 @@ def test_cookie_is_not_cleared_on_redirect(client: TestClient):
 # ── Toast trigger on the dashboard ──────────────────────────────────────────
 
 
-def test_dashboard_includes_session_expired_trigger_script(client: TestClient):
+def test_dashboard_includes_session_expired_trigger_script(paid_client: TestClient):
     """base.html must include the IIFE that detects ?session=expired.
 
     The middleware redirects to /?session=expired, so the dashboard
     HTML must contain the JS that shows the toast and strips the
     query param. This is the user-visible half of #7.
     """
-    response = client.get("/")
+    response = paid_client.get("/")
     assert response.status_code == 200
     # The plain dashboard shouldn't have the toast in the URL, but
     # the script that LOOKS for it must be present.
@@ -430,10 +430,10 @@ def test_dashboard_includes_session_expired_trigger_script(client: TestClient):
     assert "Your session has expired" in response.text
 
 
-def test_dashboard_defines_show_toast_globally(client: TestClient):
+def test_dashboard_defines_show_toast_globally(paid_client: TestClient):
     """showToast() must be defined in base.html so the toast works
     on the dashboard (and every other page that uses base.html)."""
-    response = client.get("/")
+    response = paid_client.get("/")
     assert response.status_code == 200
     # The function definition is in base.html
     assert "function showToast(message, type = 'info')" in response.text
@@ -442,7 +442,7 @@ def test_dashboard_defines_show_toast_globally(client: TestClient):
     assert "window.showToast = showToast" in response.text
 
 
-def test_video_page_no_longer_defines_show_toast_locally(client: TestClient):
+def test_video_page_no_longer_defines_show_toast_locally(paid_client: TestClient):
     """showToast() definition must have been REMOVED from video.html.
 
     The function now lives in base.html. If both define it, the
@@ -453,23 +453,23 @@ def test_video_page_no_longer_defines_show_toast_locally(client: TestClient):
     # Build a course/section/video so the page renders, using a
     # valid mock for the route's auth dependency.
     with patch("app.auth.dependencies.verify_token", return_value=FAKE_USER):
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers={"Authorization": "Bearer x"}
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "W1"}, headers={"Authorization": "Bearer x"}
         )
         section_id = section_resp.json()["section_id"]
         import io
-        upload = client.post(
+        upload = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("l.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers={"Authorization": "Bearer x"},
         )
         video_id = upload.json()["video_id"]
-        response = client.get(f"/video/{video_id}")
+        response = paid_client.get(f"/video/{video_id}")
     assert response.status_code == 200
     # Count: base.html has 1 definition. If video.html also defines
     # it locally we'd see 2. Allow exactly 1.
@@ -482,21 +482,21 @@ def test_video_page_no_longer_defines_show_toast_locally(client: TestClient):
 # ── The redirect target itself renders the toast ────────────────────────────
 
 
-def test_dashboard_rendered_via_session_expired_query_param_works(client: TestClient):
+def test_dashboard_rendered_via_session_expired_query_param_works(paid_client: TestClient):
     """Hitting /?session=expired directly (not via redirect) renders
     the dashboard with the trigger JS in place. This proves the
     query param is handled by the same code path whether the user
     came from a redirect or typed the URL by hand."""
-    response = client.get("/?session=expired")
+    response = paid_client.get("/?session=expired")
     assert response.status_code == 200
     assert "Your session has expired" in response.text
 
 
-def test_session_expired_query_param_does_not_break_dashboard_for_anon(client: TestClient):
+def test_session_expired_query_param_does_not_break_dashboard_for_anon(paid_client: TestClient):
     """Anonymous visit to /?session=expired should still render the
     dashboard (and show the toast). It should NOT redirect again
     (that would loop)."""
-    response = client.get("/?session=expired", follow_redirects=False)
+    response = paid_client.get("/?session=expired", follow_redirects=False)
     assert response.status_code == 200
     assert "Your session has expired" in response.text
 
@@ -530,7 +530,7 @@ def _middleware_sees_firebase_unavailable():
     ])
 
 
-def test_unavailable_error_does_not_bounce_to_session_expired(client: TestClient):
+def test_unavailable_error_does_not_bounce_to_session_expired(paid_client: TestClient):
     """Day 9 hotfix: Firebase UNAVAILABLE error (network blip) must
     NOT redirect to /?session=expired.
 
@@ -541,7 +541,7 @@ def test_unavailable_error_does_not_bounce_to_session_expired(client: TestClient
     # Seed a valid cookie + user so the route would otherwise let us in
     with _middleware_sees_valid(FAKE_USER):
         # First confirm: valid cookie DOES let us through
-        ok_response = client.get(
+        ok_response = paid_client.get(
             "/video/d71c3de8-5d55-4802-9314-ca481a7caaf2",
             cookies={COOKIE_NAME: "valid-jwt"},
             follow_redirects=False,
@@ -557,7 +557,7 @@ def test_unavailable_error_does_not_bounce_to_session_expired(client: TestClient
         # Same request, but now verify_token raises an "unavailable" error.
         # Before the fix: middleware bounces to /?session=expired (302).
         # After the fix: middleware lets it through (200/404/etc.).
-        response = client.get(
+        response = paid_client.get(
             "/video/d71c3de8-5d55-4802-9314-ca481a7caaf2",
             cookies={COOKIE_NAME: "valid-jwt"},
             follow_redirects=False,
@@ -575,7 +575,7 @@ def test_unavailable_error_does_not_bounce_to_session_expired(client: TestClient
         assert "location" not in {k.lower() for k in response.headers.keys()}
 
 
-def test_expired_token_still_bounces(client: TestClient):
+def test_expired_token_still_bounces(paid_client: TestClient):
     """Sanity check: the fix didn't break the original behavior.
 
     A genuinely expired/invalid token (ValueError) must STILL bounce
@@ -583,7 +583,7 @@ def test_expired_token_still_bounces(client: TestClient):
     token-quality errors still bounce.
     """
     with _middleware_sees_expired():
-        response = client.get(
+        response = paid_client.get(
             "/video/d71c3de8-5d55-4802-9314-ca481a7caaf2",
             follow_redirects=False,
         )

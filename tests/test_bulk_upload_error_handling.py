@@ -43,7 +43,7 @@ from fastapi.testclient import TestClient
 # ── 1. Server-side: exception handlers return JSON ─────────────────────
 
 
-def test_starlette_http_exception_handler_returns_json(client: TestClient):
+def test_starlette_http_exception_handler_returns_json(paid_client: TestClient):
     """A `StarletteHTTPException` raised anywhere (middleware,
     dependencies, route handlers) must be returned as a proper
     JSON response with a `detail` field — never plain text.
@@ -54,7 +54,7 @@ def test_starlette_http_exception_handler_returns_json(client: TestClient):
     """
     # Hit a route that we know will raise a 404 (an unknown
     # /api/* path). FastAPI raises HTTPException(404).
-    resp = client.get("/api/this-route-does-not-exist")
+    resp = paid_client.get("/api/this-route-does-not-exist")
     assert resp.status_code == 404
     # Content-Type must be JSON
     assert "application/json" in resp.headers.get("content-type", ""), (
@@ -100,7 +100,7 @@ def test_unhandled_exception_handler_is_registered():
     )
 
 
-def test_bulk_upload_route_returns_json_on_404(client: TestClient):
+def test_bulk_upload_route_returns_json_on_404(paid_client: TestClient):
     """The bulk upload route must return JSON on 404 (unknown
     section_id), not plain text.
 
@@ -118,7 +118,7 @@ def test_bulk_upload_route_returns_json_on_404(client: TestClient):
         # but valid files so we reach the section lookup and
         # get a 404 from the route (not a 422 from FastAPI's
         # body validation).
-        resp = client.post(
+        resp = paid_client.post(
             "/api/videos/upload-bulk/00000000-0000-0000-0000-000000000000",
             files=[("files", ("test.mp4", io.BytesIO(b"x"), "video/mp4"))],
             headers=_auth_headers(),

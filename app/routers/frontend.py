@@ -150,8 +150,14 @@ def _ctx(
         # Expose capability set so nav can conditionally show admin links
         # (cheap: one DB lookup per request, cached in _lookup_role_cached)
         role = get_user_role_from_db(user.get("uid", ""), db)
-        ctx["user_capabilities"] = capabilities_for_role(role)
-        ctx["is_admin"] = Capability.CURATE_CATALOG in ctx["user_capabilities"]
+        # Templates use string-based membership checks
+        # (`{% if "upload_video" in user_capabilities %}`), so we expose
+        # the values rather than the enum objects. Capability values are
+        # stable, snake_case strings (see app/auth/roles.py).
+        ctx["user_capabilities"] = frozenset(
+            c.value for c in capabilities_for_role(role)
+        )
+        ctx["is_admin"] = Capability.CURATE_CATALOG in capabilities_for_role(role)
     else:
         ctx["user_capabilities"] = frozenset()
         ctx["is_admin"] = False

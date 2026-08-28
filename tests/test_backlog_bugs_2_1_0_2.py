@@ -110,7 +110,7 @@ def test_video_duration_stores_float_value(db_session: Session):
 
 # ── Bug 2: file_size is updated on swap ─────────────────────────────
 def test_swap_updates_file_size(
-    client: TestClient, db_session: Session, tmp_path: Path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path: Path, monkeypatch
 ):
     """After a swap, `Video.file_size` matches the new file on disk.
 
@@ -139,7 +139,7 @@ def test_swap_updates_file_size(
     db_session.commit()
 
     # Call the swap endpoint
-    resp = client.post(
+    resp = admin_client.post(
         "/api/plugins/swap-to-mp4",
         json={"video_id": "v1", "mp4_path": str(new_file)},
     )
@@ -162,7 +162,7 @@ def test_swap_updates_file_size(
 
 
 def test_swap_audit_log_includes_size_info(
-    client: TestClient, db_session: Session, tmp_path: Path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path: Path, monkeypatch
 ):
     """The swap audit log row includes the old + new size in extra_json."""
     from app.config import settings
@@ -181,7 +181,7 @@ def test_swap_audit_log_includes_size_info(
     video.file_size = 54 * 1024 * 1024
     db_session.commit()
 
-    client.post(
+    admin_client.post(
         "/api/plugins/swap-to-mp4",
         json={"video_id": "v1", "mp4_path": str(new_file)},
     )

@@ -10,7 +10,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.admin import require_capability
 from app.auth.dependencies import get_current_user
+from app.auth.roles import Capability
 from app.config import settings
 from app.database import get_db
 from app.models import Asset, Course, Section, Video
@@ -68,7 +70,7 @@ async def list_courses(
 async def create_course(
     body: CourseCreate,
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(require_capability(Capability.MANAGE_OWN_COURSE)),
 ) -> dict[str, str]:
     """Create a new course."""
     course = Course(
@@ -294,7 +296,7 @@ async def create_section(
     course_id: str,
     body: SectionCreate,
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(require_capability(Capability.MANAGE_OWN_COURSE)),
 ) -> dict[str, str]:
     """Create a section in a course."""
     course = db.get(Course, course_id)

@@ -57,7 +57,7 @@ def _seed_video(db: Session, *, video_id: str = "v1") -> Video:
 
 # ── Status field transitions ───────────────────────────────────────────
 def test_plugin_run_row_has_status_field(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """A successfully-submitted run has a 'status' field.
 
@@ -68,7 +68,7 @@ def test_plugin_run_row_has_status_field(
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     _seed_video(db_session)
 
-    resp = client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     assert resp.status_code == 202
     run_id = resp.json()["run_id"]
 
@@ -83,17 +83,17 @@ def test_plugin_run_row_has_status_field(
 
 
 def test_plugin_run_endpoint_includes_status(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """The /api/plugins/runs/{id} endpoint returns the status field."""
     from app.config import settings
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     _seed_video(db_session)
 
-    resp = client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     run_id = resp.json()["run_id"]
 
-    fetch = client.get(f"/api/plugins/runs/{run_id}")
+    fetch = admin_client.get(f"/api/plugins/runs/{run_id}")
     assert fetch.status_code == 200
     data = fetch.json()
     assert "status" in data
@@ -101,17 +101,17 @@ def test_plugin_run_endpoint_includes_status(
 
 
 def test_plugin_run_by_video_includes_status(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """The /api/plugins/runs/by-video/{id} endpoint returns status."""
     from app.config import settings
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     _seed_video(db_session)
 
-    client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     db_session.expire_all()
 
-    fetch = client.get("/api/plugins/runs/by-video/v1")
+    fetch = admin_client.get("/api/plugins/runs/by-video/v1")
     assert fetch.status_code == 200
     data = fetch.json()
     assert data["run"] is not None
@@ -120,7 +120,7 @@ def test_plugin_run_by_video_includes_status(
 
 # ── 202 Accepted response ───────────────────────────────────────────────
 def test_run_endpoint_returns_202_accepted(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """The /run endpoint returns 202 (Accepted), not 200.
 
@@ -134,7 +134,7 @@ def test_run_endpoint_returns_202_accepted(
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     _seed_video(db_session)
 
-    resp = client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     assert resp.status_code == 202
     data = resp.json()
     assert data["status"] == "queued"
@@ -143,7 +143,7 @@ def test_run_endpoint_returns_202_accepted(
 
 # ── Tab close survival ──────────────────────────────────────────────────
 def test_run_row_persists_after_client_close(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """Closing the TestClient (simulating tab close) does
     NOT delete the run row. The user can reopen and
@@ -158,7 +158,7 @@ def test_run_row_persists_after_client_close(
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     _seed_video(db_session)
 
-    resp = client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     run_id = resp.json()["run_id"]
 
     # The DB row is the source of truth. It exists
@@ -170,7 +170,7 @@ def test_run_row_persists_after_client_close(
 
 # ── Pool introspection ──────────────────────────────────────────────────
 def test_pool_stats_reflects_submissions(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """PluginPool.stats() returns counts that match the
     number of submissions.
@@ -180,7 +180,7 @@ def test_pool_stats_reflects_submissions(
     _seed_video(db_session)
 
     before = plugin_pool.stats()
-    client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     after = plugin_pool.stats()
     assert after["submitted_count"] == before["submitted_count"] + 1
     # In sync mode, completed + failed counts go up
@@ -193,7 +193,7 @@ def test_pool_stats_reflects_submissions(
 
 # ── 404 on unknown video ───────────────────────────────────────────────
 def test_submit_unknown_video_raises_404(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """Submitting a run for a video that doesn't exist
     returns 404, not 500.
@@ -202,14 +202,14 @@ def test_submit_unknown_video_raises_404(
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     _seed_video(db_session)  # create v1, but we'll request v2
 
-    resp = client.post("/api/plugins/webm_to_mp4/run?video_id=v2")
+    resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v2")
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"].lower()
 
 
 # ── No duplicate rows after sync run ───────────────────────────────────
 def test_sync_mode_writes_exactly_one_row(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """The pool's sync mode must write exactly one
     PluginRun row per submit. The internal "duplicate"
@@ -220,7 +220,7 @@ def test_sync_mode_writes_exactly_one_row(
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     _seed_video(db_session)
 
-    client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     db_session.expire_all()
 
     rows = db_session.query(PluginRun).all()

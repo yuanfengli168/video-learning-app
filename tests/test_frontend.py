@@ -17,100 +17,100 @@ def _mock_auth(user=FAKE_USER):
     return patch("app.auth.dependencies.verify_token", return_value=user)
 
 
-def test_dashboard_unauthenticated(client: TestClient):
+def test_dashboard_unauthenticated(paid_client: TestClient):
     """Dashboard should render for unauthenticated users (sign-in prompt)."""
-    response = client.get("/")
+    response = paid_client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
     assert "Sign in" in response.text
 
 
-def test_dashboard_authenticated(client: TestClient):
+def test_dashboard_authenticated(paid_client: TestClient):
     """Dashboard should render for authenticated users with courses."""
     with _mock_auth():
         # Create a course first
-        client.post(
+        paid_client.post(
             "/api/courses",
             json={"title": "Test Course"},
             headers=_auth_headers(),
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert "Test Course" in response.text
 
 
-def test_login_page(client: TestClient):
+def test_login_page(paid_client: TestClient):
     """Login page should render with AuthKit."""
     # MVP2.0.6: the client fixture sets a default valid cookie.
     # Clear it for this test so we can exercise the
     # unauthenticated path.
-    client.cookies.clear()
-    response = client.get("/login")
+    paid_client.cookies.clear()
+    response = paid_client.get("/login")
     assert response.status_code == 200
     assert "auth-anchor" in response.text
     assert "AuthKit" in response.text
 
 
-def test_login_page_redirects_authenticated(client: TestClient):
+def test_login_page_redirects_authenticated(paid_client: TestClient):
     """Login page should redirect if already authenticated."""
     with _mock_auth():
-        response = client.get("/login", headers=_auth_headers())
+        response = paid_client.get("/login", headers=_auth_headers())
     # Should return redirect (200 with redirect template or 302)
     assert response.status_code == 200
     assert "Redirecting" in response.text or "redirect" in response.text.lower()
 
 
-def test_course_view_not_found(client: TestClient):
+def test_course_view_not_found(paid_client: TestClient):
     """Course view should return 404 for non-existent course."""
-    response = client.get("/course/nonexistent-id")
+    response = paid_client.get("/course/nonexistent-id")
     assert response.status_code == 404
     assert "not found" in response.text.lower()
 
 
-def test_course_view_found(client: TestClient):
+def test_course_view_found(paid_client: TestClient):
     """Course view should render for existing course."""
     with _mock_auth():
-        create_resp = client.post(
+        create_resp = paid_client.post(
             "/api/courses",
             json={"title": "ML Course"},
             headers=_auth_headers(),
         )
         course_id = create_resp.json()["course_id"]
-        response = client.get(f"/course/{course_id}", headers=_auth_headers())
+        response = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
     assert response.status_code == 200
     assert "ML Course" in response.text
 
 
-def test_video_view_not_found(client: TestClient):
+def test_video_view_not_found(paid_client: TestClient):
     """Video view should return 404 for non-existent video."""
-    response = client.get("/video/nonexistent-id")
+    response = paid_client.get("/video/nonexistent-id")
     assert response.status_code == 404
 
 
-def test_video_view_found(client: TestClient):
+def test_video_view_found(paid_client: TestClient):
     """Video view should render for existing video."""
     import io
 
     with _mock_auth():
         # Create course + section + video
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake video content")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     assert "lecture" in response.text
 
@@ -118,21 +118,21 @@ def test_video_view_found(client: TestClient):
 # ── Transcript follow experiment (MVP1.1 — see doc/MVP1.0-PostRelease § Optimization #1) ──
 
 
-def _create_video(client: TestClient, title: str = "lecture") -> str:
+def _create_video(paid_client: TestClient, title: str = "lecture") -> str:
     """Helper: create a course, section, and uploaded video. Returns the video id."""
     import io
-    course_resp = client.post(
+    course_resp = paid_client.post(
         "/api/courses", json={"title": "ML"}, headers=_auth_headers()
     )
     course_id = course_resp.json()["course_id"]
-    section_resp = client.post(
+    section_resp = paid_client.post(
         f"/api/courses/{course_id}/sections",
         json={"title": "Week 1"},
         headers=_auth_headers(),
     )
     section_id = section_resp.json()["section_id"]
     fake_video = io.BytesIO(b"fake video content")
-    upload_resp = client.post(
+    upload_resp = paid_client.post(
         f"/api/videos/upload/{section_id}",
         files={"file": (f"{title}.mp4", fake_video, "video/mp4")},
         headers=_auth_headers(),
@@ -140,27 +140,27 @@ def _create_video(client: TestClient, title: str = "lecture") -> str:
     return upload_resp.json()["video_id"]
 
 
-def test_video_view_loads_transcript_follow_script(client: TestClient):
+def test_video_view_loads_transcript_follow_script(paid_client: TestClient):
     """The video page must include the deferred transcript-follow script so
     TranscriptFollow is available before renderTranscript runs."""
     with _mock_auth():
-        video_id = _create_video(client)
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        video_id = _create_video(paid_client)
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     assert '<script src="/static/js/transcript-follow.js" defer></script>' in response.text
 
 
-def test_video_view_loads_transcript_follow_css(client: TestClient):
+def test_video_view_loads_transcript_follow_css(paid_client: TestClient):
     """The base template must include the transcript-follow CSS so the
     .is-follow-active highlight is visible."""
     with _mock_auth():
-        video_id = _create_video(client)
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        video_id = _create_video(paid_client)
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     assert '/static/css/transcript-follow.css' in response.text
 
 
-def test_video_view_does_not_have_follow_dropdown(client: TestClient):
+def test_video_view_does_not_have_follow_dropdown(paid_client: TestClient):
     """MVP2.0 item #2: the follow-mode dropdown is GONE.
 
     The transcript now uses a single top-anchor mode with no user-
@@ -169,15 +169,15 @@ def test_video_view_does_not_have_follow_dropdown(client: TestClient):
     holds is what this test guards.
     """
     with _mock_auth():
-        video_id = _create_video(client)
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        video_id = _create_video(paid_client)
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     assert 'id="transcript-follow-mode"' not in response.text
     assert '<option value="smart"' not in response.text
     assert '<option value="always"' not in response.text
 
 
-def test_base_template_does_not_stamp_user_email_meta(client: TestClient):
+def test_base_template_does_not_stamp_user_email_meta(paid_client: TestClient):
     """MVP2.0 item #2: the x-user-email meta is GONE.
 
     It existed only so the transcript-follow component could
@@ -187,7 +187,7 @@ def test_base_template_does_not_stamp_user_email_meta(client: TestClient):
     tag must never be emitted, regardless of who is signed in.
     """
     with _mock_auth():
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert 'name="x-user-email"' not in response.text
     # And the user's email itself must not be inlined anywhere in
@@ -196,70 +196,70 @@ def test_base_template_does_not_stamp_user_email_meta(client: TestClient):
     assert FAKE_USER["email"] not in response.text.split("</head>")[0]
 
 
-def test_video_file_serving(client: TestClient):
+def test_video_file_serving(paid_client: TestClient):
     """Video file endpoint should serve the file."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake video content")
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(
+        response = paid_client.get(
             f"/api/videos/{video_id}/file", headers=_auth_headers()
         )
     assert response.status_code == 200
 
 
-def test_video_file_not_found(client: TestClient):
+def test_video_file_not_found(paid_client: TestClient):
     """Video file endpoint should return 404 for non-existent video."""
     with _mock_auth():
-        response = client.get(
+        response = paid_client.get(
             "/api/videos/nonexistent/file", headers=_auth_headers()
         )
     assert response.status_code == 404
 
 
-def test_templates_have_dark_mode(client: TestClient):
+def test_templates_have_dark_mode(paid_client: TestClient):
     """Templates should include dark mode support."""
-    response = client.get("/")
+    response = paid_client.get("/")
     assert "dark:" in response.text
     assert "toggleTheme" in response.text
 
 
-def test_templates_have_htmx(client: TestClient):
+def test_templates_have_htmx(paid_client: TestClient):
     """Templates should include HTMX."""
-    response = client.get("/")
+    response = paid_client.get("/")
     assert "htmx" in response.text.lower()
 
 
-def test_templates_have_sidebar(client: TestClient):
+def test_templates_have_sidebar(paid_client: TestClient):
     """Templates should include sidebar navigation."""
-    response = client.get("/")
+    response = paid_client.get("/")
     assert "sidebar" in response.text.lower()
     assert "Dashboard" in response.text
 
 # ── Sidebar search tests ──
 
 
-def test_sidebar_search_input_present(client: TestClient):
+def test_sidebar_search_input_present(paid_client: TestClient):
     """Sidebar should have a search input that filters courses."""
     with _mock_auth():
-        client.post("/api/courses", json={"title": "ML"}, headers=_auth_headers())
-        response = client.get("/", headers=_auth_headers())
+        paid_client.post("/api/courses", json={"title": "ML"}, headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert 'id="sidebar-search"' in response.text
     assert "filterSidebarCourses" in response.text
@@ -267,46 +267,46 @@ def test_sidebar_search_input_present(client: TestClient):
     assert 'id="sidebar-courses-empty"' in response.text
 
 
-def test_sidebar_courses_have_data_title_for_filtering(client: TestClient):
+def test_sidebar_courses_have_data_title_for_filtering(paid_client: TestClient):
     """Each course in the sidebar must have a data-title attribute so
     the search filter can match against it (case-insensitive)."""
     with _mock_auth():
-        client.post(
+        paid_client.post(
             "/api/courses", json={"title": "Machine Learning"}, headers=_auth_headers()
         )
-        client.post(
+        paid_client.post(
             "/api/courses", json={"title": "Deep Learning"}, headers=_auth_headers()
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert 'data-title="machine learning"' in response.text
     assert 'data-title="deep learning"' in response.text
 
 
-def test_sidebar_courses_shown_on_video_page(client: TestClient):
+def test_sidebar_courses_shown_on_video_page(paid_client: TestClient):
     """The sidebar should show the user's courses on every page, not
     just the dashboard. The _ctx() helper now fetches them when db is
     passed in."""
     import io
 
     with _mock_auth():
-        client.post(
+        paid_client.post(
             "/api/courses", json={"title": "ML Course"}, headers=_auth_headers()
         )
-        course_id = client.get("/api/courses", headers=_auth_headers()).json()[0]["id"]
-        section_resp = client.post(
+        course_id = paid_client.get("/api/courses", headers=_auth_headers()).json()[0]["id"]
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     # Sidebar should list the course
     assert "ML Course" in response.text
@@ -316,19 +316,19 @@ def test_sidebar_courses_shown_on_video_page(client: TestClient):
 # ── Chat history page tests ──
 
 
-def test_chat_history_route_exists(client: TestClient):
+def test_chat_history_route_exists(paid_client: TestClient):
     """The /chat-history route should exist and render (no 404)."""
-    response = client.get("/chat-history")
+    response = paid_client.get("/chat-history")
     assert response.status_code == 200
 
 
-def test_chat_history_shows_signin_when_unauthenticated(client: TestClient):
+def test_chat_history_shows_signin_when_unauthenticated(paid_client: TestClient):
     """Unauthenticated users see a sign-in prompt, not the session list."""
     # MVP2.0.6: the client fixture sets a default valid cookie.
     # Clear it for this test so we can exercise the
     # unauthenticated path.
-    client.cookies.clear()
-    response = client.get("/chat-history", follow_redirects=False)
+    paid_client.cookies.clear()
+    response = paid_client.get("/chat-history", follow_redirects=False)
     # The SessionExpiryMiddleware now redirects unauthenticated
     # visits to /chat-history to /?session=expired (the
     # phantom-page fix). The dashboard at /?session=expired
@@ -337,20 +337,20 @@ def test_chat_history_shows_signin_when_unauthenticated(client: TestClient):
     assert response.headers["location"] == "/?session=expired"
 
 
-def test_chat_history_has_session_list_ui_for_authenticated(client: TestClient):
+def test_chat_history_has_session_list_ui_for_authenticated(paid_client: TestClient):
     """Signed-in users should see the two-pane layout with session list."""
     with _mock_auth():
-        response = client.get("/chat-history", headers=_auth_headers())
+        response = paid_client.get("/chat-history", headers=_auth_headers())
     assert response.status_code == 200
     assert 'id="session-list"' in response.text
     assert 'id="session-detail"' in response.text
     assert 'id="session-search"' in response.text
 
 
-def test_chat_history_has_js_functions(client: TestClient):
+def test_chat_history_has_js_functions(paid_client: TestClient):
     """The page must have the JS that loads + renders sessions."""
     with _mock_auth():
-        response = client.get("/chat-history", headers=_auth_headers())
+        response = paid_client.get("/chat-history", headers=_auth_headers())
     assert response.status_code == 200
     # Core JS functions
     assert "loadSessions" in response.text
@@ -362,12 +362,12 @@ def test_chat_history_has_js_functions(client: TestClient):
     assert "/api/chat/sessions" in response.text
 
 
-def test_chat_history_no_sessions_shows_empty_message(client: TestClient):
+def test_chat_history_no_sessions_shows_empty_message(paid_client: TestClient):
     """When the API returns no sessions, show an empty-state message."""
     with _mock_auth():
         # Get the page; JS will call the API. We just verify the empty-state
         # string is present in the JS code so it will be shown.
-        response = client.get("/chat-history", headers=_auth_headers())
+        response = paid_client.get("/chat-history", headers=_auth_headers())
     assert response.status_code == 200
     # The empty-state copy is rendered when sessions.length === 0
     assert "No chat sessions yet" in response.text
@@ -376,15 +376,15 @@ def test_chat_history_no_sessions_shows_empty_message(client: TestClient):
 # ── Sidebar search UX improvements ──
 
 
-def test_sidebar_search_has_magnifier_and_clear_button(client: TestClient):
+def test_sidebar_search_has_magnifier_and_clear_button(paid_client: TestClient):
     """The sidebar search input should have a magnifier icon and a
     hidden clear (✕) button so the user can see it's searchable and
     can clear the query."""
     with _mock_auth():
-        client.post(
+        paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     # Magnifier SVG (the M21 21l-4.35 path is a search icon)
     assert "M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" in response.text
@@ -397,23 +397,23 @@ def test_sidebar_search_has_magnifier_and_clear_button(client: TestClient):
     assert 'id="sidebar-search-count"' in response.text
 
 
-def test_sidebar_course_items_have_label_span_for_highlighting(client: TestClient):
+def test_sidebar_course_items_have_label_span_for_highlighting(paid_client: TestClient):
     """Each course link must have a `.sidebar-course-label` span so the
     search filter can highlight the matched substring in the title."""
     with _mock_auth():
-        client.post(
+        paid_client.post(
             "/api/courses", json={"title": "Machine Learning"}, headers=_auth_headers()
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert 'class="sidebar-course-label"' in response.text
 
 
-def test_sidebar_search_filter_function_includes_count_and_highlight(client: TestClient):
+def test_sidebar_search_filter_function_includes_count_and_highlight(paid_client: TestClient):
     """filterSidebarCourses should manage the result count, the clear
     button, and call highlightMatch to mark the matched substring."""
     with _mock_auth():
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     # The function body must reference all the new elements
     body_start = response.text.find("function filterSidebarCourses")
@@ -431,13 +431,13 @@ def test_sidebar_search_filter_function_includes_count_and_highlight(client: Tes
     assert "yellow" in h_body
 
 
-def test_base_template_defines_escapeHtml_for_search_highlight(client: TestClient):
+def test_base_template_defines_escapeHtml_for_search_highlight(paid_client: TestClient):
     """base.html must define escapeHtml because filterSidebarCourses ->
     highlightMatch depends on it. Without it, typing in the sidebar
     search would throw a ReferenceError and silently fail (no filtering,
     no count, no clear button)."""
     with _mock_auth():
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     # escapeHtml should be defined in the base template's <script> block
     # (it lives in base.html so that highlightMatch can call it).
@@ -454,12 +454,12 @@ def test_base_template_defines_escapeHtml_for_search_highlight(client: TestClien
     assert escape_pos > 0, "escapeHtml must be defined in base.html"
 
 
-def test_sidebar_toggle_button_has_both_icons(client: TestClient):
+def test_sidebar_toggle_button_has_both_icons(paid_client: TestClient):
     """The mobile sidebar toggle button must have BOTH the hamburger
     icon (shown when closed) and the close icon (shown when open),
     so the user always sees an appropriate icon for the current state.
     """
-    response = client.get("/")
+    response = paid_client.get("/")
     assert response.status_code == 200
     # Hamburger (3 horizontal lines) — should be visible by default
     assert 'id="sidebar-icon-hamburger"' in response.text
@@ -472,10 +472,10 @@ def test_sidebar_toggle_button_has_both_icons(client: TestClient):
     assert 'aria-label="Toggle sidebar"' in response.text
 
 
-def test_toggle_sidebar_function_toggles_both_icons(client: TestClient):
+def test_toggle_sidebar_function_toggles_both_icons(paid_client: TestClient):
     """toggleSidebar() should toggle the visibility of both the
     hamburger and the close icons so the user sees the right one."""
-    response = client.get("/")
+    response = paid_client.get("/")
     assert response.status_code == 200
     # Find the toggleSidebar function and verify it touches both icons
     start = response.text.find("function toggleSidebar")
@@ -489,17 +489,17 @@ def test_toggle_sidebar_function_toggles_both_icons(client: TestClient):
 # ── Responsive layout tests ──
 
 
-def test_main_content_has_min_w_0_to_prevent_flex_overflow(client: TestClient):
+def test_main_content_has_min_w_0_to_prevent_flex_overflow(paid_client: TestClient):
     """The main content wrapper must have `min-w-0` so flex children
     (like a 1280px video player) can shrink below their intrinsic
     width and don't force horizontal overflow on small screens."""
-    response = client.get("/")
+    response = paid_client.get("/")
     assert response.status_code == 200
     # The main container that wraps <header> + <main>
     assert "flex-1 md:ml-64 flex flex-col min-h-screen min-w-0" in response.text
 
 
-def test_video_element_constrains_its_width(client: TestClient):
+def test_video_element_constrains_its_width(paid_client: TestClient):
     """The video element must use max-w-full + h-auto so it scales
     down to fit narrow viewports instead of overflowing horizontally.
     Without this, a 1280px video forces the entire layout wider than
@@ -508,53 +508,53 @@ def test_video_element_constrains_its_width(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # The video tag must have max-w-full + h-auto + block
     assert "class=\"w-full h-auto max-w-full block\"" in response.text
 
 
-def test_video_page_flex_columns_have_min_w_0(client: TestClient):
+def test_video_page_flex_columns_have_min_w_0(paid_client: TestClient):
     """Both the left and right flex columns on the video page need
     min-w-0 to allow their content (especially the video player) to
     shrink to fit the viewport."""
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # The two columns inside the flex row should both have min-w-0
@@ -562,7 +562,7 @@ def test_video_page_flex_columns_have_min_w_0(client: TestClient):
     assert "lg:w-2/5 min-w-0" in response.text  # right col
 
 
-def test_transcript_header_stacks_on_mobile(client: TestClient):
+def test_transcript_header_stacks_on_mobile(paid_client: TestClient):
     """The transcript section header (title + controls) should stack
     vertically on small screens and sit side-by-side on larger ones,
     so the controls don't get squished.
@@ -570,23 +570,23 @@ def test_transcript_header_stacks_on_mobile(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
 
     assert response.status_code == 200
     # flex-col on mobile, flex-row at sm+ breakpoint
@@ -598,7 +598,7 @@ def test_transcript_header_stacks_on_mobile(client: TestClient):
 # ── Summary tab SSR (MVP1.1 — see doc/MVP1.0-PostRelease § Optimization #2) ──
 
 
-def _create_video_with_summary(client: TestClient, summary_md: str) -> str:
+def _create_video_with_summary(paid_client: TestClient, summary_md: str) -> str:
     """Helper: create a video and seed its summary Asset directly. Returns
     the video id. Bypasses the generation pipeline so tests don't need
     Ollama; mirrors what /api/generate/{id} would write after a real
@@ -607,17 +607,17 @@ def _create_video_with_summary(client: TestClient, summary_md: str) -> str:
     from app.models import Asset, Video  # local import keeps conftest happy
     from app.database import SessionLocal
 
-    course_resp = client.post(
+    course_resp = paid_client.post(
         "/api/courses", json={"title": "ML"}, headers=_auth_headers()
     )
     course_id = course_resp.json()["course_id"]
-    section_resp = client.post(
+    section_resp = paid_client.post(
         f"/api/courses/{course_id}/sections",
         json={"title": "Week 1"},
         headers=_auth_headers(),
     )
     section_id = section_resp.json()["section_id"]
-    upload_resp = client.post(
+    upload_resp = paid_client.post(
         f"/api/videos/upload/{section_id}",
         files={"file": ("lecture.mp4", io.BytesIO(b"fake video"), "video/mp4")},
         headers=_auth_headers(),
@@ -675,16 +675,16 @@ def _content_summary_html(response_text: str) -> str:
     return response_text[open_start:i]
 
 
-def test_video_view_ssr_renders_existing_summary(client: TestClient):
+def test_video_view_ssr_renders_existing_summary(paid_client: TestClient):
     """When a summary Asset already exists, the SSR pre-render must put
     the summary HTML into the response (and must NOT show the Generate
     button). This is the core fix for Optimization #2 — the user never
     sees 'Generate' for a video that already has materials."""
     with _mock_auth():
         video_id = _create_video_with_summary(
-            client, "## Hello\n\nThis is the saved summary."
+            paid_client, "## Hello\n\nThis is the saved summary."
         )
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     cs_html = _content_summary_html(response.text)
     assert cs_html, "could not extract #content-summary block"
@@ -702,14 +702,14 @@ def test_video_view_ssr_renders_existing_summary(client: TestClient):
     assert "prose" in cs_html
 
 
-def test_video_view_ssr_shows_generate_button_when_no_summary(client: TestClient):
+def test_video_view_ssr_shows_generate_button_when_no_summary(paid_client: TestClient):
     """When no summary Asset exists, the SSR pre-render must show the
     'Generate Materials' button (the existing behavior). Negative case
     that protects against accidentally hiding the button for fresh
     videos."""
     with _mock_auth():
-        video_id = _create_video(client)
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        video_id = _create_video(paid_client)
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     cs_html = _content_summary_html(response.text)
     assert cs_html, "could not extract #content-summary block"
@@ -718,14 +718,14 @@ def test_video_view_ssr_shows_generate_button_when_no_summary(client: TestClient
     assert "Regenerate" not in cs_html
 
 
-def test_video_view_ssr_marks_content_summary_with_prose_div(client: TestClient):
+def test_video_view_ssr_marks_content_summary_with_prose_div(paid_client: TestClient):
     """The frontend `loadSummary` uses `.prose` inside `#content-summary`
     as the signal that SSR populated the tab. Without this class on the
     SSR'd div, a failed fetch would stomp the existing summary with
     the Generate button (the bug we're fixing)."""
     with _mock_auth():
-        video_id = _create_video_with_summary(client, "## Topic A\nBody text")
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        video_id = _create_video_with_summary(paid_client, "## Topic A\nBody text")
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     # The content-summary div must contain a child .prose div.
     # We use a small substring assertion because the HTML is otherwise
@@ -736,7 +736,7 @@ def test_video_view_ssr_marks_content_summary_with_prose_div(client: TestClient)
     assert "Generate Materials" not in cs_html
 
 
-def test_video_view_ssr_renders_real_html_not_escaped_markup(client: TestClient):
+def test_video_view_ssr_renders_real_html_not_escaped_markup(paid_client: TestClient):
     """Regression: the `md` Jinja filter must return a Markup-safe
     string so the rendered HTML is NOT auto-escaped. Previously the
     filter returned a plain string, so Jinja escaped `<h2>` to
@@ -749,9 +749,9 @@ def test_video_view_ssr_renders_real_html_not_escaped_markup(client: TestClient)
     """
     with _mock_auth():
         video_id = _create_video_with_summary(
-            client, "## A Heading\n\nbody text"
+            paid_client, "## A Heading\n\nbody text"
         )
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     cs_html = _content_summary_html(response.text)
     # The rendered HTML contains the h2 class string.
@@ -770,15 +770,15 @@ def test_video_view_ssr_renders_real_html_not_escaped_markup(client: TestClient)
     assert "A Heading" in cs_html
 
 
-def test_video_view_ssr_includes_inline_cache_seed_initialSummaryHtml(client: TestClient):
+def test_video_view_ssr_includes_inline_cache_seed_initialSummaryHtml(paid_client: TestClient):
     """The frontend reads the SSR'd content via
     `const initialSummaryHtml = document.getElementById('content-summary').innerHTML`
     and seeds `contentCache.summary` from it (so the first loadSummary()
     call is a no-op). The variable must exist in the page's JS for
     the seed to work."""
     with _mock_auth():
-        video_id = _create_video(client)
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        video_id = _create_video(paid_client)
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     # The variable declaration must be present.
     assert "const initialSummaryHtml" in response.text
@@ -786,13 +786,13 @@ def test_video_view_ssr_includes_inline_cache_seed_initialSummaryHtml(client: Te
     assert "contentCache.summary = initialSummaryHtml" in response.text
 
 
-def test_video_view_ssr_includes_inflight_and_cacheCoalesce(client: TestClient):
+def test_video_view_ssr_includes_inflight_and_cacheCoalesce(paid_client: TestClient):
     """The cacheCoalesce helper and the inFlight map must be present
     so concurrent loadSummary/loadFlashcards/loadQuiz/loadMindmap calls
     collapse to a single fetch each."""
     with _mock_auth():
-        video_id = _create_video(client)
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        video_id = _create_video(paid_client)
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     assert "const inFlight" in response.text
     assert "function cacheCoalesce" in response.text
@@ -904,7 +904,7 @@ def test_video_html_contains_byte_equivalent_simple_markdown():
     )
 
 
-def test_video_view_includes_course_id_in_inline_script(client: TestClient):
+def test_video_view_includes_course_id_in_inline_script(paid_client: TestClient):
     """The video page must render the courseId into the inline <script>
     so confirmDelete() can redirect to the right course after
     deletion.
@@ -920,23 +920,23 @@ def test_video_view_includes_course_id_in_inline_script(client: TestClient):
     """
     import io
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "Tests"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Section 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("test.mp4", io.BytesIO(b"x" * 1024), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     # The courseId JS constant must be set to the right course.
     # We look for `const courseId = '...'` followed by our course id.
@@ -979,7 +979,7 @@ def test_video_view_falls_back_to_dashboard_when_no_course():
     )
 
 
-def test_video_view_delete_button_present(client: TestClient):
+def test_video_view_delete_button_present(paid_client: TestClient):
     """Sanity: the delete button + modal must be on every video page
     so the user can always delete a video. Regression test for
     the manual todo #5 button accidentally being wrapped in an
@@ -987,23 +987,23 @@ def test_video_view_delete_button_present(client: TestClient):
     """
     import io
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("test.mp4", io.BytesIO(b"x" * 1024), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     # Delete button + modal must be in the page
     assert "showDeleteModal" in response.text, "delete button JS missing"
@@ -1013,7 +1013,7 @@ def test_video_view_delete_button_present(client: TestClient):
     assert "courseId" in response.text
 
 
-def test_video_view_discuss_tab_present(client: TestClient):
+def test_video_view_discuss_tab_present(paid_client: TestClient):
     """The Discuss tab (whole-video chat, MVP2.0) must render on every video page.
 
     Regression test for the bug where the Discuss tab + delete button
@@ -1035,23 +1035,23 @@ def test_video_view_discuss_tab_present(client: TestClient):
     import io
 
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
-        upload_resp = client.post(
+        upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("x.mp4", io.BytesIO(b"fake"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = client.get(f"/video/{video_id}", headers=_auth_headers())
+        response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
     text = response.text
 
@@ -1089,16 +1089,16 @@ def test_video_view_discuss_tab_present(client: TestClient):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_dashboard_has_delete_course_button(client: TestClient):
+def test_dashboard_has_delete_course_button(paid_client: TestClient):
     """The dashboard course cards must have a delete button. Regression
     test for manualTodo #5 extension — covers the user adding a course
     then having no way to delete it (the existing course delete endpoint
     was unused because there was no button in the UI)."""
     with _mock_auth():
-        client.post(
+        paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
-        response = client.get("/", headers=_auth_headers())
+        response = paid_client.get("/", headers=_auth_headers())
     assert response.status_code == 200
     assert "showDeleteCourseModal" in response.text, (
         "delete course button JS missing from dashboard"
@@ -1108,20 +1108,20 @@ def test_dashboard_has_delete_course_button(client: TestClient):
     )
 
 
-def test_course_view_has_delete_section_button(client: TestClient):
+def test_course_view_has_delete_section_button(paid_client: TestClient):
     """The course view section header must have a delete button."""
     import io
     with _mock_auth():
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
-        response = client.get(f"/course/{course_id}", headers=_auth_headers())
+        response = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
     assert response.status_code == 200
     assert "showDeleteSectionModal" in response.text, (
         "delete section button JS missing from course page"
@@ -1131,7 +1131,7 @@ def test_course_view_has_delete_section_button(client: TestClient):
     )
 
 
-def test_course_page_inline_script_parses_cleanly(client: TestClient):
+def test_course_page_inline_script_parses_cleanly(paid_client: TestClient):
     """The course page's inline <script> block must parse as valid JS.
 
     Regression test for the section-delete-click-does-nothing bug: a

@@ -27,16 +27,16 @@ from app.jobs import (
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
-def _create_course_and_section(client: TestClient) -> tuple[str, str]:
+def _create_course_and_section(paid_client: TestClient) -> tuple[str, str]:
     """Helper: create a course + section via the API."""
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
-        course_resp = client.post(
+        course_resp = paid_client.post(
             "/api/courses",
             json={"title": "Test Course"},
             headers={"Authorization": "Bearer fake"},
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = client.post(
+        section_resp = paid_client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Section 1"},
             headers={"Authorization": "Bearer fake"},
@@ -45,11 +45,11 @@ def _create_course_and_section(client: TestClient) -> tuple[str, str]:
     return course_id, section_id
 
 
-def _upload_video(client: TestClient, section_id: str) -> str:
+def _upload_video(paid_client: TestClient, section_id: str) -> str:
     """Helper: upload a small fake video, return video_id."""
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
         fake = io.BytesIO(b"fake video content")
-        resp = client.post(
+        resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("test.mp4", fake, "video/mp4")},
             headers={"Authorization": "Bearer fake"},
@@ -155,16 +155,16 @@ def test_format_eta_for_all_buckets():
 
 # ── /api/videos/{id}/status endpoint tests ──────────────────────────────────
 
-def test_status_endpoint_returns_404_for_unknown_video(client: TestClient):
+def test_status_endpoint_returns_404_for_unknown_video(paid_client: TestClient):
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
-        response = client.get(
+        response = paid_client.get(
             "/api/videos/nonexistent/status",
             headers={"Authorization": "Bearer fake"},
         )
     assert response.status_code == 404
 
 
-def test_status_endpoint_returns_no_jobs_initially(client: TestClient):
+def test_status_endpoint_returns_no_jobs_initially(paid_client: TestClient):
     """A freshly uploaded video starts with a transcribe job already queued.
 
     MVP2.0 #1: upload now starts the transcribe job tracker immediately
@@ -172,11 +172,11 @@ def test_status_endpoint_returns_no_jobs_initially(client: TestClient):
     (conftest.py) prevents the actual Whisper/Ollama work from running,
     but the job record itself IS created in the upload handler.
     """
-    _, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    _, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
-        response = client.get(
+        response = paid_client.get(
             f"/api/videos/{video_id}/status",
             headers={"Authorization": "Bearer fake"},
         )
@@ -192,16 +192,16 @@ def test_status_endpoint_returns_no_jobs_initially(client: TestClient):
     assert data["eta_text"]["generate"] is None
 
 
-def test_status_endpoint_returns_running_job(client: TestClient):
-    _, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+def test_status_endpoint_returns_running_job(paid_client: TestClient):
+    _, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     # Simulate a transcribe job in progress
     job = start_job(video_id, "transcribe", total=100, message="Loading model...")
     set_progress(job, done=10, total=100, message="Model loaded...")
 
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
-        response = client.get(
+        response = paid_client.get(
             f"/api/videos/{video_id}/status",
             headers={"Authorization": "Bearer fake"},
         )
@@ -213,13 +213,13 @@ def test_status_endpoint_returns_running_job(client: TestClient):
     assert data["transcribe_job"]["message"] == "Model loaded..."
 
 
-def test_status_endpoint_enforces_ownership(client: TestClient):
+def test_status_endpoint_enforces_ownership(paid_client: TestClient):
     """A user should NOT be able to see another user's video status."""
-    _, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    _, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "attacker", "email": "a@a.com"}):
-        response = client.get(
+        response = paid_client.get(
             f"/api/videos/{video_id}/status",
             headers={"Authorization": "Bearer fake"},
         )
@@ -228,16 +228,16 @@ def test_status_endpoint_enforces_ownership(client: TestClient):
 
 # ── Transcribe endpoint behavior change (202 Accepted) ─────────────────────
 
-def test_transcribe_endpoint_returns_202_with_initial_job(client: TestClient):
+def test_transcribe_endpoint_returns_202_with_initial_job(paid_client: TestClient):
     """POST /api/videos/{id}/transcribe should return 202 Accepted and
     an initial job dict. The actual transcription work happens in a
     FastAPI BackgroundTask (we don't wait for it)."""
-    _, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    _, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
         with patch("app.routers.videos._run_transcribe_job") as mock_worker:
-            response = client.post(
+            response = paid_client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers={"Authorization": "Bearer fake"},
             )
@@ -253,7 +253,7 @@ def test_transcribe_endpoint_returns_202_with_initial_job(client: TestClient):
         assert data["job"]["progress"] == 0
 
         # The /status endpoint should now show this job.
-        status_response = client.get(
+        status_response = paid_client.get(
             f"/api/videos/{video_id}/status",
             headers={"Authorization": "Bearer fake"},
         )
@@ -263,13 +263,13 @@ def test_transcribe_endpoint_returns_202_with_initial_job(client: TestClient):
 
 # ── Generate endpoint behavior change (202 Accepted) ───────────────────────
 
-def test_generate_endpoint_returns_202_with_initial_job(client: TestClient):
+def test_generate_endpoint_returns_202_with_initial_job(paid_client: TestClient):
     """POST /api/generate/{id} should also return 202 + initial job state."""
     from unittest.mock import patch
     from app.services.transcription import transcript_to_json
 
-    _, section_id = _create_course_and_section(client)
-    video_id = _upload_video(client, section_id)
+    _, section_id = _create_course_and_section(paid_client)
+    video_id = _upload_video(paid_client, section_id)
 
     # Mock the transcription worker so we don't need real Whisper.
     # The worker writes a transcript asset to the DB; we just need
@@ -298,7 +298,7 @@ def test_generate_endpoint_returns_202_with_initial_job(client: TestClient):
     # Trigger the fake transcribe via the real endpoint
     with patch("app.routers.videos._run_transcribe_job", side_effect=fake_transcribe):
         with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
-            resp = client.post(
+            resp = paid_client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=tiny",
                 headers={"Authorization": "Bearer fake"},
             )
@@ -306,7 +306,7 @@ def test_generate_endpoint_returns_202_with_initial_job(client: TestClient):
 
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
         with patch("app.routers.generation._run_generate_job") as mock_worker:
-            response = client.post(
+            response = paid_client.post(
                 f"/api/generate/{video_id}",
                 headers={"Authorization": "Bearer fake"},
             )

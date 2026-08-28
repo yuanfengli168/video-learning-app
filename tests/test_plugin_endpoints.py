@@ -23,7 +23,7 @@ from app.models.video import Video
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 def _wait_for_run_done(
-    client: TestClient, run_id: str, timeout_s: float = 30.0
+    admin_client: TestClient, run_id: str, timeout_s: float = 30.0
 ) -> dict:
     """Poll GET /api/plugins/runs/{run_id} until the worker
     finishes (status='done' or 'failed'). Returns the final
@@ -44,7 +44,7 @@ def _wait_for_run_done(
 
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        resp = client.get(f"/api/plugins/runs/{run_id}")
+        resp = admin_client.get(f"/api/plugins/runs/{run_id}")
         assert resp.status_code == 200
         data = resp.json()
         if data.get("status") in ("done", "failed"):
@@ -73,10 +73,10 @@ def _seed_video(db: Session, *, video_id: str = "v1") -> Video:
 
 
 # ── GET /api/plugins ────────────────────────────────────────────────────
-def test_list_plugins_returns_webm_to_mp4(client: TestClient, db_session: Session):
+def test_list_plugins_returns_webm_to_mp4(admin_client: TestClient, db_session: Session):
     """The list endpoint returns the v1 plugin."""
     _seed_video(db_session)
-    resp = client.get("/api/plugins")
+    resp = admin_client.get("/api/plugins")
     assert resp.status_code == 200
     data = resp.json()
     assert "plugins" in data
@@ -85,11 +85,11 @@ def test_list_plugins_returns_webm_to_mp4(client: TestClient, db_session: Sessio
 
 
 def test_list_plugins_each_has_required_fields(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """Each plugin in the list has key, label, description, available."""
     _seed_video(db_session)
-    resp = client.get("/api/plugins")
+    resp = admin_client.get("/api/plugins")
     data = resp.json()
     for plugin in data["plugins"]:
         assert "key" in plugin
@@ -103,27 +103,27 @@ def test_list_plugins_each_has_required_fields(
 
 # ── POST /api/plugins/{name}/run ────────────────────────────────────────
 def test_run_plugin_unknown_name_returns_404(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """Unknown plugin name returns 404."""
     _seed_video(db_session)
-    resp = client.post("/api/plugins/nonexistent/run?video_id=v1")
+    resp = admin_client.post("/api/plugins/nonexistent/run?video_id=v1")
     assert resp.status_code == 404
     assert "Unknown plugin" in resp.json()["detail"]
 
 
 def test_run_plugin_unknown_video_returns_404(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """Unknown video_id returns 404 (not 403, to avoid leaking IDs)."""
     _seed_video(db_session)
-    resp = client.post("/api/plugins/webm_to_mp4/run?video_id=nonexistent")
+    resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=nonexistent")
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"].lower()
 
 
 def test_run_plugin_writes_audit_log_row(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """A successful POST writes a PluginRun row to the DB.
 
@@ -147,7 +147,7 @@ def test_run_plugin_writes_audit_log_row(
 
     # Submit. No source file exists -> plugin returns
     # ok=False, but the audit row IS written.
-    resp = client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     assert resp.status_code == 202
     data = resp.json()
 
@@ -176,7 +176,7 @@ def test_run_plugin_writes_audit_log_row(
 
 # ── GET /api/plugins/runs/{run_id} ──────────────────────────────────────
 def test_get_run_returns_run_row(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """After running a plugin, the run row is fetchable by id.
 
@@ -192,12 +192,12 @@ def test_get_run_returns_run_row(
 
     # Submit. Will fail (no source file) but the row
     # is created either way.
-    run_resp = client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
+    run_resp = admin_client.post("/api/plugins/webm_to_mp4/run?video_id=v1")
     assert run_resp.status_code == 202
     run_id = run_resp.json()["run_id"]
 
     # Now fetch it
-    resp = client.get(f"/api/plugins/runs/{run_id}")
+    resp = admin_client.get(f"/api/plugins/runs/{run_id}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["id"] == run_id
@@ -207,22 +207,22 @@ def test_get_run_returns_run_row(
     assert data["status"] in ("done", "failed")
 
 
-def test_get_run_unknown_id_returns_404(client: TestClient, db_session: Session):
+def test_get_run_unknown_id_returns_404(admin_client: TestClient, db_session: Session):
     """Unknown run id returns 404."""
-    resp = client.get("/api/plugins/runs/nonexistent")
+    resp = admin_client.get("/api/plugins/runs/nonexistent")
     assert resp.status_code == 404
 
 
 # ── MVP2.1.0.1: GET /api/plugins/runs/by-video/{video_id} ──────────────
-def test_by_video_returns_null_when_no_runs(client: TestClient, db_session: Session):
+def test_by_video_returns_null_when_no_runs(admin_client: TestClient, db_session: Session):
     """When the video has no plugin runs, return {"run": null}."""
     _seed_video(db_session)
-    resp = client.get("/api/plugins/runs/by-video/v1")
+    resp = admin_client.get("/api/plugins/runs/by-video/v1")
     assert resp.status_code == 200
     assert resp.json() == {"run": None}
 
 
-def test_by_video_returns_most_recent_run(client: TestClient, db_session: Session):
+def test_by_video_returns_most_recent_run(admin_client: TestClient, db_session: Session):
     """When the video has multiple runs, return the most recent one."""
     from datetime import datetime, timezone, timedelta
 
@@ -243,7 +243,7 @@ def test_by_video_returns_most_recent_run(client: TestClient, db_session: Sessio
         db_session.add(run)
     db_session.commit()
 
-    resp = client.get("/api/plugins/runs/by-video/v1")
+    resp = admin_client.get("/api/plugins/runs/by-video/v1")
     assert resp.status_code == 200
     data = resp.json()
     assert data["run"] is not None
@@ -251,17 +251,17 @@ def test_by_video_returns_most_recent_run(client: TestClient, db_session: Sessio
     assert data["run"]["message"] == "Run #2"
 
 
-def test_by_video_returns_null_for_unknown_video(client: TestClient, db_session: Session):
+def test_by_video_returns_null_for_unknown_video(admin_client: TestClient, db_session: Session):
     """Unknown video_id returns {"run": null} (not 404)."""
-    resp = client.get("/api/plugins/runs/by-video/nonexistent")
+    resp = admin_client.get("/api/plugins/runs/by-video/nonexistent")
     assert resp.status_code == 200
     assert resp.json() == {"run": None}
 
 
 # ── MVP2.1.0.1: POST /api/plugins/reveal ───────────────────────────────
-def test_reveal_rejects_relative_path(client: TestClient, db_session: Session):
+def test_reveal_rejects_relative_path(admin_client: TestClient, db_session: Session):
     """Relative paths are rejected with 400."""
-    resp = client.post(
+    resp = admin_client.post(
         "/api/plugins/reveal",
         json={"path": "uploads/lesson.mp4"},
     )
@@ -270,7 +270,7 @@ def test_reveal_rejects_relative_path(client: TestClient, db_session: Session):
 
 
 def test_reveal_rejects_path_outside_allowed_dirs(
-    client: TestClient, db_session: Session, monkeypatch
+    admin_client: TestClient, db_session: Session, monkeypatch
 ):
     """Paths outside upload_dir/storage_dir are rejected with 403."""
     from app.config import settings
@@ -280,7 +280,7 @@ def test_reveal_rejects_path_outside_allowed_dirs(
     monkeypatch.setattr(settings, "storage_dir", "/tmp/allowed_storage")
 
     # /etc/passwd is definitely outside both
-    resp = client.post(
+    resp = admin_client.post(
         "/api/plugins/reveal",
         json={"path": "/etc/passwd"},
     )
@@ -289,7 +289,7 @@ def test_reveal_rejects_path_outside_allowed_dirs(
 
 
 def test_reveal_accepts_path_inside_upload_dir(
-    client: TestClient, db_session: Session, monkeypatch, tmp_path
+    admin_client: TestClient, db_session: Session, monkeypatch, tmp_path
 ):
     """Paths inside upload_dir succeed (mocked subprocess)."""
     from unittest.mock import patch, MagicMock
@@ -309,7 +309,7 @@ def test_reveal_accepts_path_inside_upload_dir(
     fake_proc.stderr = ""
 
     with patch("app.routers.plugins.subprocess.run", return_value=fake_proc) as mock_run:
-        resp = client.post(
+        resp = admin_client.post(
             "/api/plugins/reveal",
             json={"path": str(real_file)},
         )
@@ -323,7 +323,7 @@ def test_reveal_accepts_path_inside_upload_dir(
 
 
 def test_reveal_handles_subprocess_nonzero_exit(
-    client: TestClient, db_session: Session, monkeypatch, tmp_path
+    admin_client: TestClient, db_session: Session, monkeypatch, tmp_path
 ):
     """If the platform command returns non-zero, return 500."""
     from unittest.mock import patch, MagicMock
@@ -339,7 +339,7 @@ def test_reveal_handles_subprocess_nonzero_exit(
     fake_proc.stderr = "Permission denied"
 
     with patch("app.routers.plugins.subprocess.run", return_value=fake_proc):
-        resp = client.post(
+        resp = admin_client.post(
             "/api/plugins/reveal",
             json={"path": str(real_file)},
         )
@@ -349,7 +349,7 @@ def test_reveal_handles_subprocess_nonzero_exit(
 
 
 def test_reveal_handles_command_not_found(
-    client: TestClient, db_session: Session, monkeypatch, tmp_path
+    admin_client: TestClient, db_session: Session, monkeypatch, tmp_path
 ):
     """If the platform command isn't on $PATH, return 500."""
     from unittest.mock import patch
@@ -364,7 +364,7 @@ def test_reveal_handles_command_not_found(
         "app.routers.plugins.subprocess.run",
         side_effect=FileNotFoundError("No such file: 'open'"),
     ):
-        resp = client.post(
+        resp = admin_client.post(
             "/api/plugins/reveal",
             json={"path": str(real_file)},
         )
@@ -374,10 +374,10 @@ def test_reveal_handles_command_not_found(
 
 # ── MVP2.1.0.1: POST /api/plugins/swap-to-mp4 ──────────────────────────
 def test_swap_to_mp4_unknown_video_returns_404(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """Unknown video_id returns 404."""
-    resp = client.post(
+    resp = admin_client.post(
         "/api/plugins/swap-to-mp4",
         json={"video_id": "nonexistent", "mp4_path": "/tmp/lesson.mp4"},
     )
@@ -386,7 +386,7 @@ def test_swap_to_mp4_unknown_video_returns_404(
 
 
 def test_swap_to_mp4_rejects_video_in_transient_status(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """Video in 'transcribing' status returns 409 (can't swap mid-job)."""
     from app.config import settings
@@ -409,7 +409,7 @@ def test_swap_to_mp4_rejects_video_in_transient_status(
     db_session.add_all([course, section, video])
     db_session.commit()
 
-    resp = client.post(
+    resp = admin_client.post(
         "/api/plugins/swap-to-mp4",
         json={"video_id": "v1", "mp4_path": str(tmp_path / "lesson.mp4")},
     )
@@ -418,7 +418,7 @@ def test_swap_to_mp4_rejects_video_in_transient_status(
 
 
 def test_swap_to_mp4_rejects_missing_file(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """MP4 path that doesn't exist returns 400."""
     from app.config import settings
@@ -439,7 +439,7 @@ def test_swap_to_mp4_rejects_missing_file(
     db_session.commit()
 
     # Path that doesn't exist
-    resp = client.post(
+    resp = admin_client.post(
         "/api/plugins/swap-to-mp4",
         json={"video_id": "v1", "mp4_path": str(tmp_path / "nonexistent.mp4")},
     )
@@ -448,7 +448,7 @@ def test_swap_to_mp4_rejects_missing_file(
 
 
 def test_swap_to_mp4_success_updates_video(
-    client: TestClient, db_session: Session, tmp_path, monkeypatch
+    admin_client: TestClient, db_session: Session, tmp_path, monkeypatch
 ):
     """Happy path: swap from WebM to MP4, video row updated, audit log written."""
     from app.config import settings
@@ -481,7 +481,7 @@ def test_swap_to_mp4_success_updates_video(
     old_transcribed_at = video.transcribed_at
     old_generated_at = video.generated_at
 
-    resp = client.post(
+    resp = admin_client.post(
         "/api/plugins/swap-to-mp4",
         json={"video_id": "v1", "mp4_path": str(mp4)},
     )

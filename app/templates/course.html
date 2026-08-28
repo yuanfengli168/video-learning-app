@@ -12,7 +12,9 @@
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
         <h1 class="text-2xl font-bold mb-2">{{ course.title }}</h1>
         <p class="text-gray-500 dark:text-gray-400">{{ course.description or 'No description' }}</p>
+        {% if user_capabilities and "manage_own_course" in user_capabilities %}
         <button onclick="showCreateSection()" class="mt-4 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ Add Section</button>
+        {% endif %}
     </div>
 
     <!-- Create section form -->
