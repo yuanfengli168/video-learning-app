@@ -25,7 +25,7 @@ from app.jobs import (
     set_progress,
     start_job,
 )
-from app.models import Asset, Course, Section, Video
+from app.models import Asset, Course, Section, User, Video
 from app.utils.validation import sanitize_filename
 from app.services.transcription import (
     AVAILABLE_MODELS,
@@ -675,10 +675,31 @@ def _run_auto_pipeline(video_id: str, model_name: str | None = None) -> None:
     finally:
         db.close()
 
+    # Look up the owner + role from the DB. The request context is
+    # gone (this runs in a BackgroundTask after the response), so we
+    # can't read user/role from a Depends(). The video's section →
+    # course → user_id chain is the source of truth.
+    owner_uid = ""
+    owner_role = 2  # UserRole.FREE — safe default
+    db2 = SessionLocal()
+    try:
+        v = db2.get(Video, video_id)
+        if v and v.section and v.section.course and v.section.course.user_id:
+            owner_uid = v.section.course.user_id
+            owner_user = db2.get(User, owner_uid)
+            if owner_user and owner_user.role is not None:
+                owner_role = owner_user.role
+    finally:
+        db2.close()
+
     # Lazy import avoids coupling videos.py to generation.py at module
     # load time while still sharing the implementation cleanly.
     from app.routers.generation import _run_generate_job
-    _run_generate_job(video_id)
+    # MVP2.1 patch: pass uid + role. Earlier this was called with
+    # only (video_id,) which silently TypeError'd inside the
+    # background task chain — same silent-failure pattern as the
+    # retry-all endpoint in courses.py.
+    _run_generate_job(video_id, owner_uid, owner_role)
 
 @router.get("/{video_id}/status")
 async def get_video_status(

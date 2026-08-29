@@ -1197,3 +1197,20 @@ an existing if/else).
 - **Day 8**: YouTube IFrame API integration (`yt_player.js` wrapper for `<video>` AND YouTube iframes — transcript click and mindmap jump now work for both backends; resume-from-last-position via localStorage). Commits `115444d` + `9e79c36`.
 - **Day 9**: Buffer → real hotfix day after 10-min phone smoke test caught 3 bugs. Commit `6765fad`.
 - **Days 9-14**: Real-video testing, security hardening, soft launch, public beta.
+
+## [2.1.0.5] - 2026-08-29 — Silent BackgroundTask failure on stuck `'generating'`
+
+🐛 **A fresh upload or "Retry all failed" click would leave a video stuck at `status='generating'` forever, with no error in the `events` table and 0% CPU on the gunicorn workers.** First encountered during the DIY catalog-curation smoke test (a Rick Astley YouTube submission). Root cause: two call sites passed `video_id` only to `_run_generate_job(video_id, user_id, user_role)`. FastAPI `BackgroundTasks` silently swallows the resulting `TypeError`. The original test mocks (`fake_worker(video_id)`) matched the buggy 1-arg shape, so CI never noticed.
+
+### 🐛 Bug fixes
+
+- **`app/routers/courses.py:452`** — retry-all handler now passes `user.get("uid", ""), user.get("role", 2)`. Comment at the call site documents the full arg list.
+- **`app/routers/videos.py:681`** — auto-pipeline chain now looks up the owner's uid + role from `video.section.course.user_id` (the request context is gone in a BackgroundTask). Added `User` to the import.
+- **`tests/test_courses.py`** — new `test_retry_failed_section_generate_worker_called_with_three_args` asserts the worker is called with exactly `(video_id, user_id, user_role)`. Stub `fake_worker` updated to the real signature.
+- **`tests/test_videos.py`** — new `test_auto_pipeline_passes_uid_and_role_to_generate_worker` is the parallel guard for the auto-pipeline path. Existing `fake_generate` stubs updated to accept the extra args.
+- **`Prod-Must-do.md §9`** — full "Day-12 silent BackgroundTask failure" lesson: symptom → root cause → fix → detection checklist. Future engineers should never lose another hour to this.
+
+### 📋 Verified
+
+- **Live test**: Rick Astley YouTube submission (`dQw4w9WgXcQ`) — caption download → first LLM call worked, then the buggy retry hung for 3.5 min with no events. After the fix, `_run_generate_job(VIDEO_ID, ADMIN_UID, 0)` returned in 16.9s with all 6 assets (summary, mindmap, flashcards, quiz, topic_timestamps, transcript) and `status='ready'`. `generated_at` populated.
+- **Test suite**: 1249 passing (up from 1247, +2 regression tests).

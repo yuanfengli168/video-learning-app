@@ -582,8 +582,11 @@ def test_retry_failed_section_retries_failed_videos(paid_client: TestClient):
             headers=_auth_headers(),
         )
 
-    # Mock the worker so it doesn't actually call Ollama
-    def fake_worker(video_id: str) -> None:
+    # Mock the worker so it doesn't actually call Ollama.
+    # MVP2.1: real signature is (video_id, user_id, user_role);
+    # the previous stub only took 1 arg, which masked the silent
+    # TypeError from a wrong arg-count at the call site.
+    def fake_worker(video_id: str, user_id: str = "", user_role: int = 2) -> None:
         from app.jobs import get_job, finish_job
         from app.database import SessionLocal
         from app.models import Video
@@ -746,6 +749,47 @@ def test_retry_failed_section_response_shape(paid_client: TestClient):
     assert data["transcribe_retried"] == 1
     assert data["generate_retried"] == 1
     assert set(data["video_ids"]) == {transcribe_id, generate_id}
+
+
+def test_retry_failed_section_generate_worker_called_with_three_args(
+    paid_client: TestClient,
+):
+    """Regression for Day-12 catalog-curation bug.
+
+    The retry handler used to call:
+        background_tasks.add_task(_run_generate_job, video_id)
+    while the real signature is (video_id, user_id, user_role).
+    FastAPI BackgroundTasks silently swallows the resulting
+    TypeError, leaving the video stuck at status='generating'
+    forever with no error event in the audit log. The previous
+    test stub took only 1 arg, so the bug was invisible to CI.
+
+    This test asserts the worker is called with ALL THREE args.
+    """
+    course_id, section_id = _create_course_and_section(paid_client)
+    _make_failed_video(paid_client, course_id, section_id, "broken")
+
+    with _mock_auth(), _patch(
+        "app.routers.generation._run_generate_job",
+    ) as mock_worker:
+        resp = paid_client.post(
+            f"/api/courses/{course_id}/sections/{section_id}/retry-failed",
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+
+    # The worker must be called with (video_id, user_id, user_role)
+    # — not just (video_id,). If a future change reintroduces the
+    # silent-TypeError bug, this assertion will catch it.
+    assert mock_worker.call_count == 1
+    args, _kwargs = mock_worker.call_args
+    assert len(args) == 3, (
+        f"_run_generate_job must be called with (video_id, user_id, user_role); "
+        f"got args={args!r}"
+    )
+    # And the first arg should look like a video id (uuid4).
+    import uuid as _uuid
+    _uuid.UUID(args[0])  # raises if not a valid UUID
 
 
 def test_delete_course_oserror_on_unlink_is_swallowed(paid_client: TestClient):

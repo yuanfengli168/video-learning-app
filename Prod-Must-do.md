@@ -187,3 +187,45 @@ We considered installing as `~/Library/LaunchDaemons/com.videoapp.backup-db.plis
 - [doc/data-recovery-2026-08-28.md](doc/data-recovery-2026-08-28.md) — postmortem for the silent backup failure that motivated this layout.
 - [doc/deployment.md](doc/deployment.md) — general deployment guide (server start, env, etc.).
 - [CHANGELOG.md](CHANGELOG.md) — version history; look for "Day11" entries.
+
+---
+
+## 9. Day-12 silent BackgroundTask failure (catalog-curation lesson)
+
+**Symptom**: Video status stuck at `generating` forever after a fresh upload or a "Retry all failed" click. No error event in `events` table. Server is idle (workers at 0% CPU). User sees nothing in the UI except a permanently spinning progress bar.
+
+**Root cause** — Day 12 (catalog-curation DIY test):
+```python
+# app/routers/courses.py:452 — retry handler
+background_tasks.add_task(_run_generate_job, video_id)  # BUG: too few args
+
+# app/routers/videos.py:681 — auto-pipeline chain
+_run_generate_job(video_id)  # BUG: too few args
+```
+
+Both call sites passed **only `video_id`** to `_run_generate_job(video_id, user_id, user_role)`. The function requires **3 args**. FastAPI `BackgroundTasks` **silently swallows** the resulting `TypeError`, leaving the video stuck at `generating` and no audit-log entry to explain why.
+
+The original test mocks (`fake_worker(video_id)`) had a matching 1-arg signature, so CI never caught it. The first real-world encounter was a DIY YouTube URL submission that succeeded for the caption-download step, then hung forever on the LLM materials step.
+
+**The fix** (commit, see CHANGELOG.md "Day 12 catalog-curation bug"):
+- `courses.py:452` — pass `user.get("uid", ""), user.get("role", 2)` (already in scope)
+- `videos.py:681` — look up the owner's uid/role from `video.section.course.user_id` (the request context is gone in a BackgroundTask)
+- Added regression tests that assert the worker is called with **exactly 3 args**, not `*args`
+- Updated existing test stubs to match the real 3-arg signature
+
+**Why this matters in prod**: There is no monitoring signal for "background task raised an unhandled exception." The events table is the only source of truth, but failed `BackgroundTasks` never write to it. If you ever see a video stuck at `generating` with no `events` rows newer than the initial "Starting LLM generation…" entry, **check the call-site arg count immediately**. Symptom → root cause → fix is on the order of 5 minutes if you know to look.
+
+**Lesson for future background tasks**: any function with `user_id` / `user_role` / `request` / `db` parameters **must** be called with all of them, even if some are unused in the happy path. Add a comment at the call site stating the full arg list — the comment prevents the same bug recurring.
+
+**Detection checklist** (run when troubleshooting a stuck video):
+```bash
+LIVE=/Volumes/Storage-Fast-NVMe/video_learning.db
+# 1. Status stuck at 'generating'?
+/usr/bin/sqlite3 "$LIVE" "SELECT id, status FROM videos WHERE status='generating';"
+# 2. Any 'error' events for that video?
+/usr/bin/sqlite3 "$LIVE" "SELECT ts, source, substr(message,1,100) FROM events WHERE video_id='<id>' AND level='error';"
+# 3. Worker idle? (CPU should be >0% if a job is running)
+/bin/ps auxww | /usr/bin/grep gunicorn | /usr/bin/grep -v grep
+# If (1) is yes + (2) is empty + (3) is 0% CPU → almost certainly a silent
+# BackgroundTask exception. Inspect the call site.
+```

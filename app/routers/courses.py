@@ -449,7 +449,16 @@ async def retry_failed_section_videos(
             video.last_generate_job = serialize_job(job)
             video.status = "generating"
             db.commit()
-        background_tasks.add_task(_run_generate_job, video_id)
+        # MVP2.1 patch: pass user_id + user_role. Earlier this was
+        # called with only (video_id,) which silently failed inside
+        # BackgroundTasks (TypeError swallowed). Symptom: status
+        # stuck at 'generating', no LLM call, no error event.
+        background_tasks.add_task(
+            _run_generate_job,
+            video_id,
+            user.get("uid", ""),
+            user.get("role", 2),
+        )
         retried_ids.append(video_id)
 
     return {

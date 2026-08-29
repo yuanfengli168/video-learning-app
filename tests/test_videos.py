@@ -626,7 +626,7 @@ def test_auto_pipeline_chains_transcribe_then_generate(paid_client: TestClient):
                 db.commit()
         called_order.append("transcribe")
 
-    def fake_generate(vid: str) -> None:
+    def fake_generate(vid: str, uid: str = "", role: int = 2) -> None:
         called_order.append("generate")
 
     # Upload (no_auto_pipeline autouse fixture suppresses the background call)
@@ -670,7 +670,7 @@ def test_auto_pipeline_skips_generate_if_transcription_fails(paid_client: TestCl
                 v.status = "error"
                 db.commit()
 
-    def fake_generate(vid: str) -> None:
+    def fake_generate(vid: str, uid: str = "", role: int = 2) -> None:
         generate_called.append(vid)
 
     fake = io.BytesIO(b"fake")
@@ -689,6 +689,74 @@ def test_auto_pipeline_skips_generate_if_transcription_fails(paid_client: TestCl
         _REAL_RUN_AUTO_PIPELINE(video_id, "base")
 
     assert generate_called == [], "generate must NOT be called when transcription fails"
+
+
+def test_auto_pipeline_passes_uid_and_role_to_generate_worker(
+    paid_client: TestClient,
+):
+    """Regression for Day-12 catalog-curation bug.
+
+    _run_auto_pipeline() used to call:
+        _run_generate_job(video_id)
+    while the real signature is (video_id, user_id, user_role).
+    The auto-pipeline runs as a BackgroundTask, so the TypeError
+    was swallowed silently — the video stayed at status='generating'
+    and no LLM call was ever made. The previous test stubs only
+    took 1 arg, so CI never noticed.
+
+    This test asserts the auto-pipeline looks up the owner's uid and
+    role from the DB and passes them through.
+    """
+    course_id, section_id = _create_course_and_section(paid_client)
+    fake = io.BytesIO(b"fake")
+    with _mock_auth():
+        resp = paid_client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("v.mp4", fake, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = resp.json()["video_id"]
+
+    def fake_transcribe(vid: str, model: str) -> None:
+        from app.jobs import get_job, finish_job
+        from app.database import SessionLocal
+        from app.models import Asset, Video
+        from app.services.transcription import transcript_to_json
+        job = get_job(vid, "transcribe")
+        if job:
+            finish_job(job, status="completed")
+        with SessionLocal() as db:
+            v = db.get(Video, vid)
+            if v:
+                v.status = "ready"
+                db.add(Asset(
+                    video_id=vid,
+                    asset_type="transcript",
+                    content=transcript_to_json({
+                        "segments": [{"start": 0.0, "end": 1.0, "text": "Hi"}],
+                        "language": "en",
+                        "duration": 1.0,
+                    }),
+                ))
+                db.commit()
+
+    with (
+        patch("app.routers.videos._run_transcribe_job", side_effect=fake_transcribe),
+        patch("app.routers.generation._run_generate_job") as mock_generate,
+    ):
+        _REAL_RUN_AUTO_PIPELINE(video_id, "base")
+
+    assert mock_generate.call_count == 1
+    args, _kwargs = mock_generate.call_args
+    assert len(args) == 3, (
+        f"_run_generate_job must be called with (video_id, user_id, user_role); "
+        f"got args={args!r}"
+    )
+    # First arg is the video id; second must be the course owner's uid;
+    # third must be the owner's role (an int).
+    assert args[0] == video_id
+    assert args[1] == "test-user-uid"  # FAKE_USER uid
+    assert isinstance(args[2], int)
 
 
 # ── MVP2.0 #3 — Bulk upload tests ─────────────────────────────────────────────
