@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE — backup health probe, every 5 minutes.
+
+  Important: probes run as root too. Why:
+    - The probe reads /Volumes/Storage-Fast-NVMe/ via diskutil to check
+      RAID free space. User-context launchd gets EPERM on external
+      volumes (same TCC block that broke the actual backups).
+    - PROBE SCRIPT (backup-probe.sh) needs the venv python binary under
+      ~/Desktop/.../venv/bin/python. As root we need to set HOME so the
+      script can resolve paths.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.videoapp.backup-probe</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__RUNTIME_DIR__/backup-probe.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>VIDEOAPP_PROJECT_ROOT</key>
+        <string>__PROJECT_DIR__</string>
+        <!-- Root's HOME is /var/root, not /Users/jackyli. Override so the
+             probe writes its status file where the app expects it. -->
+        <key>HOME</key>
+        <string>/Users/jackyli</string>
+        <!-- PATH must include the system locations so bash, sqlite3, etc.
+             resolve. launchd default is too minimal. -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/video-app-backup.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/video-app-backup.log</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

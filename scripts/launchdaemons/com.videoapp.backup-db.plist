@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE — backup-db.sh (every 6 hours: 00/06/12/18)
+  Do not load directly. Run scripts/install-launchdaemon.sh which patches
+  the script path to the runtime location and bootstrap-loads it into
+  the system launchd domain (runs as root).
+
+  Why root: macOS TCC blocks sqlite3 from reading external volumes like
+  /Volumes/Storage-Fast-NVMe/ when launchd runs scripts under user
+  context. The system domain runs as root, which bypasses TCC. See
+  Prod-Must-do.md for the full explanation.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.videoapp.backup-db</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__RUNTIME_DIR__/backup-db.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/video-app-backup.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/video-app-backup.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- HOME must be set so $HOME/Library/Logs/... resolves. launchd
+         doesn't set HOME for system-domain jobs by default. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jackyli</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
