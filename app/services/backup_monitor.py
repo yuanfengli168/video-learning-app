@@ -144,10 +144,18 @@ def probe_launchd_job(uid: int, label: str) -> LaunchdJobStatus:
       -parseable instead of regex-grepping free text. Launchd
     output format is unstable across macOS versions; plist is
     stable.
+
+    Domain selection:
+      - uid 0 (root) → system domain (LaunchDaemon)
+      - non-zero uid → gui domain (LaunchAgent)
     """
+    if uid == 0:
+        target = f"system/{label}"
+    else:
+        target = f"gui/{uid}/{label}"
     try:
         result = subprocess.run(
-            ["launchctl", "print", f"gui/{uid}/{label}"],
+            ["launchctl", "print", target],
             capture_output=True,
             text=True,
             timeout=5,
@@ -167,8 +175,12 @@ def probe_launchd_job(uid: int, label: str) -> LaunchdJobStatus:
             except ValueError:
                 last_exit = 0
 
-    # Healthy = either waiting for next run OR running right now.
-    is_healthy = state in ("waiting", "running") and last_exit == 0
+    # Healthy = either running now, waiting for next scheduled run, or
+    # idle because the schedule hasn't fired yet. We trust the exit code
+    # as the source of truth: if the most recent run was 0, the job is
+    # healthy regardless of current state. State just tells us whether
+    # the scheduler has fired it yet.
+    is_healthy = last_exit == 0
     return LaunchdJobStatus(
         label=label,
         state=state,

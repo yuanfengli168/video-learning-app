@@ -11,6 +11,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Runtime layout (TCC-clean — scripts under ~/Desktop/ are blocked by macOS for
+# non-root launchd, see Prod-Must-do.md). The repo stays the source of truth;
+# we copy scripts into ~/Library/Application Support/VideoApp/ on each host.
+RUNTIME_DIR="$HOME/Library/Application Support/VideoApp/scripts/backup"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$HOME/Library/Logs"
 SCRIPTS=("daily" "db" "monthly" "verify")
@@ -30,7 +35,25 @@ if [ ! -d "$PROJECT_DIR/scripts/backup" ]; then
     exit 1
 fi
 
-mkdir -p "$PLIST_DIR" "$LOG_DIR"
+mkdir -p "$PLIST_DIR" "$LOG_DIR" "$RUNTIME_DIR"
+
+# ── Sync scripts to TCC-clean runtime location ────────────────────────────
+# macOS launchd runs scripts under user context. If the script path is under
+# ~/Desktop/, the kernel returns EPERM ("Operation not permitted", exit 126).
+# We avoid that by always running scripts from ~/Library/Application Support/
+# which is not TCC-restricted for bash exec.
+#
+# We copy (not symlink) so the runtime is independent of the repo — you can
+# move the repo without breaking backups, and one repo can serve multiple
+# runtime copies (e.g., staging vs prod).
+echo ""
+echo "→ Syncing scripts → $RUNTIME_DIR"
+for f in "$PROJECT_DIR"/scripts/backup/*.sh; do
+    [ -e "$f" ] || continue
+    cp -f "$f" "$RUNTIME_DIR/"
+    chmod +x "$RUNTIME_DIR/$(basename "$f")"
+done
+ok "Synced $(ls "$PROJECT_DIR/scripts/backup/"*.sh | wc -l | tr -d ' ') scripts"
 
 # ── Verify backup volumes exist ───────────────────────────────────────────
 for vol in Storage-Fast-NVMe Storage-Medium-NVMe Storage-Backup-HDD; do
@@ -47,7 +70,7 @@ done
 for name in "${SCRIPTS[@]}"; do
     label="com.videoapp.backup-${name}"
     plist="${PLIST_DIR}/${label}.plist"
-    script_path="${PROJECT_DIR}/scripts/backup/backup-${name}.sh"
+    script_path="${RUNTIME_DIR}/backup-${name}.sh"
 
     # Build StartCalendarInterval based on schedule
     case "$name" in

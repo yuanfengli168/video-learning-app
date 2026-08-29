@@ -15,6 +15,7 @@ regression here would be caught in CI.
 
 import json
 import subprocess
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -224,7 +225,8 @@ def test_probe_raid_volume_unmounted():
 def test_collect_status_flags_stale_backup(tmp_path):
     """When the newest backup is older than STALE_BACKUP_HOURS, is_healthy=False."""
     import os
-    from app.services.backup_monitor import BACKUP_ROOTS
+    from app.services.backup_monitor import collect_status as collect_status_fn
+    from app.services import backup_monitor as bm
 
     # Make a backup file with a forced old mtime
     fake_root = tmp_path / "raid"
@@ -234,14 +236,24 @@ def test_collect_status_flags_stale_backup(tmp_path):
     old_mtime = (datetime.now() - timedelta(days=10)).timestamp()
     os.utime(old_file, (old_mtime, old_mtime))
 
-    # Mock out launchd + diskutil so we focus on the files branch.
-    with patch("app.services.backup_monitor.BACKUP_ROOTS", (fake_root,)):
-        with patch("app.services.backup_monitor.probe_launchd_job",
-                   return_value=LaunchdJobStatus(label="x", state="waiting", is_healthy=True)):
-            with patch("app.services.backup_monitor.probe_raid_volume",
-                       return_value=VolumeStatus(mount="/m", free_bytes=10**10, total_bytes=10**11,
-                                                 used_bytes=9*10**10, free_gb=10.0, is_low=False)):
-                s = collect_status()
+    # Patch probe_backup_files to use our fake root. We can't patch the
+    # BACKUP_ROOTS module attribute because probe_backup_files() uses a
+    # default-argument binding to BACKUP_ROOTS evaluated at import time.
+    # Patching the function directly is cleaner and works regardless of
+    # default-argument binding behavior.
+    with patch.object(bm, "probe_backup_files", return_value=[
+        bm.BackupFile(
+            path=old_file, kind="db-hot",
+            size_bytes=old_file.stat().st_size,
+            mtime_ts=old_mtime, age_hours=(time.time() - old_mtime) / 3600,
+        ),
+    ]):
+        with patch.object(bm, "probe_launchd_job",
+                          return_value=LaunchdJobStatus(label="x", state="waiting", is_healthy=True)):
+            with patch.object(bm, "probe_raid_volume",
+                              return_value=VolumeStatus(mount="/m", free_bytes=10**10, total_bytes=10**11,
+                                                        used_bytes=9*10**10, free_gb=10.0, is_low=False)):
+                s = bm.collect_status()
     assert s.is_healthy is False
     assert any("newest backup" in r for r in s.reasons)
 

@@ -5,6 +5,19 @@
     <key>Label</key>
     <string>com.videoapp.backup-probe</string>
 
+    <!--
+      TEMPLATE — do not load this file directly. The path below is the
+      repo-local default for development; on a prod host it must be
+      patched to the TCC-clean runtime path. Run scripts/setup-probe.sh
+      (or scripts/setup-backups.sh for the other 4 plists) to install.
+
+      Why the runtime path matters:
+        macOS launchd runs scripts under user context. If the script path is
+        under ~/Desktop/, the kernel returns EPERM ("Operation not permitted",
+        exit 126). We avoid that by always running scripts from
+        ~/Library/Application Support/ which is not TCC-restricted for bash
+        exec. See Prod-Must-do.md for the full explanation.
+    -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
