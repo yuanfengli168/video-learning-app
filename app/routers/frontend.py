@@ -159,9 +159,18 @@ def _ctx(
             c.value for c in capabilities_for_role(role)
         )
         ctx["is_admin"] = Capability.CURATE_CATALOG in capabilities_for_role(role)
+        # MVP2.1 (Day 13): explicit flag for transcribe/regenerate buttons
+        # so video.html can show a disabled state + upgrade tooltip for
+        # FREE users. We could check `user_capabilities` directly in the
+        # template, but a named flag is more readable and gives us one
+        # place to change if the capability matrix shifts later.
+        ctx["can_regen_materials"] = (
+            Capability.REGEN_MATERIALS in capabilities_for_role(role)
+        )
     else:
         ctx["user_capabilities"] = frozenset()
         ctx["is_admin"] = False
+        ctx["can_regen_materials"] = False
     ctx.update(extra)
     return ctx
 

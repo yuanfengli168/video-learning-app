@@ -512,6 +512,58 @@ def test_transcribe_invalid_model(paid_client: TestClient):
     assert response.status_code == 400
 
 
+def test_transcribe_free_user_gets_403(paid_client: TestClient):
+    """Regression for Day-13 catalog-curation bug.
+
+    POST /api/videos/{id}/transcribe was previously gated only by
+    `get_current_user`, so any signed-in FREE user could re-run
+    whisper on a catalog video — same blast radius as regenerating
+    materials (transcribe chains into generate). Now gated on
+    REGEN_MATERIALS; FREE users must upgrade.
+
+    We use `paid_client` to set up the course + section + video
+    (course creation requires MANAGE_OWN_COURSE), then patch
+    verify_token to return a FREE-role uid and hit the transcribe
+    endpoint — it should return 403.
+    """
+    course_id, section_id = _create_course_and_section(paid_client)
+    fake_video = io.BytesIO(b"fake video content")
+    with _mock_auth():
+        upload_resp = paid_client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = upload_resp.json()["video_id"]
+
+    # Now hit /transcribe as a FREE user. Force role=2 (FREE) in the
+    # users table so capabilities_for_role returns the FREE set.
+    from sqlalchemy import text
+    from app.auth.admin import clear_role_cache
+    with paid_client:
+        from app.database import SessionLocal
+        with SessionLocal() as db:
+            db.execute(
+                text("UPDATE users SET role=2 WHERE user_id=:uid"),
+                {"uid": "test-user-uid"},
+            )
+            db.commit()
+        clear_role_cache()
+
+        with patch(
+            "app.auth.dependencies.verify_token",
+            return_value={"uid": "test-user-uid", "email": "free@test.com"},
+        ):
+            response = paid_client.post(
+                f"/api/videos/{video_id}/transcribe?model_name=base",
+                headers=_auth_headers(),
+            )
+    assert response.status_code == 403, (
+        f"FREE user should be blocked from transcribing; got {response.status_code}: "
+        f"{response.text[:200]}"
+    )
+
+
 def test_transcribe_failure_sets_error_status(paid_client: TestClient):
     """Should set video status to 'error' if the background transcription fails."""
     course_id, section_id = _create_course_and_section(paid_client)

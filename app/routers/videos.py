@@ -340,9 +340,18 @@ async def transcribe(
     model_name: str = "base",
     language: str = "auto",
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(
+        require_capability(Capability.REGEN_MATERIALS)
+    ),
 ) -> dict[str, Any]:
     """Kick off transcription in the background. Returns 202 immediately.
+
+    MVP2.1 patch (Day 13): gated on REGEN_MATERIALS (admin + paid
+    only). Previously any signed-in user could re-run whisper on a
+    catalog video — same blast radius as REGEN_MATERIALS (transcribe
+    chains into generate), so they share a capability. FREE users get
+    a 403 + the UI shows an "Upgrade to regenerate" tooltip instead of
+    the button.
 
     The actual work (loading Whisper, running it on the audio, writing
     the Asset) happens in a FastAPI BackgroundTask — see

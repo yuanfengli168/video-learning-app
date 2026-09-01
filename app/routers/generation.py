@@ -8,8 +8,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.admin import require_capability
 from app.auth.dependencies import get_current_user
-from app.auth.roles import user_can_access_video
+from app.auth.roles import Capability, user_can_access_video
 from app.database import SessionLocal, get_db
 from app.jobs import (
     finish_job,
@@ -30,13 +31,20 @@ async def generate(
     video_id: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(
+        require_capability(Capability.REGEN_MATERIALS)
+    ),
 ) -> dict[str, Any]:
     """Kick off LLM generation in the background. Returns 202 immediately.
 
     Like /transcribe, this used to block for 30-60s while Ollama ran.
     Now it kicks the work to a FastAPI BackgroundTask and returns
     right away. The UI polls /api/videos/{id}/status to see progress.
+
+    MVP2.1 patch (Day 13): gated on REGEN_MATERIALS (admin + paid).
+    FREE users get 403; the UI shows an upgrade tooltip instead of
+    the button. Without this gate, any signed-in free user could
+    spam Ollama on every catalog video (cost + DoS).
     """
     video = db.get(Video, video_id)
     if not video:

@@ -230,6 +230,43 @@ def test_generate_video_not_found(paid_client: TestClient):
     assert response.status_code == 404
 
 
+def test_generate_free_user_gets_403(paid_client: TestClient):
+    """Regression for Day-13 catalog-curation bug.
+
+    POST /api/generate/{id} was previously gated only by
+    `get_current_user`, so any signed-in FREE user could spam Ollama
+    on any catalog video (DoS + cost). Now gated on REGEN_MATERIALS.
+
+    We use `paid_client` to set up the video (course creation + upload
+    require higher capabilities), then patch verify_token + force
+    role=2 (FREE) before hitting /api/generate/{id}.
+    """
+    video_id = _setup_video_with_transcript(paid_client)
+
+    from sqlalchemy import text
+    from app.auth.admin import clear_role_cache
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        db.execute(
+            text("UPDATE users SET role=2 WHERE user_id=:uid"),
+            {"uid": "test-user-uid"},
+        )
+        db.commit()
+    clear_role_cache()
+
+    with patch(
+        "app.auth.dependencies.verify_token",
+        return_value={"uid": "test-user-uid", "email": "free@test.com"},
+    ):
+        response = paid_client.post(
+            f"/api/generate/{video_id}", headers=_auth_headers()
+        )
+    assert response.status_code == 403, (
+        f"FREE user should be blocked from generating; got {response.status_code}: "
+        f"{response.text[:200]}"
+    )
+
+
 def test_generate_failure_marks_error_status(paid_client: TestClient):
     """If the (background) generate worker fails, video status becomes 'error'."""
     video_id = _setup_video_with_transcript(paid_client)

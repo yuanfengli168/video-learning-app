@@ -1232,3 +1232,30 @@ an existing if/else).
 
 - **Live test**: full suite passes (1250 tests, +1 regression). Server restart picks up the picker fix immediately.
 - **Manual override**: the admin UI has a "Primary language" dropdown (`<select id="whisper-language">` in [video.html:123](app/templates/video.html#L123)) — users can always force a specific language per video.
+
+## [2.1.0.7] - 2026-09-01 — FREE users blocked from transcribe / regenerate
+
+🔒 **Two cost-relevant endpoints had zero role gating.** Any signed-in FREE user could:
+1. Hit `POST /api/videos/{id}/transcribe` → re-run Whisper on any catalog video
+2. Hit `POST /api/generate/{id}` → re-run the LLM on any catalog video
+
+Same blast radius as REGEN_MATERIALS (transcribe chains into generate), so they share that capability. FREE users now see disabled "Upgrade to ..." buttons instead of working controls, and get a 403 with a friendly toast if they bypass the UI.
+
+### 🐛 Bug fixes
+
+- **[videos.py:336](app/routers/videos.py#L336)** — `POST /api/videos/{id}/transcribe` now requires `Capability.REGEN_MATERIALS`.
+- **[generation.py:28](app/routers/generation.py#L28)** — `POST /api/generate/{id}` now requires `Capability.REGEN_MATERIALS`. Added the missing `require_capability` / `Capability` imports.
+- **[frontend.py:162](app/routers/frontend.py#L162)** — new `can_regen_materials` template flag (cleaner than checking the capability set directly).
+- **[video.html](app/templates/video.html)** — every Transcribe / Generate / Regenerate button now branches on `can_regen_materials`. FREE users get greyed-out buttons with `title="Upgrade your plan to ..."` tooltips. 5 buttons gated across SSR + JS-rendered branches.
+- **JS handlers** (`transcribeVideo`, `generateMaterials`, `loadSummary`) handle 403 gracefully with a `showToast("⭐ ... is a paid feature. Upgrade your plan to ...", 'info')` instead of a raw error stack.
+
+### 🧪 Tests
+
+- **`tests/test_videos.py:test_transcribe_free_user_gets_403`** — uses `paid_client` for setup, then patches `verify_token` + forces `role=2` (FREE) before hitting transcribe.
+- **`tests/test_generation.py:test_generate_free_user_gets_403`** — same pattern for the generate endpoint.
+- **`tests/test_loadSummary_dom.mjs`** — needed updates because the new `canRegenMaterials` JS constant uses string form (`"true"`/`"false"`) instead of a boolean literal so the script stays parseable before Jinja rendering.
+
+### 📋 Verified
+
+- **Full suite**: 1252 passing (up from 1250, +2 new FREE 403 tests). DOM test re-verified after string-form fix.
+- **UX**: free users see a disabled "🔄 Regenerate" button with a tooltip instead of an interactive one — same look as the existing "Uploading is a paid feature" CTA on the dashboard.
