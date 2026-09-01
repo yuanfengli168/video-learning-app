@@ -220,9 +220,18 @@ def _pick_language_priority(
 
     Priority:
       1. user_locked (UI language dropdown — admin picked this)
-      2. first available track (YouTube's caption_languages list from Day 2B)
-      3. preferred_languages fallback (default: any flavor of English)
+      2. preferred_languages (admin's locale preference, default = English)
+      3. first available track (YouTube's caption_languages list)
       4. None (caller will try 'best' = whatever yt-dlp picks first)
+
+    MVP2.1 patch (Day 13): priority 2 and 3 were swapped. The original
+    code returned available_languages[0] first, which is whatever order
+    YouTube happens to return — that list is NOT ordered by relevance
+    to the viewer, it's ordered by what the uploader uploaded first.
+    For the Rick Astley catalog-curation test, that meant picking
+    German captions (de-DE) instead of English, just because German
+    was uploaded first. The admin's UI is English, so preferred_languages
+    should win before falling back to "whatever YouTube says first".
 
     Args:
         user_locked: BCP-47 code from video.language (may be None).
@@ -236,14 +245,17 @@ def _pick_language_priority(
     """
     if user_locked and user_locked in available_languages:
         return user_locked
+    # Preferred-languages check BEFORE first-available fallback —
+    # the admin's locale preference wins over whatever order YouTube
+    # happened to list.
+    for pref in preferred_languages:
+        if pref in (available_languages or []):
+            return pref
     if available_languages:
         return available_languages[0]
     if user_locked is None and available_languages is None:
         # Defensive: bad input. Let yt-dlp pick whatever it has.
         return None
-    for pref in preferred_languages:
-        if pref in (available_languages or []):
-            return pref
     return None
 
 

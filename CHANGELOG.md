@@ -1214,3 +1214,21 @@ an existing if/else).
 
 - **Live test**: Rick Astley YouTube submission (`dQw4w9WgXcQ`) — caption download → first LLM call worked, then the buggy retry hung for 3.5 min with no events. After the fix, `_run_generate_job(VIDEO_ID, ADMIN_UID, 0)` returned in 16.9s with all 6 assets (summary, mindmap, flashcards, quiz, topic_timestamps, transcript) and `status='ready'`. `generated_at` populated.
 - **Test suite**: 1249 passing (up from 1247, +2 regression tests).
+
+## [2.1.0.6] - 2026-09-01 — Language picker prefers English over YouTube's first track
+
+🌐 **A German transcript was downloaded for a Rick Astley YouTube submission just because `de-DE` was first in YouTube's `caption_languages` list.** The admin UI is English; the picker should try `preferred_languages` BEFORE falling back to whatever order YouTube happens to return. The original code did the opposite — it returned `available_languages[0]` first, then fell through to `preferred_languages` only if no `available_languages` were passed at all.
+
+### 🐛 Bug fixes
+
+- **`app/services/youtube_captions.py:_pick_language_priority`** — swapped priority 2 (first available) and priority 3 (preferred_languages). Now: user_locked → preferred_languages → first_available → None. Admin UI is English, so English variants win.
+- **`tests/test_youtube_captions.py`** — new `test_pick_language_prefers_english_even_if_list_starts_with_other` regression test using the exact `["de-DE", "en", "ja", ...]` list from the Rick Astley submission.
+
+### 🩹 Related: cookie expiry UX
+
+- The `/video/<id>` page redirects to `/?session=expired` after 1 hour (`COOKIE_MAX_AGE = 3600` in `app/auth/session.py`). The user landed on the dashboard catalog thumbnail during the smoke test — they needed to log in again. The redirect is correct; the cookie age is intentionally short for prod. No code change needed; just documenting for future engineers who hit the same symptom.
+
+### 📋 Verified
+
+- **Live test**: full suite passes (1250 tests, +1 regression). Server restart picks up the picker fix immediately.
+- **Manual override**: the admin UI has a "Primary language" dropdown (`<select id="whisper-language">` in [video.html:123](app/templates/video.html#L123)) — users can always force a specific language per video.

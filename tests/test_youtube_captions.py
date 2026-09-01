@@ -240,10 +240,29 @@ def test_pick_language_skips_locked_if_unavailable():
 
 
 def test_pick_language_prefers_first_available_when_no_lock():
-    """No user lock → first available wins."""
+    """No user lock, English is first in available → English wins (was
+    the previous behavior; preserved because preferred_languages defaults
+    to English so both rules agree)."""
     chosen = _pick_language_priority(
         user_locked=None,
         available_languages=["en", "zh-Hans", "ja"],
+    )
+    assert chosen == "en"
+
+
+def test_pick_language_prefers_english_even_if_list_starts_with_other():
+    """Regression for Day-13 catalog-curation bug.
+
+    The Rick Astley YouTube submission had
+        caption_languages = ["de-DE", "en", "ja", "es-419", "en", "pt-BR"]
+    The old picker returned available_languages[0] = "de-DE", so the
+    transcript was German. After the fix, preferred_languages=("en",
+    "en-US", "en-GB") is checked BEFORE the first-available fallback,
+    so English wins even when YouTube returns non-English first.
+    """
+    chosen = _pick_language_priority(
+        user_locked=None,
+        available_languages=["de-DE", "en", "ja", "es-419", "en", "pt-BR"],
     )
     assert chosen == "en"
 
