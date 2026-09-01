@@ -515,10 +515,18 @@ const videoStatus = '{{ video.status }}';
 // users who lack REGEN_MATERIALS. Backend endpoints are independently
 // gated with require_capability() — this is purely a UX nicety.
 //
+// Day-13 update (PAID-on-own-only): for PAID users, this flag is True
+// only when they OWN the video's course (catalog videos belong to
+// admin and are off-limits to PAID).
+//
 // String form ("true"/"false") rather than a JS boolean literal so
 // the syntax is also valid before Jinja renders (the DOM-sandbox test
 // in tests/test_loadSummary_dom.mjs reads this block as raw JS).
 const canRegenMaterials = '{{ "true" if can_regen_materials else "false" }}';
+// MVP2.1 (Day 13): expose the viewer's role so the JS 403 toasts can
+// distinguish 'FREE → upgrade' from 'PAID → admin-only catalog video'.
+// String form again for the same DOM-sandbox-test reason.
+const viewerRole = '{{ user_role | default("FREE") }}';
 // courseId is exposed as a JS constant so confirmDelete() can redirect
 // to the right course page after deletion. See the comment on the
 // redirect inside confirmDelete() for the full rationale. course
@@ -994,10 +1002,16 @@ async function transcribeVideo() {
             await pollJobStatus('transcribe', data.job, () => location.reload());
         } else if (resp.status === 403) {
             // MVP2.1 (Day 13): backend now gates this endpoint on
-            // REGEN_MATERIALS. A FREE user who somehow bypasses the
-            // disabled button (e.g. devtools) gets this friendly
-            // message instead of a raw 403 stack trace.
-            showToast('⭐ Transcribing is a paid feature. Upgrade your plan to re-transcribe videos.', 'info');
+            // REGEN_MATERIALS + ownership. A FREE user who somehow
+            // bypasses the disabled button (e.g. devtools) gets a
+            // friendly message instead of a raw 403 stack trace.
+            // Day-13 update: PAID users on a catalog video get a
+            // different message — they're already paid, they just
+            // don't own this admin-curated video.
+            const toastMsg = viewerRole === 'PAID'
+                ? '🔒 Only the admin can re-transcribe catalog videos. You can re-transcribe videos you uploaded.'
+                : '⭐ Transcribing is a paid feature. Upgrade your plan to re-transcribe videos.';
+            showToast(toastMsg, 'info');
             btn.textContent = '🎙️ Transcribe';
             btn.disabled = canRegenMaterials !== 'true';
             container.innerHTML = transcriptAlreadyLoaded
@@ -1055,10 +1069,14 @@ async function generateMaterials() {
                 }
             });
         } else if (resp.status === 403) {
-            // MVP2.1 (Day 13): backend gates on REGEN_MATERIALS. FREE
-            // users who bypass the disabled button (devtools, cached
-            // page, etc.) get a friendly toast instead of a 403 stack.
-            showToast('⭐ Generating materials is a paid feature. Upgrade your plan to regenerate.', 'info');
+            // MVP2.1 (Day 13): backend gates on REGEN_MATERIALS +
+            // ownership. FREE users who bypass the disabled button
+            // (devtools, cached page, etc.) get a friendly toast.
+            // PAID users on a catalog video get a different message.
+            const toastMsg = viewerRole === 'PAID'
+                ? '🔒 Only the admin can regenerate catalog materials. You can regenerate materials on videos you uploaded.'
+                : '⭐ Generating materials is a paid feature. Upgrade your plan to regenerate.';
+            showToast(toastMsg, 'info');
             const progress = document.getElementById('generate-progress');
             if (progress) progress.remove();
             btn.textContent = '🔄 Regenerate';

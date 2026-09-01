@@ -1,6 +1,7 @@
 """Tests for videos router — upload, transcribe, get."""
 
 import io
+import uuid as uuid_module
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -561,6 +562,150 @@ def test_transcribe_free_user_gets_403(paid_client: TestClient):
     assert response.status_code == 403, (
         f"FREE user should be blocked from transcribing; got {response.status_code}: "
         f"{response.text[:200]}"
+    )
+
+
+def test_transcribe_paid_on_others_video_gets_403(paid_client: TestClient, admin_client: TestClient):
+    """PAID users can re-transcribe videos they OWN, but NOT catalog
+    videos owned by another user (admin).
+
+    Day-13 update: previously PAID could transcribe any video (the
+    REGEN_MATERIALS capability alone was the gate). Now ownership
+    matters too — a PAID user with the 'jackyopenclaw' uid can regen
+    their own uploads, but NOT admin's catalog videos.
+
+    We use admin_client (different uid, role=0) to create the catalog
+    video, then patch verify_token to simulate the PAID user ('test-user-uid',
+    role=1) trying to transcribe it.
+    """
+    # Admin creates their own course + section + video via the API.
+    # admin_client fixture sets the auth to a different uid than paid_client,
+    # so the resulting course is owned by a different user.
+    ADMIN_UID = "uid-admin"  # admin_client fixture's uid
+
+    # Force the admin_client to use a specific different uid for clarity.
+    # The paid_client fixture uses 'test-user-uid' (PAID), and the
+    # admin_client fixture uses 'uid-admin' (ADMIN) — see conftest._TEST_UIDS.
+    # These are different, so ownership will differ.
+
+    with _mock_auth():  # default FAKE_USER = test-user-uid — wait, we need admin uid
+        pass
+
+    # We need a NEW mock auth for the admin client. Patch verify_token
+    # to return admin uid for the admin_client's requests.
+    ADMIN_FAKE = {"uid": ADMIN_UID, "email": "admin@test.com"}
+    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
+        # Create admin's course
+        course_resp = admin_client.post(
+            "/api/courses",
+            json={"title": "Admin Catalog Test"},
+            headers=_auth_headers(),
+        )
+        assert course_resp.status_code == 200, course_resp.text
+        admin_course_id = course_resp.json()["course_id"]
+        # Create admin's section
+        section_resp = admin_client.post(
+            f"/api/courses/{admin_course_id}/sections",
+            json={"title": "Catalog"},
+            headers=_auth_headers(),
+        )
+        admin_section_id = section_resp.json()["section_id"]
+        # Upload admin's video
+        upload_resp = admin_client.post(
+            f"/api/videos/upload/{admin_section_id}",
+            files={"file": ("admin_vid.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        assert upload_resp.status_code == 202, upload_resp.text
+        admin_video_id = upload_resp.json()["video_id"]
+
+    # Now PAID user (paid_client fixture, uid='test-user-uid') tries to
+    # transcribe admin's video. The default _mock_auth returns PAID's uid.
+    with _mock_auth():
+        response = paid_client.post(
+            f"/api/videos/{admin_video_id}/transcribe?model_name=base",
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 403, (
+        f"PAID user should be blocked from transcribing admin's catalog video; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+
+def test_transcribe_paid_on_own_video_succeeds(paid_client: TestClient):
+    """PAID users CAN re-transcribe videos they uploaded themselves.
+
+    Companion test to test_transcribe_paid_on_others_video_gets_403.
+    Uses the existing _create_course_and_section helper which creates
+    a course owned by 'test-user-uid' (the PAID fixture user).
+    """
+    course_id, section_id = _create_course_and_section(paid_client)
+    fake_video = io.BytesIO(b"fake video content")
+    with _mock_auth():
+        upload_resp = paid_client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("owned.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+    video_id = upload_resp.json()["video_id"]
+
+    # Mock the worker (it's a BackgroundTask that would otherwise block).
+    with patch(
+        "app.routers.videos._run_transcribe_job",
+    ):
+        with _mock_auth():
+            response = paid_client.post(
+                f"/api/videos/{video_id}/transcribe?model_name=base",
+                headers=_auth_headers(),
+            )
+    assert response.status_code == 202, (
+        f"PAID user should be able to transcribe their OWN video; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+
+def test_transcribe_admin_can_transcribe_any_video(paid_client: TestClient, admin_client: TestClient):
+    """ADMIN can transcribe any video regardless of owner.
+
+    Day-13 update: ADMIN is the curator of catalog videos. They must be
+    able to fix/re-transcribe their own catalog entries from the UI.
+    Companion to test_transcribe_paid_on_others_video_gets_403.
+    """
+    ADMIN_UID = "uid-admin"
+    ADMIN_FAKE = {"uid": ADMIN_UID, "email": "admin@test.com"}
+
+    # Create admin's catalog video via the API
+    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
+        course_resp = admin_client.post(
+            "/api/courses",
+            json={"title": "Admin Catalog"},
+            headers=_auth_headers(),
+        )
+        admin_course_id = course_resp.json()["course_id"]
+        section_resp = admin_client.post(
+            f"/api/courses/{admin_course_id}/sections",
+            json={"title": "Catalog"},
+            headers=_auth_headers(),
+        )
+        admin_section_id = section_resp.json()["section_id"]
+        upload_resp = admin_client.post(
+            f"/api/videos/upload/{admin_section_id}",
+            files={"file": ("admin_vid.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        admin_video_id = upload_resp.json()["video_id"]
+
+    # Now hit /transcribe as ADMIN (admin_client fixture, but we need to
+    # re-mock verify_token so admin_client requests return ADMIN_FAKE).
+    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
+        with patch("app.routers.videos._run_transcribe_job"):
+            response = admin_client.post(
+                f"/api/videos/{admin_video_id}/transcribe?model_name=base",
+                headers=_auth_headers(),
+            )
+    assert response.status_code == 202, (
+        f"ADMIN should be able to transcribe any video (own or otherwise); "
+        f"got {response.status_code}: {response.text[:200]}"
     )
 
 

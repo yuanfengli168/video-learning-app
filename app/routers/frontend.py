@@ -118,6 +118,11 @@ def _ctx(
     If `db` is provided AND the user is signed in, the user's courses
     are also added to the context so the sidebar can render them on
     every page.
+
+    `course` (optional, passed via **extra) lets us compute per-video
+    flags like `can_regen_materials` for the video page. Catalog videos
+    have `course is None` (they live outside any user's course tree);
+    owned videos have `course.user_id == viewer_uid`.
     """
     ctx: dict[str, Any] = {
         "app_name": settings.app_name,
@@ -159,14 +164,32 @@ def _ctx(
             c.value for c in capabilities_for_role(role)
         )
         ctx["is_admin"] = Capability.CURATE_CATALOG in capabilities_for_role(role)
+        # MVP2.1 (Day 13): expose the role as a string so JS toasts can
+        # distinguish "FREE → upgrade" from "PAID → admin-only catalog".
+        # Role enum int → name mapping: 0=ADMIN, 1=PAID, 2=FREE.
+        ctx["user_role"] = role.name if hasattr(role, "name") else str(role)
         # MVP2.1 (Day 13): explicit flag for transcribe/regenerate buttons
         # so video.html can show a disabled state + upgrade tooltip for
         # FREE users. We could check `user_capabilities` directly in the
         # template, but a named flag is more readable and gives us one
         # place to change if the capability matrix shifts later.
-        ctx["can_regen_materials"] = (
-            Capability.REGEN_MATERIALS in capabilities_for_role(role)
-        )
+        #
+        # Day 13 update (PAID-on-own-only): PAID can regen on videos they
+        # OWN (course.user_id == viewer_uid), not on admin-curated catalog
+        # videos. Catalog videos are admin-only. ADMIN can regen anywhere.
+        # FREE can regen nowhere.
+        course = extra.get("course")  # set by video_view; None on dashboard
+        if Capability.REGEN_MATERIALS in capabilities_for_role(role):
+            if Capability.CURATE_CATALOG in capabilities_for_role(role):
+                ctx["can_regen_materials"] = True
+            else:
+                # PAID tier — only allowed on own videos.
+                viewer_uid = user.get("uid", "")
+                ctx["can_regen_materials"] = (
+                    course is not None and course.user_id == viewer_uid
+                )
+        else:
+            ctx["can_regen_materials"] = False
     else:
         ctx["user_capabilities"] = frozenset()
         ctx["is_admin"] = False

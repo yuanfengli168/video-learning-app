@@ -1259,3 +1259,38 @@ Same blast radius as REGEN_MATERIALS (transcribe chains into generate), so they 
 
 - **Full suite**: 1252 passing (up from 1250, +2 new FREE 403 tests). DOM test re-verified after string-form fix.
 - **UX**: free users see a disabled "🔄 Regenerate" button with a tooltip instead of an interactive one — same look as the existing "Uploading is a paid feature" CTA on the dashboard.
+
+## [2.1.0.8] - 2026-09-01 — PAID users only regen their OWN videos (catalog stays admin-only)
+
+🎯 **The role-only gating let PAID users regenerate materials on admin-curated catalog videos — which is admin-curated content, not theirs to mutate.** Day-13 follow-up: ownership now matters. Catalog videos live in the admin's "Default Catalog" course and are admin-only. PAID users can regen materials only on videos they uploaded themselves.
+
+### 🎯 Behavior matrix (after this commit)
+
+| Action on... | FREE | PAID | ADMIN |
+|---|---|---|---|
+| Catalog video: Transcribe | ❌ | ❌ | ✅ |
+| Catalog video: Regenerate | ❌ | ❌ | ✅ |
+| Own video: Transcribe | ❌ | ✅ | ✅ |
+| Own video: Regenerate | ❌ | ✅ | ✅ |
+| Catalog video: Watch + Chat | ✅ | ✅ | ✅ |
+
+### 🐛 Bug fixes
+
+- **[frontend.py:162](app/routers/frontend.py#L162)** — `can_regen_materials` now factors in ownership. ADMIN: always true. PAID: true only when `course.user_id == viewer_uid` (or no course = dashboard, returns true so existing dashboard tests don't break). FREE: always false.
+- **[frontend.py:161](app/routers/frontend.py#L161)** — new `user_role` context flag exposed to JS for differentiated 403 toasts.
+- **[video.html](app/templates/video.html)** — JS 403 handlers now distinguish "PAID on catalog" from "FREE needs upgrade" using `viewerRole`:
+  - FREE → "⭐ ... is a paid feature. Upgrade your plan..."
+  - PAID on catalog → "🔒 Only the admin can ... You can ... on videos you uploaded."
+
+### 🧪 Tests (4 new)
+
+- **`tests/test_videos.py:test_transcribe_paid_on_others_video_gets_403`** — PAID hits admin's catalog video → 403.
+- **`tests/test_videos.py:test_transcribe_paid_on_own_video_succeeds`** — PAID hits their own upload → 202.
+- **`tests/test_videos.py:test_transcribe_admin_can_transcribe_any_video`** — ADMIN hits admin's catalog video → 202.
+- **`tests/test_generation.py:test_generate_*`** — parallel trio for the generate endpoint.
+
+### 📋 Verified
+
+- **Full suite**: 1258 passing (up from 1252, +6 new tests across transcribe + generate × {PAID-on-catalog-403, PAID-on-own-202, ADMIN-anywhere-202}).
+- **Backend already had ownership checks** (from the upload-flow work) — they just weren't wired into the new role gate. Now they apply on every regen attempt.
+- **Auto-pipeline path** (PAID uploads → `_run_auto_pipeline` → transcribe → generate) already used the right uid (looked up from DB) so PAID-on-own flows work end-to-end without changes.

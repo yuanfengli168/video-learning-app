@@ -8,6 +8,7 @@ The /api/generate/{id} endpoint now runs in the background (returns
 """
 
 import io
+import uuid as uuid_module
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -264,6 +265,140 @@ def test_generate_free_user_gets_403(paid_client: TestClient):
     assert response.status_code == 403, (
         f"FREE user should be blocked from generating; got {response.status_code}: "
         f"{response.text[:200]}"
+    )
+
+
+def test_generate_paid_on_others_video_gets_403(paid_client: TestClient, admin_client: TestClient):
+    """PAID users can regenerate materials on videos they OWN, but NOT
+    catalog videos owned by another user (admin).
+
+    Day-13 update: previously PAID could regenerate any video (the
+    REGEN_MATERIALS capability alone was the gate). Now ownership
+    matters too.
+    """
+    ADMIN_UID = "uid-admin"  # admin_client fixture's uid (different from paid)
+
+    # Create admin's course + section + video + transcript via the API.
+    # The admin_client fixture sets test-user-uid to role=0 and uid-admin
+    # to role=0 in the users table; the FAKE_USER dict used by default
+    # _mock_auth is test-user-uid, but we'll patch verify_token for the
+    # admin calls so the resulting course is owned by uid-admin.
+    ADMIN_FAKE = {"uid": ADMIN_UID, "email": "admin@test.com"}
+    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
+        course_resp = admin_client.post(
+            "/api/courses",
+            json={"title": "Admin Catalog Test"},
+            headers=_auth_headers(),
+        )
+        assert course_resp.status_code == 200, course_resp.text
+        admin_course_id = course_resp.json()["course_id"]
+        section_resp = admin_client.post(
+            f"/api/courses/{admin_course_id}/sections",
+            json={"title": "Catalog"},
+            headers=_auth_headers(),
+        )
+        admin_section_id = section_resp.json()["section_id"]
+        upload_resp = admin_client.post(
+            f"/api/videos/upload/{admin_section_id}",
+            files={"file": ("admin_vid.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        assert upload_resp.status_code == 202, upload_resp.text
+        admin_video_id = upload_resp.json()["video_id"]
+
+        # Inject a transcript asset so /generate passes the
+        # "No transcript" 400 check (the auto-pipeline is suppressed).
+        from app.database import SessionLocal
+        from app.models import Asset
+        with SessionLocal() as db:
+            db.add(Asset(
+                id=str(uuid_module.uuid4()),
+                video_id=admin_video_id,
+                asset_type="transcript",
+                content='{"segments": [{"start": 0.0, "end": 1.0, "text": "Hi"}], "language": "en", "duration": 1.0}',
+            ))
+            db.commit()
+
+    # Now PAID user (paid_client fixture, uid='test-user-uid') tries to
+    # regenerate on admin's video.
+    with _mock_auth():
+        response = paid_client.post(
+            f"/api/generate/{admin_video_id}", headers=_auth_headers()
+        )
+    assert response.status_code == 403, (
+        f"PAID user should be blocked from generating admin's catalog video; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+
+def test_generate_paid_on_own_video_succeeds(paid_client: TestClient):
+    """PAID users CAN regenerate materials on videos they uploaded.
+
+    Companion test to test_generate_paid_on_others_video_gets_403.
+    """
+    video_id = _setup_video_with_transcript(paid_client)
+
+    with patch("app.routers.generation._run_generate_job"):
+        with _mock_auth():
+            response = paid_client.post(
+                f"/api/generate/{video_id}", headers=_auth_headers()
+            )
+    assert response.status_code == 202, (
+        f"PAID user should be able to generate on their OWN video; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+
+def test_generate_admin_can_generate_any_video(paid_client: TestClient, admin_client: TestClient):
+    """ADMIN can regenerate materials on any video regardless of owner.
+
+    Day-13 update: ADMIN must be able to re-generate materials on
+    their own catalog videos.
+    """
+    ADMIN_UID = "uid-admin"
+    ADMIN_FAKE = {"uid": ADMIN_UID, "email": "admin@test.com"}
+
+    # Create admin's catalog video + transcript
+    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
+        course_resp = admin_client.post(
+            "/api/courses",
+            json={"title": "Admin Catalog"},
+            headers=_auth_headers(),
+        )
+        admin_course_id = course_resp.json()["course_id"]
+        section_resp = admin_client.post(
+            f"/api/courses/{admin_course_id}/sections",
+            json={"title": "Catalog"},
+            headers=_auth_headers(),
+        )
+        admin_section_id = section_resp.json()["section_id"]
+        upload_resp = admin_client.post(
+            f"/api/videos/upload/{admin_section_id}",
+            files={"file": ("admin_vid.mp4", io.BytesIO(b"x"), "video/mp4")},
+            headers=_auth_headers(),
+        )
+        admin_video_id = upload_resp.json()["video_id"]
+
+        from app.database import SessionLocal
+        from app.models import Asset
+        with SessionLocal() as db:
+            db.add(Asset(
+                id=str(uuid_module.uuid4()),
+                video_id=admin_video_id,
+                asset_type="transcript",
+                content='{"segments": [{"start": 0.0, "end": 1.0, "text": "Hi"}], "language": "en", "duration": 1.0}',
+            ))
+            db.commit()
+
+    # Now regenerate as ADMIN
+    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
+        with patch("app.routers.generation._run_generate_job"):
+            response = admin_client.post(
+                f"/api/generate/{admin_video_id}", headers=_auth_headers()
+            )
+    assert response.status_code == 202, (
+        f"ADMIN should be able to generate on any video; "
+        f"got {response.status_code}: {response.text[:200]}"
     )
 
 
