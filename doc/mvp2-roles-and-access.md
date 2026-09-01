@@ -49,7 +49,7 @@ class Capability(str, Enum):
     CHAT_FREE = "chat_free"                  # 30 RPD via Groq
     CHAT_PAID = "chat_paid"                  # unlimited via Ollama Pro/local
     UPLOAD_VIDEO = "upload_video"            # (legacy pre-pivot)
-    REGEN_MATERIALS = "regen_materials"      # admin re-runs LLM on video
+    REGEN_MATERIALS = "regen_materials"      # admin + paid re-run LLM (transcribe + generate) on a video
     CURATE_CATALOG = "curate_catalog"        # admin adds YouTube videos
     MANAGE_USERS = "manage_users"            # change roles, view list
     VIEW_ADMIN_DASHBOARD = "view_admin_dashboard"

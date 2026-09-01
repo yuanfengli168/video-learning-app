@@ -51,9 +51,17 @@
 
 ## 2. Progress bar + ETA for long-running jobs
 
-**Current state:** Both `/api/videos/{id}/transcribe` and `/api/generate/{id}` are **synchronous and blocking** — the request hangs for 1-10 minutes while Whisper/Ollama do their thing, and the UI shows just a spinner. For a 1-hour Chinese video, the user has no idea if it's 10% done or 99% done.
+> **Stale (2026-09-01):** the "Current state" below describes MVP1 behavior.
+> As of MVP2.0 ([v2.0.4](doc/v2.0.4-release-notes.md)) both endpoints run
+> in FastAPI `BackgroundTasks` and return `202 + job` immediately; the UI
+> polls `/api/videos/{id}/status` for progress + ETA. See
+> [v2.0.4-release-notes.md](doc/v2.0.4-release-notes.md) for the
+> per-step timing implementation. Keeping the section header for
+> historical context; the rest below was the original plan.
 
-**Why valuable:** A 10-minute black box is the #1 source of "is it broken?" support tickets. With a progress bar + ETA, the user knows:
+**Original MVP1 description:** Both `/api/videos/{id}/transcribe` and `/api/generate/{id}` were **synchronous and blocking** — the request hung for 1-10 minutes while Whisper/Ollama did their thing, and the UI showed just a spinner. For a 1-hour Chinese video, the user had no idea if it was 10% done or 99% done.
+
+**Why valuable (still applies to long-running jobs):** A 10-minute black box is the #1 source of "is it broken?" support tickets. With a progress bar + ETA, the user knows:
 - The job is alive (not just hanging)
 - Roughly how much longer to wait
 - Whether to switch to a smaller Whisper model and re-run
