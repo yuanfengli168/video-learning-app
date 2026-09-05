@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.auth.admin import ensure_user_row
+from app.auth.admin import ensure_user_row, get_user_role_from_db
 from app.auth.firebase_admin import verify_token
 from app.auth.session import get_token_from_cookie
 from app.database import get_db
@@ -73,6 +73,26 @@ async def get_current_user(
     if uid:
         ensure_user_row(uid, claims.get("email"), db)
 
+    # 2026-09-05 role-enrichment fix: Firebase claims contain uid/email
+    # but NEVER a role (roles live only in the local users table). Every
+    # `user.get("role", 2)` consumer downstream (tier LLM chain in
+    # _run_generate_job, user_can_access_video gates in chat/generation/
+    # videos routers) was silently defaulting to FREE for every user.
+    # Observed live: a PAID user's generate ran the FREE chain
+    # (groq-only) and failed with "All 1 provider(s) failed" while the
+    # PAID chain (ollama → openai) would have worked. Join the DB role
+    # into the dict here so all consumers see the real tier. The
+    # require_capability dependency already does its own DB lookup
+    # (lru_cached), so this adds at most one cheap cached query per
+    # authenticated request.
+    if uid:
+        try:
+            claims["role"] = int(get_user_role_from_db(uid, db))
+        except Exception:
+            # Never fail auth because a role lookup broke — consumers'
+            # default (FREE) keeps the app usable.
+            claims.pop("role", None)
+
     return claims
 
 
@@ -112,6 +132,12 @@ async def get_current_user_optional(
     uid = claims.get("uid", "")
     if uid:
         ensure_user_row(uid, claims.get("email"), db)
+        # Same role-enrichment as get_current_user (2026-09-05) so
+        # optional-auth consumers see the real tier too.
+        try:
+            claims["role"] = int(get_user_role_from_db(uid, db))
+        except Exception:
+            claims.pop("role", None)
 
     return claims
 
