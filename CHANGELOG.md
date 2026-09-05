@@ -1198,6 +1198,29 @@ an existing if/else).
 - **Day 9**: Buffer → real hotfix day after 10-min phone smoke test caught 3 bugs. Commit `6765fad`.
 - **Days 9-14**: Real-video testing, security hardening, soft launch, public beta.
 
+## [2.1.0.6] - 2026-09-05 — MLX transcription: 4-day crash saga → subprocess isolation 🚀
+
+🐛 **Every `local-large-turbo` (MLX Whisper) transcribe killed a gunicorn worker with SIGABRT ("Python quit unexpectedly"), or intermittently failed with `[metal::Device] XPC_ERROR_CONNECTION_INVALID`.** Over 09-03→09-05 four stacked issues were uncovered and fixed one by one. Full root-cause chain in [`doc/mlx-fork-crash-postmortem.md`](doc/mlx-fork-crash-postmortem.md).
+
+**The four stacked root causes:**
+1. **Silent pip failure** — `mlx-whisper` was missing from the venv (no Py3.14 wheel at venv-creation time; `setup.sh`'s `pip install -q | tail -1` swallowed it). Reinstalled + full `pip install -r requirements.txt` run.
+2. **`huggingface.co` DNS poisoning** — a stale VPN left system DNS (114DNS/AliDNS) answering HF with fake IPs, so model downloads hung forever with no job error. Stopped the stale VPN; **all 5 whisper models now pre-cached** (transcription never contacts HF).
+3. **MLX + gunicorn fork-safety SIGABRT** (the big one) — MLX works fine in fresh processes on Python 3.14, but gunicorn workers are forked children (`preload_app=True`); forking ffmpeg for language detection while Metal/MLX state is live trips macOS's fork-safety abort. **A laptop restart does NOT fix it.**
+4. **Stale-code gotcha** — after the fix was written, the pre-09:59 master kept serving old preloaded code; a `restart.sh` was required for it to take effect.
+
+### 🔧 Changed
+
+- **`scripts/mlx_transcribe_worker.py` (NEW)** — standalone MLX transcriber subprocess: CLI in (`path`, `--model`, `--language`, `--initial-prompt`), JSON out on stdout. Owns the anti-drift kwargs (`condition_on_previous_text=False`, `compression_ratio_threshold=1.8`).
+- **`app/services/transcription.py`** — `transcribe_with_backend()` mlx branch now **spawns the worker as a subprocess** instead of importing `mlx_whisper` in-process. Metal/GPU state lives and dies entirely in the child process; a crash there can never take down gunicorn, and the fork-safety abort can't happen (the worker is a fresh `exec`, not a fork-with-Metal-state). `detect_audio_language()` now **always uses CPU `tiny`** (75 MB, cached, Metal-free) instead of MLX turbo — detection only needs the language token.
+- **`tests/test_whisper_picker.py`** — the 3 mlx-path tests assert the new subprocess contract (mock `subprocess.run`, verify CLI argv + JSON parsing). 43/43 passing.
+- **`scripts/fix_stuck_transcribe.py` (NEW)** — ops tool: marks `'transcribing'` rows stuck past a threshold (default 15 min) as `error` with a clear message. Dry-run by default, `--apply` to write.
+- **`scripts/install_local_whisper_model.py` (NEW)** — offline installer: wires manually-downloaded model files into the HF cache for machines where HF is unreachable.
+
+### 📋 Verified
+
+- **Live test**: 30-min "Call with Hugh" video — CPU-tiny language detection (~10s) → MLX turbo transcription (~2 min) → 27k-char transcript saved, transcribe job `completed`. (Generate step needed Ollama restarted post-reboot — see postmortem §3.1.)
+- **Test suite**: `test_whisper_picker.py` 43/43.
+
 ## [2.1.0.5] - 2026-08-29 — Silent BackgroundTask failure on stuck `'generating'`
 
 🐛 **A fresh upload or "Retry all failed" click would leave a video stuck at `status='generating'` forever, with no error in the `events` table and 0% CPU on the gunicorn workers.** First encountered during the DIY catalog-curation smoke test (a Rick Astley YouTube submission). Root cause: two call sites passed `video_id` only to `_run_generate_job(video_id, user_id, user_role)`. FastAPI `BackgroundTasks` silently swallows the resulting `TypeError`. The original test mocks (`fake_worker(video_id)`) matched the buggy 1-arg shape, so CI never noticed.

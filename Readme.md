@@ -35,7 +35,7 @@ See [`doc/HowToStart.md`](doc/HowToStart.md) for the full guide (troubleshooting
 *   **Backend:** FastAPI (Python 3.14)
 *   **Frontend:** Jinja2 templates + vanilla JS + Tailwind CSS (dark/light themes, responsive for Desktop & Mobile)
 *   **Database:** SQLAlchemy 2.0 ORM with SQLite (local). PostgreSQL + Alembic migration target is queued for MVP2.0.1 wave 3 (#10).
-*   **AI Models:** Faster-Whisper (Transcription, 4 model sizes), Ollama (LLM processing via `glm-5.2:cloud`)
+*   **AI Models:** Faster-Whisper (CPU transcription, 4 model sizes) + MLX Whisper Large V3 Turbo (Apple-Silicon GPU transcription, runs in an isolated subprocess — see [`doc/mlx-fork-crash-postmortem.md`](doc/mlx-fork-crash-postmortem.md)), Ollama (LLM processing via `glm-5.2:cloud`)
 *   **Authentication:** AuthKit Firebase login UI + Firebase Admin SDK (backend token verification) + httpOnly session cookies
 
 ## Features
@@ -46,7 +46,7 @@ See [`doc/HowToStart.md`](doc/HowToStart.md) for the full guide (troubleshooting
 *   **Responsive layout:** The video page works on mobile, tablet, and desktop. The main content uses `min-w-0` so flex children can shrink below their intrinsic width (preventing video overflow on small screens). The transcript header (title + controls) stacks vertically on mobile and sits side-by-side at sm+. Two-column split (60/40) activates at the `lg` breakpoint.
 *   **Interactive Chat:** Click "Teach me real-world usage" on a flashcard to open a chatroom where the AI teaches real-world examples. Chat history is persisted.
 *   **Transcript Viewer:** Timestamped transcript with click-to-seek video player integration, keyword search with live highlighting, and prev/next match navigation.
-*   **Whisper Model Selection:** Choose between `tiny`, `base`, `small`, `medium` on the web UI. Models auto-download.
+*   **Whisper Model Selection:** Choose between `tiny`, `base`, `small`, `medium` (CPU) plus the recommended **MLX Whisper Large V3 Turbo** smart pick (Apple Silicon) on the web UI. Models auto-download on first use.
 *   **Session-based Auth:** Firebase ID tokens are exchanged for httpOnly session cookies — no tokens in JavaScript.
 
 ## Quick Start
@@ -67,7 +67,7 @@ uvicorn app.main:app --reload   # http://localhost:8000
     ```
 *   **FFmpeg** for audio extraction (`brew install ffmpeg`)
 *   **Firebase project** with Google + Email/Password auth enabled (see `doc/handover.md` for setup). **Important:** add `localhost` to your Firebase project's **Authentication → Settings → Authorized Domains** before testing Google sign-in, otherwise the popup will fail with a domain-not-authorized error.
-*   **(Apple Silicon only, optional)** `pip install mlx-whisper` for the 5-10x faster MLX Whisper Large V3 Turbo backend. Without it, the app falls back to `faster-whisper` `base` (CPU, slower but still works). See `doc/MVP2.0-Status.md` §19 for the smart-pick details.
+*   **(Apple Silicon)** `mlx-whisper` ships in `requirements.txt` (behind a `darwin+arm64` marker) for the 5-10x faster MLX Whisper Large V3 Turbo backend. Transcription with it runs in an **isolated subprocess** (`scripts/mlx_transcribe_worker.py`) — running MLX inside gunicorn workers crashes them (macOS fork-safety abort; see [`doc/mlx-fork-crash-postmortem.md`](doc/mlx-fork-crash-postmortem.md)). Whisper models are pulled from Hugging Face on first use — pre-cache them once on a clean network (see the postmortem's model inventory). Without MLX, the app falls back to `faster-whisper` `base` (CPU, slower but still works).
 
 ## Testing
 ```bash
