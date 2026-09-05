@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE — prune_events.py (nightly 00:30, 30 min after backup-daily)
+  Do not load directly. Run scripts/install-launchdaemon.sh which patches
+  the script path to the runtime location and bootstrap-loads it into
+  the system launchd domain (runs as root — same TCC rationale as the
+  backup jobs: the events DB lives on /Volumes/Storage-Fast-NVMe).
+
+  Retention policy (2026-09-05): events older than 90 days are
+  exported to /Volumes/Storage-Backup-HDD/video-learning-app-data/
+  events-archive-YYYY-MM.jsonl (kept forever), then deleted from the
+  live table. Archive-first: if the HDD isn't mounted, the script
+  prunes NOTHING and exits 0.
+
+  Runs at 00:30 — after backup-daily's 00:00 snapshot, so the nightly
+  DB snapshot also captures anything being pruned that night.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.videoapp.prune-events</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jackyli/Desktop/Githubs/video-learning-app/venv/bin/python</string>
+        <string>__RUNTIME_DIR__/prune_events.py</string>
+        <string>--apply</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>0</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/video-app-backup.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/video-app-backup.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- HOME must be set so $HOME/Library/Logs/... resolves. launchd
+         doesn't set HOME for system-domain jobs by default. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jackyli</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

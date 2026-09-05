@@ -34,6 +34,7 @@ SYSTEM_PLISTS=(
     "com.videoapp.backup-monthly"
     "com.videoapp.backup-verify"
     "com.videoapp.backup-probe"
+    "com.videoapp.prune-events"
 )
 
 # Same labels that we previously installed in the user domain — we unload
