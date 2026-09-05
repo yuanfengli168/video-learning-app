@@ -135,6 +135,17 @@
             } catch (e) {
                 console.error('Failed to create session:', e);
             }
+            // 2026-09-05 telemetry: the session cookie is set now, so
+            // the beacon's isSignedIn() check passes. sendBeacon-style
+            // flush fires on navigation (visibilitychange handler),
+            // but force an immediate flush too so the login event
+            // lands even if the user closes the tab mid-redirect.
+            try {
+                if (window.Telemetry) {
+                    Telemetry.track('ui.login');
+                    Telemetry.flush();
+                }
+            } catch (te) { /* telemetry is best-effort */ }
             window.location.href = '/';
         }
     });

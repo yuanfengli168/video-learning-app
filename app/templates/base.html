@@ -34,6 +34,10 @@
        Only used by video.html today; safe to include globally because
        the .is-follow-active rules are inert without the JS component. #}
     <link rel="stylesheet" href="/static/css/transcript-follow.css">
+    {# UI telemetry beacon (2026-09-05) — batches play/pause/seek/click
+       events to POST /api/telemetry. No-ops when signed out (server
+       401s anonymous writes anyway). See app/static/js/telemetry.js. #}
+    <script src="/static/js/telemetry.js"></script>
     {% block head %}{% endblock %}
 </head>
 <body class="h-full bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 flex">
@@ -127,6 +131,12 @@
                     <svg class="w-5 h-5 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
                 </button>
             </div>
+            {# 2026-09-05 privacy notice — required disclosure for the
+               UI telemetry beacon (doc/roles-tiers-cheatsheet.md §4).
+               Small, always visible, plain words. #}
+            <p class="px-4 pb-2 text-[10px] leading-relaxed text-gray-400 dark:text-gray-500">
+                We collect basic usage analytics (pages viewed, video plays, button clicks) to improve the app.
+            </p>
         </div>
     </aside>
 

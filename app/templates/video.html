@@ -487,6 +487,15 @@
 <script src="/static/js/transcript-follow.js" defer></script>
 <script>
 const videoId = '{{ video.id }}';
+// 2026-09-05 telemetry: expose the video id to the beacon + wire the
+// player events (native <video> backend; the YouTube iframe backend
+// hooks in via yt_player.js's onStateChange telemetry block).
+if (window.Telemetry) {
+    window.__telemetryVideoId = videoId;
+    document.addEventListener('DOMContentLoaded', () => {
+        Telemetry.wireVideoElement(videoId);
+    });
+}
 // MVP2.1.0.1: expose the video's status to JS so client-side templates
 // (e.g. the Re-Upload button rendered by refreshLastRun() after a
 // successful plugin run) can decide whether to enable the swap action.
@@ -552,6 +561,8 @@ function switchTab(tab) {
     document.getElementById('content-' + tab).classList.remove('hidden');
     const activeBtn = document.getElementById('tab-' + tab);
     activeBtn.classList.add('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
+    // 2026-09-05 telemetry: tab click → ui.materials event
+    if (window.Telemetry) Telemetry.track('ui.materials', videoId, { tab: tab });
     activeBtn.classList.remove('border-transparent', 'text-gray-500');
 
     // Load content if not cached
@@ -938,6 +949,8 @@ async function transcribeVideo() {
     const language = document.getElementById('whisper-language').value;
     const btn = document.getElementById('transcribe-btn');
     const container = document.getElementById('transcript-container');
+    // 2026-09-05 telemetry: transcribe click → ui.actions event
+    if (window.Telemetry) Telemetry.track('ui.actions', videoId, { action: 'transcribe', model: modelName });
 
     // MVP3.0 #2b: if the user is about to re-transcribe and
     // there is already a transcript, confirm before clobbering
@@ -986,6 +999,8 @@ async function generateMaterials() {
     const token = await getAuthToken();
     const btn = event.target;
     const summary = document.getElementById('content-summary');
+    // 2026-09-05 telemetry: generate click → ui.actions event
+    if (window.Telemetry) Telemetry.track('ui.actions', videoId, { action: 'generate' });
 
     btn.disabled = true;
     btn.textContent = '⏳ Starting…';
@@ -2039,6 +2054,8 @@ async function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const content = input.value.trim();
     if (!content || !currentChatSessionId) return;
+    // 2026-09-05 telemetry: chat message sent → ui.chat event
+    if (window.Telemetry) Telemetry.track('ui.chat', videoId);
 
     // Append user message
     const messagesDiv = document.getElementById('chat-messages');

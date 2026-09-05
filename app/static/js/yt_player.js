@@ -160,6 +160,20 @@
                 },
                 onStateChange: (event) => {
                     // 1 = playing, 2 = paused, 0 = ended
+                    // 2026-09-05 telemetry: forward player state to the
+                    // beacon (batches → POST /api/telemetry). Wrapped in
+                    // try/catch — telemetry must never break playback.
+                    // Only fires when Telemetry is on the page (video
+                    // pages); absent on other pages = no-op.
+                    try {
+                        if (global.Telemetry && window.__telemetryVideoId) {
+                            var s = event.data;
+                            var t = Math.round((ytPlayer.getCurrentTime() || 0) * 1000);
+                            if (s === 1) global.Telemetry.track('ui.player', window.__telemetryVideoId, { action: 'play', position_ms: t });
+                            else if (s === 2) global.Telemetry.track('ui.player', window.__telemetryVideoId, { action: 'pause', position_ms: t });
+                            else if (s === 0) global.Telemetry.track('ui.player', window.__telemetryVideoId, { action: 'ended', position_ms: t });
+                        }
+                    } catch (te) { /* telemetry is best-effort */ }
                     // We don't emit a 'statechange' event today; the
                     // transcript-follow component only needs currentTime.
                     // If a future caller needs state, add it here.
