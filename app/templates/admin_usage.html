@@ -18,7 +18,8 @@
 
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-4">
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
-            Limits are <strong>50 requests / 7h</strong> and <strong>100 requests / week</strong> (Mon–Sun inclusive).
+            <strong>PAID/ADMIN:</strong> 50 requests / 7h (rolling) + 100 requests / week (Mon–Sun UTC) — the Ollama chain.
+            <strong>FREE:</strong> 15 requests / day (Groq chain, resets midnight UTC).
             Usage is display-only for the soft launch — no blocking yet.
         </p>
         {% if rows %}
@@ -44,6 +45,8 @@
                             {% else %}<span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">FREE</span>
                             {% endif %}
                         </td>
+                        {% if r.role in (0, 1) %}
+                        {# PAID/ADMIN: the 50/7h + 100/wk Ollama bars #}
                         <td class="py-2 pr-4 font-mono">{{ r.used_7h }} / 50</td>
                         <td class="py-2 pr-4 w-32">
                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
@@ -56,6 +59,16 @@
                                 <div class="h-2 rounded-full {{ 'bg-indigo-600' if r.pct_week < 80 else ('bg-amber-500' if r.pct_week < 100 else 'bg-red-500') }}" style="width: {{ r.pct_week }}%"></div>
                             </div>
                         </td>
+                        {% else %}
+                        {# FREE: the 15/day Groq claim — different rule, own bar #}
+                        <td class="py-2 pr-4 font-mono" colspan="2">{{ r.used_day }} / 15 today</td>
+                        <td class="py-2 pr-4 font-mono text-gray-400">—</td>
+                        <td class="py-2 w-32">
+                            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                                <div class="h-2 rounded-full {{ 'bg-indigo-600' if r.pct_day < 80 else ('bg-amber-500' if r.pct_day < 100 else 'bg-red-500') }}" style="width: {{ r.pct_day }}%"></div>
+                            </div>
+                        </td>
+                        {% endif %}
                     </tr>
                     {% endfor %}
                 </tbody>

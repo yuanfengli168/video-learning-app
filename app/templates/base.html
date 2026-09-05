@@ -35,8 +35,10 @@
        the .is-follow-active rules are inert without the JS component. #}
     <link rel="stylesheet" href="/static/css/transcript-follow.css">
     {# UI telemetry beacon (2026-09-05) — batches play/pause/seek/click
-       events to POST /api/telemetry. No-ops when signed out (server
-       401s anonymous writes anyway). See app/static/js/telemetry.js. #}
+       events to POST /api/telemetry. Signed-in state comes from this
+       data attribute (the fb_token cookie is httpOnly, so JS can't
+       read it — document.cookie would always report signed-out). #}
+    {% if user %}<meta name="app-signed-in" content="true">{% endif %}
     <script src="/static/js/telemetry.js"></script>
     {% block head %}{% endblock %}
 </head>

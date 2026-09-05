@@ -135,13 +135,19 @@
             } catch (e) {
                 console.error('Failed to create session:', e);
             }
-            // 2026-09-05 telemetry: the session cookie is set now, so
-            // the beacon's isSignedIn() check passes. sendBeacon-style
-            // flush fires on navigation (visibilitychange handler),
-            // but force an immediate flush too so the login event
-            // lands even if the user closes the tab mid-redirect.
+            // 2026-09-05 telemetry: the session cookie is set now, but
+            // this page rendered BEFORE sign-in, so the app-signed-in
+            // meta tag is absent and the beacon's isSignedIn() would
+            // drop the event. Inject the flag first, then track+flush.
             try {
                 if (window.Telemetry) {
+                    var meta = document.querySelector('meta[name="app-signed-in"]');
+                    if (!meta) {
+                        meta = document.createElement('meta');
+                        meta.name = 'app-signed-in';
+                        document.head.appendChild(meta);
+                    }
+                    meta.content = 'true';
                     Telemetry.track('ui.login');
                     Telemetry.flush();
                 }

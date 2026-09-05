@@ -128,9 +128,22 @@
                     <span id="language-detected-label" class="hidden text-xs text-gray-500 dark:text-gray-400" title="Language auto-detected from the first 10 min of audio. Change the dropdown to override and click Transcribe to re-run.">
                         Detected: <span id="language-detected-code"></span>
                     </span>
+                    {# 2026-09-05 UX fix: unauthorized users saw a clickable
+                       Transcribe button and only found out via a 403 error
+                       AFTER clicking. Grey it out up-front with the reason:
+                       FREE → upgrade hint; PAID on a catalog video →
+                       "not allowed on admin-curated videos" (they can only
+                       regen their OWN uploads, per e2f4aa8). The
+                       can_regen_materials flag is computed in _ctx. #}
+                    {% if can_regen_materials %}
                     <button onclick="transcribeVideo()" id="transcribe-btn" class="px-3 py-1 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
                         🎙️ Transcribe
                     </button>
+                    {% else %}
+                    <span id="transcribe-btn" title="{{ 'Transcribing is not allowed on admin-curated videos — you can regenerate materials on videos you uploaded yourself.' if user_role == 'PAID' else 'Your plan doesn\'t include transcription. Upgrade to regenerate materials.' }}" class="px-3 py-1 bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-sm rounded-lg cursor-not-allowed inline-block">
+                        🎙️ Transcribe
+                    </span>
+                    {% endif %}
                     <input type="text" id="transcript-search" placeholder="Search..." class="px-3 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700" onkeyup="searchTranscript()">
                     <!-- Download transcript (MVP2.0) — hidden until the
                          transcript actually loads. Uses a native
@@ -243,14 +256,28 @@
                 <div id="content-summary" class="prose dark:prose-invert max-w-none text-sm">
                     {% if summary_content %}
                         <div class="prose dark:prose-invert max-w-none text-sm">{{ summary_content | md }}</div>
+                        {# 2026-09-05: greyed Regenerate when the tier forbids
+                           it (same can_regen_materials gate as Transcribe). #}
+                        {% if can_regen_materials %}
                         <button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">
                             🔄 Regenerate
                         </button>
+                        {% else %}
+                        <span title="{{ 'Regenerating is not allowed on admin-curated videos — you can regenerate materials on videos you uploaded yourself.' if user_role == 'PAID' else 'Your plan doesn\'t include regenerating materials. Upgrade to unlock it.' }}" class="mt-3 inline-block px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 rounded-lg cursor-not-allowed text-xs">
+                            🔄 Regenerate
+                        </span>
+                        {% endif %}
                     {% else %}
                         <p class="text-gray-400">Click "Generate" to create learning materials.</p>
+                        {% if can_regen_materials %}
                         <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
                             ⚡ Generate Materials
                         </button>
+                        {% else %}
+                        <span title="{{ 'Generating is not allowed on admin-curated videos — you can generate materials on videos you uploaded yourself.' if user_role == 'PAID' else 'Your plan doesn\'t include generating materials. Upgrade to unlock it.' }}" class="mt-3 inline-block px-4 py-2 bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded-lg cursor-not-allowed text-sm">
+                            ⚡ Generate Materials
+                        </span>
+                        {% endif %}
                     {% endif %}
                 </div>
 

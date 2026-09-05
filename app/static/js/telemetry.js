@@ -39,10 +39,13 @@
 
     function isSignedIn() {
         try {
-            // Session cookie (httpOnly — we can't read it, but its
-            // presence pairs with the server's session; cookie name
-            // matches middleware_session.py's SESSION_COOKIE_NAME).
-            return document.cookie.indexOf('fb_token=') !== -1;
+            // Server-rendered flag in <head> (base.html). The fb_token
+            // session cookie is httpOnly by design (auth/session.py),
+            // so document.cookie can't see it — reading it there was
+            // a bug that made the beacon no-op for EVERY signed-in
+            // user (found 2026-09-05 during live analytics testing).
+            var meta = document.querySelector('meta[name="app-signed-in"]');
+            return meta !== null && meta.content === 'true';
         } catch (e) {
             return false;
         }

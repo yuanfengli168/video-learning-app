@@ -205,6 +205,11 @@ def get_all_users_usage(db: Session) -> list[dict[str, Any]]:
       last_7h: rolling 7-hour window
       week: fixed Mon 00:00:00 → Sun 23:59:59 UTC, inclusive
 
+    Tier-aware (2026-09-05 bugfix): PAID/ADMIN rows show the 50/7h +
+    100/wk bars (their Ollama chain consumption). FREE rows show the
+    15/day Groq claim (today's count) — the same rule their own
+    /usage page uses — instead of being mislabeled with paid bars.
+
     One query per window (not per user) keeps this O(1) round-trips
     regardless of user count.
     """
@@ -216,6 +221,11 @@ def get_all_users_usage(db: Session) -> list[dict[str, Any]]:
                    AND e2.source = 'services.llm_providers'
                    AND e2.message LIKE 'LLM call succeeded via %'
                    AND e2.ts >= datetime('now', '-7 hours')) AS used_7h,
+               (SELECT COUNT(*) FROM events e3
+                 WHERE e3.user_id = e.user_id
+                   AND e3.source = 'services.llm_providers'
+                   AND e3.message LIKE 'LLM call succeeded via %'
+                   AND e3.ts >= datetime('now', 'start of day')) AS used_day,
                COUNT(*) AS used_week
         FROM events e
         JOIN users u ON u.user_id = e.user_id
@@ -237,19 +247,34 @@ def get_all_users_usage(db: Session) -> list[dict[str, Any]]:
 
     result = []
     for r in rows:
+        # 2026-09-05 bugfix: `int(r[2] or 2)` turned ADMIN (role=0)
+        # into FREE (2) — 0 is falsy in Python's `or`. Found live:
+        # the admin account rendered with a FREE badge on the usage
+        # monitor. is-not-None is the correct guard.
+        role = int(r[2]) if r[2] is not None else 2
         used_7h = int(r[3] or 0)
-        used_week = int(r[4] or 0)
+        used_day = int(r[4] or 0)
+        used_week = int(r[5] or 0)
+
+        is_paid_or_admin = role in (0, 1)
+
         result.append(
             {
                 "user_id": r[0],
                 "email": r[1] or "(no email)",
-                "role": int(r[2] or 2),
+                "role": role,
                 "used_7h": used_7h,
                 "used_week": used_week,
-                # 50/7h + 100/wk are the PAID display limits (2026-09-05
-                # product decision; admins share the same bars).
-                "pct_7h": min(100, round(used_7h / 50 * 100)) if used_7h else 0,
-                "pct_week": min(100, round(used_week / 100 * 100)) if used_week else 0,
+                "used_day": used_day,
+                # 50/7h + 100/wk are the PAID display limits; FREE
+                # shows the 15/day Groq claim instead (2026-09-05
+                # product decision + bugfix for tier-aware bars).
+                "pct_7h": min(100, round(used_7h / 50 * 100)) if is_paid_or_admin else 0,
+                "pct_week": min(100, round(used_week / 100 * 100)) if is_paid_or_admin else 0,
+                "pct_day": min(100, round(used_day / 15 * 100)) if not is_paid_or_admin else 0,
             }
         )
+    # Sort: paid-tier users first (they're the ones the limits apply
+    # to), then by weekly consumption descending.
+    result.sort(key=lambda x: (x["role"] not in (0, 1), -x["used_week"]))
     return result
