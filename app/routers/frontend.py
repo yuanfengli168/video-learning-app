@@ -440,6 +440,32 @@ async def usage_page(
     return templates.TemplateResponse(request, "usage.html", ctx)
 
 
+@router.get("/activity", response_class=HTMLResponse)
+async def activity_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(
+        require_capability(Capability.CHAT_PAID)
+    ),
+) -> HTMLResponse:
+    """Personal activity page — the signed-in user's own event feed.
+
+    2026-09-05 (usage+analytics plan commit 5/6). PAID+ feature
+    (gated on CHAT_PAID — FREE users get the upgrade prompt via the
+    403 detail; the link is hidden for them in the sidebar).
+    Strictly the caller's own events: the service takes the
+    authenticated uid, never a query param. Summary cards (plays /
+    videos watched / chats / AI requests) + the recent-event feed.
+    """
+    from app.services.activity import get_user_activity
+
+    uid = user.get("uid", "")
+    activity = get_user_activity(db, uid)
+    return templates.TemplateResponse(
+        request, "activity.html", _ctx(request, user, db=db, activity=activity)
+    )
+
+
 @router.get("/chat-history", response_class=HTMLResponse)
 async def chat_history_page(
     request: Request,

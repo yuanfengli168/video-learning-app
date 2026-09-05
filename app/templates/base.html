@@ -97,6 +97,13 @@
                 <a href="/usage" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
                     <span class="mr-3">📊</span> Usage
                 </a>
+                {# 2026-09-05 personal activity feed — PAID+ capability
+                   (CHAT_PAID); hidden for FREE per the tier matrix #}
+                {% if "chat_paid" in user_capabilities %}
+                <a href="/activity" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                    <span class="mr-3">🕒</span> Your Activity
+                </a>
+                {% endif %}
             </div>
             {% if is_admin %}
             <div class="pt-2 space-y-1">

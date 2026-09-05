@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Your Activity — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-1">Your Activity</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-8">
+        Everything you've watched, clicked, and asked — your own data, only visible to you.
+    </p>
+
+    {# ── Summary cards ── #}
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-2xl mb-1">▶️</div>
+            <div class="text-2xl font-bold text-gray-900 dark:text-white">{{ activity.summary.plays }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">Video plays</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-2xl mb-1">🎬</div>
+            <div class="text-2xl font-bold text-gray-900 dark:text-white">{{ activity.summary.videos_watched }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">Videos watched</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-2xl mb-1">💬</div>
+            <div class="text-2xl font-bold text-gray-900 dark:text-white">{{ activity.summary.chats }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">Chat messages</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-2xl mb-1">🤖</div>
+            <div class="text-2xl font-bold text-gray-900 dark:text-white">{{ activity.summary.llm_requests }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">AI requests</div>
+        </div>
+    </div>
+
+    {# ── Recent activity feed ── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Recent activity</h2>
+        {% if activity.recent %}
+        <ul class="divide-y divide-gray-100 dark:divide-gray-700">
+            {% for e in activity.recent %}
+            <li class="py-2 flex items-start gap-3">
+                {% if e.source == 'ui.player' %}<span class="text-lg">▶️</span>
+                {% elif e.source == 'ui.chat' %}<span class="text-lg">💬</span>
+                {% elif e.source == 'ui.materials' %}<span class="text-lg">📑</span>
+                {% elif e.source == 'ui.actions' %}<span class="text-lg">⚙️</span>
+                {% elif e.source == 'ui.login' %}<span class="text-lg">🔑</span>
+                {% elif e.source == 'services.llm_providers' %}<span class="text-lg">🤖</span>
+                {% else %}<span class="text-lg">•</span>
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm text-gray-800 dark:text-gray-200 truncate">
+                        {{ e.message }}{% if e.video_title %} — <span class="text-gray-500 dark:text-gray-400">{{ e.video_title }}</span>{% endif %}
+                    </p>
+                    <p class="text-xs text-gray-400">{{ e.ts }} UTC</p>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-sm text-gray-400">No activity recorded yet — watch a video or open the materials to see it here.</p>
+        {% endif %}
+    </div>
+
+    <p class="text-xs text-gray-400 mt-4">
+        This page shows your own events only. Quota status lives on the <a class="underline" href="/usage">Usage</a> page.
+    </p>
+</div>
+{% endblock %}
