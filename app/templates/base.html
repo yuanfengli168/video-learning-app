@@ -92,6 +92,11 @@
                 <a href="/chat-history" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
                     <span class="mr-3">💬</span> Chat History
                 </a>
+                {# 2026-09-05 usage page — free/paid quota display (see
+                   app/services/usage.py + doc/roles-tiers-cheatsheet.md) #}
+                <a href="/usage" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                    <span class="mr-3">📊</span> Usage
+                </a>
             </div>
             {% if is_admin %}
             <div class="pt-2 space-y-1">

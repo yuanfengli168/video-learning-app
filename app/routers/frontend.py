@@ -403,6 +403,43 @@ async def login_page(
     )
 
 
+@router.get("/usage", response_class=HTMLResponse)
+async def usage_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(get_current_user_optional),
+) -> HTMLResponse:
+    """Usage page — how much of the user's AI quota they've consumed.
+
+    2026-09-05 (usage+analytics plan commit 3/6):
+      - FREE: plain-words Groq daily claim (15/day, resets midnight UTC).
+      - PAID: two bars — 50 requests per rolling 7h window + 100 per
+        fixed Mon–Sun week (display-only for the 9/9 soft launch; the
+        per-worker in-memory limiter still does the actual enforcement).
+    Counts come from the events table (worker-independent truth — see
+    app/services/usage.py for why the in-memory trackers can't be
+    trusted across gunicorn workers).
+    """
+    if not user:
+        # Not signed in → login (same pattern as chat-history).
+        response = templates.TemplateResponse(
+            request,
+            "login.html",
+            _ctx(request, None, db=db),
+        )
+        response.headers["Location"] = "/login?next=/usage"
+        return response
+
+    from app.services.usage import get_user_usage
+
+    uid = user.get("uid", "")
+    role = int(user.get("role", 2))  # enrichment guarantees the key;
+    # the default matches the pre-enrichment behaviour (FREE).
+    usage = get_user_usage(db, uid, role)
+    ctx = _ctx(request, user, db=db, usage=usage)
+    return templates.TemplateResponse(request, "usage.html", ctx)
+
+
 @router.get("/chat-history", response_class=HTMLResponse)
 async def chat_history_page(
     request: Request,

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Usage — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-1">Your Usage</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-8">
+        How much of your AI quota you've used. Counts every completed request (summaries, chat, quizzes, flashcards).
+    </p>
+
+    {% if usage.tier == 'free' %}
+    {# ── FREE tier: plain-words Groq claim (user decision 2026-09-05) ── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Daily requests</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+            You've made <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ usage.day.used }} of {{ usage.day.limit }}</span>
+            requests today. The free plan is powered by <strong>Groq</strong> — a fast, free AI engine with generous
+            limits for everyday learning. Your daily allowance resets at midnight (UTC).
+        </p>
+        <div class="mt-4">
+            {% set pct = (usage.day.used / usage.day.limit * 100) | round | int %}
+            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+                <div class="bg-indigo-600 h-2.5 rounded-full" style="width: {{ [pct, 100] | min }}%"></div>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">{{ usage.day.used }} / {{ usage.day.limit }} used today</p>
+        </div>
+        <p class="mt-4 text-xs text-gray-400 dark:text-gray-500">
+            Need more? Upgrade to the paid plan for higher limits and priority AI.
+        </p>
+    </div>
+    {% else %}
+    {# ── PAID tier: the two bars (50 per rolling 7h, 100 per Mon–Sun week) ── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Last 7 hours</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
+            You've used <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ usage.last7h.used }} of {{ usage.last7h.limit }}</span>
+            requests in the current 7-hour window. The window slides forward continuously — old requests roll off as new time passes.
+        </p>
+        {% set pct7h = (usage.last7h.used / usage.last7h.limit * 100) | round | int %}
+        <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+            <div class="h-3 rounded-full {{ 'bg-indigo-600' if pct7h < 80 else ('bg-amber-500' if pct7h < 100 else 'bg-red-500') }}"
+                 style="width: {{ [pct7h, 100] | min }}%"></div>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">{{ usage.last7h.used }} / {{ usage.last7h.limit }} used</p>
+    </div>
+
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">This week</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
+            You've used <span class="font-semibold text-indigo-600 dark:text-indigo-400">{{ usage.week.used }} of {{ usage.week.limit }}</span>
+            requests this week. The week runs <strong>Monday through Sunday</strong> and resets every Monday at midnight (UTC).
+        </p>
+        {% set pctw = (usage.week.used / usage.week.limit * 100) | round | int %}
+        <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+            <div class="h-3 rounded-full {{ 'bg-indigo-600' if pctw < 80 else ('bg-amber-500' if pctw < 100 else 'bg-red-500') }}"
+                 style="width: {{ [pctw, 100] | min }}%"></div>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">
+            {{ usage.week.used }} / {{ usage.week.limit }} used
+            {% if usage.week.starts %}· week of {{ usage.week.starts[:10] }}{% endif %}
+        </p>
+    </div>
+    {% endif %}
+
+    <p class="text-xs text-gray-400 dark:text-gray-500">
+        Usage counts completed AI requests (transcript-based material generation and chat). Failed requests don't count against you.
+        Questions about your usage? Reach out on our Discord.
+    </p>
+</div>
+{% endblock %}
