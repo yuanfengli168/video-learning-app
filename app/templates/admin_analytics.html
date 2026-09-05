@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Analytics — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Analytics</h1>
+            <p class="text-sm text-gray-500 dark:text-gray-400">User activity over the last {{ stats.window_days }} days</p>
+        </div>
+        <a href="/admin/usage" class="text-sm px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">
+            Per-user usage →
+        </a>
+    </div>
+
+    {# ── Summary counters ── #}
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        {% macro stat(label, value, icon) %}
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-2xl mb-1">{{ icon }}</div>
+            <div class="text-2xl font-bold text-gray-900 dark:text-white">{{ value }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">{{ label }}</div>
+        </div>
+        {% endmacro %}
+        {{ stat('Unique users', stats.unique_visitors, '👤') }}
+        {{ stat('Logins', stats.logins, '🔑') }}
+        {{ stat('Video plays', stats.video_plays, '▶️') }}
+        {{ stat('LLM calls (ok)', stats.llm_calls, '🤖') }}
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+        {% macro stat2(label, value, icon) %}
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-2xl mb-1">{{ icon }}</div>
+            <div class="text-2xl font-bold text-gray-900 dark:text-white">{{ value }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">{{ label }}</div>
+        </div>
+        {% endmacro %}
+        {{ stat2('Pauses', stats.video_pauses, '⏸️') }}
+        {{ stat2('Seeks', stats.video_seeks, '⏩') }}
+        {{ stat2('Chat messages', stats.chat_messages, '💬') }}
+        {{ stat2('LLM failures', stats.llm_failures, '⚠️') }}
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-lg font-semibold text-gray-900 dark:text-white">{{ stats.materials_tab_clicks }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">Materials tab clicks</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-lg font-semibold text-gray-900 dark:text-white">{{ stats.transcribe_clicks }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">Transcribe clicks</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="text-lg font-semibold text-gray-900 dark:text-white">{{ stats.generate_clicks }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">Generate clicks</div>
+        </div>
+    </div>
+
+    {# ── Daily activity mini-chart (pure CSS bars — no chart lib) ── #}
+    {% if stats.daily_activity %}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Daily activity</h2>
+        <div class="flex items-end gap-2 h-32">
+            {% set max_events = stats.daily_activity | map(attribute='events') | max %}
+            {% for d in stats.daily_activity %}
+            <div class="flex-1 flex flex-col items-center justify-end h-full" title="{{ d.day }}: {{ d.events }} events, {{ d.users }} users">
+                <div class="w-full bg-indigo-500/80 rounded-t" style="height: {{ (d.events / max_events * 100) | round(1) }}%"></div>
+                <div class="text-[9px] text-gray-400 mt-1 rotate-45 origin-left whitespace-nowrap">{{ d.day[5:] }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="grid md:grid-cols-2 gap-6 mb-8">
+        {# ── Top videos ── #}
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">Top videos</h2>
+            {% if stats.top_videos %}
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-400 uppercase">
+                        <th class="pb-2">Video</th>
+                        <th class="pb-2 text-right">Plays</th>
+                        <th class="pb-2 text-right">Chats</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                    {% for v in stats.top_videos %}
+                    <tr>
+                        <td class="py-1.5 pr-2 truncate max-w-[220px]">{{ v.title }}</td>
+                        <td class="py-1.5 text-right">{{ v.plays }}</td>
+                        <td class="py-1.5 text-right">{{ v.chats }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-sm text-gray-400">No video activity yet.</p>
+            {% endif %}
+        </div>
+
+        {# ── Top users ── #}
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">Most active users</h2>
+            {% if stats.top_users %}
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-400 uppercase">
+                        <th class="pb-2">User</th>
+                        <th class="pb-2 text-right">Events</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                    {% for u in stats.top_users %}
+                    <tr>
+                        <td class="py-1.5 pr-2 truncate max-w-[220px]">{{ u.email }}</td>
+                        <td class="py-1.5 text-right">{{ u.events }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-sm text-gray-400">No user activity yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <p class="text-xs text-gray-400">
+        Counts every event recorded by the telemetry beacon + server-side LLM audit log.
+        Raw events: <a class="underline" href="/admin/events">Audit Log</a> · per-user quota: <a class="underline" href="/admin/usage">Usage monitor</a>.
+    </p>
+</div>
+{% endblock %}

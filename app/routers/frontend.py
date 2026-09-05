@@ -619,6 +619,62 @@ async def admin_events_page(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# /admin/analytics + /admin/usage  (2026-09-05 — usage+analytics plan)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/admin/analytics", response_class=HTMLResponse)
+async def admin_analytics_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+    days: int = 7,
+) -> HTMLResponse:
+    """Admin analytics: UI + LLM activity dashboard.
+
+    Aggregates the telemetry beacon's ui.* events + the LLM audit log
+    into summary counters, a daily-activity bar chart, top videos,
+    and most-active users over the last `days` days (default 7).
+    See app/services/analytics.py::get_analytics_overview.
+    """
+    from app.services.analytics import get_analytics_overview
+
+    # Bounded window — no unbounded scans.
+    days = max(1, min(days, 90))
+    stats = get_analytics_overview(db, days=days)
+    return templates.TemplateResponse(
+        request,
+        "admin_analytics.html",
+        _ctx(request, user, db=db, stats=stats),
+    )
+
+
+@router.get("/admin/usage", response_class=HTMLResponse)
+async def admin_usage_monitor_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+) -> HTMLResponse:
+    """Admin per-user usage monitor.
+
+    Table of every user's LLM-request consumption in both windows:
+    rolling last-7-hours (vs 50) and fixed Mon–Sun week (vs 100) —
+    the same numbers each user sees on their own /usage page, but
+    for all users at once. Colour-coded green/amber/red so an
+    at-a-glance scan spots users at cap ("done for the week").
+    See app/services/analytics.py::get_all_users_usage.
+    """
+    from app.services.analytics import get_all_users_usage
+
+    rows = get_all_users_usage(db)
+    return templates.TemplateResponse(
+        request,
+        "admin_usage.html",
+        _ctx(request, user, db=db, rows=rows),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # /admin/backups  (Day 10 — backup health dashboard)
 # ─────────────────────────────────────────────────────────────────────────
 #
