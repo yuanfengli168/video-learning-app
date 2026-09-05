@@ -426,46 +426,40 @@ def test_transcribe_with_backend_faster_whisper_success(paid_client: TestClient,
 # path tests below.
 
 def test_transcribe_with_backend_mlx_path_calls_mlx_whisper(monkeypatch, tmp_path):
-    """The mlx-whisper path actually calls mlx_whisper.transcribe with
-    the anti-drift kwargs (condition_on_previous_text=False,
-    compression_ratio_threshold=1.8).
+    """The mlx-whisper path spawns the subprocess worker with the
+    anti-drift-equivalent CLI args and parses its JSON output.
 
-    Pre-Part-A.2 this test asserted that the mlx-whisper path raised
-    NotImplementedError (a placeholder for the follow-up commit).
-    Part A.2 actually wires up the mlx call, so this test now
-    verifies the new "mlx path dispatches correctly" behaviour.
-
-    We mock mlx_whisper.transcribe to return a fake result, then
-    assert:
+    2026-09-05 fork-safety fix: the mlx path no longer imports
+    mlx_whisper in-process (that crashed gunicorn workers with
+    SIGABRT — see transcribe_with_backend's SUBPROCESS MODE note).
+    It now runs scripts/mlx_transcribe_worker.py as a subprocess,
+    so this test mocks subprocess.run to capture the argv and
+    return a fake JSON payload, then asserts:
       1. transcribe_with_backend() does NOT raise
-      2. It calls mlx_whisper.transcribe with the model_id
-      3. The kwargs include the anti-drift params
+      2. The worker script is invoked with the right model id
+      3. The result is parsed from the worker's stdout JSON
     """
-    import sys
+    import json as _json
     import types
 
-    # Mock mlx_whisper module + transcribe function
-    fake_mlx = types.ModuleType("mlx_whisper")
-
-    def fake_transcribe(path, **kwargs):
-        return {
-            "text": "fake transcription",
-            "language": "zh",
-            "segments": [
-                {"start": 0.0, "end": 1.0, "text": "fake"},
-            ],
-        }
-
-    fake_mlx.transcribe = fake_transcribe
-    monkeypatch.setitem(sys.modules, "mlx_whisper", fake_mlx)
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
 
-    # Spy on fake_transcribe to capture the kwargs it was called with
-    called_kwargs = {}
-    def spy_transcribe(path, **kwargs):
-        called_kwargs.update(kwargs)
-        return fake_transcribe(path, **kwargs)
-    fake_mlx.transcribe = spy_transcribe
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=_json.dumps({
+                "segments": [{"start": 0.0, "end": 1.0, "text": "fake"}],
+                "language": "zh",
+                "duration": 1.0,
+            }),
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
 
     from app.services.transcription import transcribe_with_backend
     tmp_file = tmp_path / "fake.mp4"
@@ -475,39 +469,41 @@ def test_transcribe_with_backend_mlx_path_calls_mlx_whisper(monkeypatch, tmp_pat
     # 1. Should NOT raise — and should return a result
     assert "segments" in result
     assert "language" in result
-    # 2. Should have called mlx_whisper.transcribe with model_id
-    # MVP2.0.7: was 'distil-large-v3' (the local-best-and-extremely-
-    # fast choice's model). Now 'mlx-community/whisper-large-v3-turbo'
-    # (the local-large-turbo choice's model).
-    assert called_kwargs.get("path_or_hf_repo") == "mlx-community/whisper-large-v3-turbo"
-    # 3. Should include the anti-drift params
-    assert called_kwargs.get("condition_on_previous_text") is False
-    assert called_kwargs.get("compression_ratio_threshold") == 1.8
+    assert result["segments"][0]["text"] == "fake"
+    # 2. Worker spawned with the model id. The worker owns the
+    # anti-drift kwargs now (it passes condition_on_previous_text=
+    # False + compression_ratio_threshold=1.8 to mlx_whisper).
+    cmd = captured["cmd"]
+    assert "mlx_transcribe_worker.py" in cmd[1]
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1] == "mlx-community/whisper-large-v3-turbo"
+    # 3. The file path is passed positionally
+    assert str(tmp_file) in cmd
 
 
 def test_transcribe_with_backend_mlx_path_passes_language(monkeypatch, tmp_path):
-    """The mlx-whisper path passes the locked language to mlx_whisper.
-
-    Part A #2b: when the user (or auto-detection) locks a language,
-    transcribe_with_backend should pass `language=` and the matching
-    `initial_prompt` to mlx_whisper.transcribe so the model is
-    locked for the whole file.
-    """
-    import sys
+    """The mlx-whisper path passes the locked language (and the
+    matching initial prompt) to the subprocess worker via CLI args."""
+    import json as _json
     import types
 
-    fake_mlx = types.ModuleType("mlx_whisper")
-    called_kwargs = {}
-    def spy(path, **kwargs):
-        called_kwargs.update(kwargs)
-        return {
-            "text": "",
-            "language": "zh",
-            "segments": [{"start": 0.0, "end": 1.0, "text": "x"}],
-        }
-    fake_mlx.transcribe = spy
-    monkeypatch.setitem(sys.modules, "mlx_whisper", fake_mlx)
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=_json.dumps({
+                "segments": [{"start": 0.0, "end": 1.0, "text": "x"}],
+                "language": "zh",
+                "duration": 1.0,
+            }),
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
 
     from app.services.transcription import transcribe_with_backend
     tmp_file = tmp_path / "fake.mp4"
@@ -518,29 +514,37 @@ def test_transcribe_with_backend_mlx_path_passes_language(monkeypatch, tmp_path)
         language="zh",
     )
 
+    cmd = captured["cmd"]
     # Should have passed the locked language + initial_prompt
-    assert called_kwargs.get("language") == "zh"
-    assert called_kwargs.get("initial_prompt") == "以下是普通话的对话。"
+    assert "--language" in cmd
+    assert cmd[cmd.index("--language") + 1] == "zh"
+    assert "--initial-prompt" in cmd
+    assert cmd[cmd.index("--initial-prompt") + 1] == "以下是普通话的对话。"
 
 
 def test_transcribe_with_backend_mlx_path_no_language_when_auto(monkeypatch, tmp_path):
-    """The mlx-whisper path does NOT pass language/initial_prompt
-    when the caller passes language=None (auto-detect / let whisper decide)."""
-    import sys
+    """The mlx-whisper path does NOT pass language/initial-prompt
+    CLI args when the caller passes language=None (auto-detect)."""
     import types
+    import json as _json
 
-    fake_mlx = types.ModuleType("mlx_whisper")
-    called_kwargs = {}
-    def spy(path, **kwargs):
-        called_kwargs.update(kwargs)
-        return {
-            "text": "",
-            "language": "zh",
-            "segments": [{"start": 0.0, "end": 1.0, "text": "x"}],
-        }
-    fake_mlx.transcribe = spy
-    monkeypatch.setitem(sys.modules, "mlx_whisper", fake_mlx)
     monkeypatch.setattr("app.services.transcription.platform.machine", lambda: "arm64")
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=_json.dumps({
+                "segments": [{"start": 0.0, "end": 1.0, "text": "x"}],
+                "language": "zh",
+                "duration": 1.0,
+            }),
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", fake_run)
 
     from app.services.transcription import transcribe_with_backend
     tmp_file = tmp_path / "fake.mp4"
@@ -551,9 +555,10 @@ def test_transcribe_with_backend_mlx_path_no_language_when_auto(monkeypatch, tmp
         language=None,  # explicit auto
     )
 
-    # Should NOT have language or initial_prompt in kwargs
-    assert "language" not in called_kwargs
-    assert "initial_prompt" not in called_kwargs
+    cmd = captured["cmd"]
+    # Should NOT have language or initial_prompt CLI args
+    assert "--language" not in cmd
+    assert "--initial-prompt" not in cmd
 
 
 def test_transcribe_with_backend_mlx_path_falls_back_to_faster(monkeypatch, tmp_path):

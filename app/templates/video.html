@@ -128,9 +128,7 @@
                     <span id="language-detected-label" class="hidden text-xs text-gray-500 dark:text-gray-400" title="Language auto-detected from the first 10 min of audio. Change the dropdown to override and click Transcribe to re-run.">
                         Detected: <span id="language-detected-code"></span>
                     </span>
-                    <button onclick="transcribeVideo()" id="transcribe-btn"
-                            class="px-3 py-1 text-sm rounded-lg {% if can_regen_materials %}bg-indigo-600 text-white hover:bg-indigo-700{% else %}bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed{% endif %}"
-                            {% if not can_regen_materials %}disabled title="Upgrade your plan to transcribe or re-transcribe videos"{% endif %}>
+                    <button onclick="transcribeVideo()" id="transcribe-btn" class="px-3 py-1 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
                         🎙️ Transcribe
                     </button>
                     <input type="text" id="transcript-search" placeholder="Search..." class="px-3 py-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700" onkeyup="searchTranscript()">
@@ -245,28 +243,14 @@
                 <div id="content-summary" class="prose dark:prose-invert max-w-none text-sm">
                     {% if summary_content %}
                         <div class="prose dark:prose-invert max-w-none text-sm">{{ summary_content | md }}</div>
-                        {% if can_regen_materials %}
                         <button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">
                             🔄 Regenerate
                         </button>
-                        {% else %}
-                        <button disabled title="Upgrade your plan to regenerate materials"
-                                class="mt-3 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-lg cursor-not-allowed text-xs">
-                            🔄 Regenerate
-                        </button>
-                        {% endif %}
                     {% else %}
                         <p class="text-gray-400">Click "Generate" to create learning materials.</p>
-                        {% if can_regen_materials %}
                         <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
                             ⚡ Generate Materials
                         </button>
-                        {% else %}
-                        <button disabled title="Upgrade your plan to generate learning materials"
-                                class="mt-3 px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 rounded-lg cursor-not-allowed text-sm">
-                            ⚡ Generate Materials
-                        </button>
-                        {% endif %}
                     {% endif %}
                 </div>
 
@@ -509,24 +493,6 @@ const videoId = '{{ video.id }}';
 // The swap is only safe when the video is in 'ready' state — swapping
 // while a transcribe/generate is in flight would race the worker.
 const videoStatus = '{{ video.status }}';
-// MVP2.1 (Day 13): FREE users see disabled "Upgrade to ..." buttons
-// instead of working Transcribe / Regenerate. Expose the flag to JS so
-// tab-switch handlers don't re-render an active "Generate" button for
-// users who lack REGEN_MATERIALS. Backend endpoints are independently
-// gated with require_capability() — this is purely a UX nicety.
-//
-// Day-13 update (PAID-on-own-only): for PAID users, this flag is True
-// only when they OWN the video's course (catalog videos belong to
-// admin and are off-limits to PAID).
-//
-// String form ("true"/"false") rather than a JS boolean literal so
-// the syntax is also valid before Jinja renders (the DOM-sandbox test
-// in tests/test_loadSummary_dom.mjs reads this block as raw JS).
-const canRegenMaterials = '{{ "true" if can_regen_materials else "false" }}';
-// MVP2.1 (Day 13): expose the viewer's role so the JS 403 toasts can
-// distinguish 'FREE → upgrade' from 'PAID → admin-only catalog video'.
-// String form again for the same DOM-sandbox-test reason.
-const viewerRole = '{{ user_role | default("FREE") }}';
 // courseId is exposed as a JS constant so confirmDelete() can redirect
 // to the right course page after deletion. See the comment on the
 // redirect inside confirmDelete() for the full rationale. course
@@ -1000,23 +966,6 @@ async function transcribeVideo() {
             // Background job started. Poll for status.
             const data = await resp.json();
             await pollJobStatus('transcribe', data.job, () => location.reload());
-        } else if (resp.status === 403) {
-            // MVP2.1 (Day 13): backend now gates this endpoint on
-            // REGEN_MATERIALS + ownership. A FREE user who somehow
-            // bypasses the disabled button (e.g. devtools) gets a
-            // friendly message instead of a raw 403 stack trace.
-            // Day-13 update: PAID users on a catalog video get a
-            // different message — they're already paid, they just
-            // don't own this admin-curated video.
-            const toastMsg = viewerRole === 'PAID'
-                ? '🔒 Only the admin can re-transcribe catalog videos. You can re-transcribe videos you uploaded.'
-                : '⭐ Transcribing is a paid feature. Upgrade your plan to re-transcribe videos.';
-            showToast(toastMsg, 'info');
-            btn.textContent = '🎙️ Transcribe';
-            btn.disabled = canRegenMaterials !== 'true';
-            container.innerHTML = transcriptAlreadyLoaded
-                ? '<p class="text-gray-400 py-4 text-center">Existing transcript preserved.</p>'
-                : '<p class="text-gray-400 py-4 text-center">No transcript yet.</p>';
         } else {
             const err = await resp.json().catch(() => ({}));
             btn.textContent = '❌ Failed';
@@ -1068,19 +1017,6 @@ async function generateMaterials() {
                     loadSummary();
                 }
             });
-        } else if (resp.status === 403) {
-            // MVP2.1 (Day 13): backend gates on REGEN_MATERIALS +
-            // ownership. FREE users who bypass the disabled button
-            // (devtools, cached page, etc.) get a friendly toast.
-            // PAID users on a catalog video get a different message.
-            const toastMsg = viewerRole === 'PAID'
-                ? '🔒 Only the admin can regenerate catalog materials. You can regenerate materials on videos you uploaded.'
-                : '⭐ Generating materials is a paid feature. Upgrade your plan to regenerate.';
-            showToast(toastMsg, 'info');
-            const progress = document.getElementById('generate-progress');
-            if (progress) progress.remove();
-            btn.textContent = '🔄 Regenerate';
-            btn.disabled = canRegenMaterials !== 'true';
         } else {
             const err = await resp.json().catch(() => ({}));
             btn.textContent = '❌ ' + (err.detail || 'Failed');
@@ -1214,30 +1150,22 @@ async function loadSummary() {
                 // our signal that SSR populated this tab.
                 const container = document.getElementById('content-summary');
                 if (!container.querySelector('.prose')) {
-                    // MVP2.1 (Day 13): FREE users get a disabled button
-                    // with an upgrade tooltip instead of a working
-                    // Generate. Backend also returns 403, but rendering
-                    // the wrong button would let the user click and
-                    // see a confusing error toast.
-                    const generateBtn = canRegenMaterials === 'true'
-                        ? `<button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">⚡ Generate Materials</button>`
-                        : `<button disabled title="Upgrade your plan to generate learning materials" class="mt-3 px-4 py-2 bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 rounded-lg cursor-not-allowed text-sm">⚡ Generate Materials</button>`;
                     container.innerHTML = `
                         <p class="text-gray-400">No summary yet. Click "Generate" to create learning materials.</p>
-                        ${generateBtn}
+                        <button onclick="generateMaterials()" class="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm">
+                            ⚡ Generate Materials
+                        </button>
                     `;
                 }
                 return;
             }
             const data = await resp.json();
             const html = simpleMarkdown(data.data);
-            // Same FREE-gating as the SSR branch above.
-            const regenBtn = canRegenMaterials === 'true'
-                ? `<button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">🔄 Regenerate</button>`
-                : `<button disabled title="Upgrade your plan to regenerate materials" class="mt-3 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 rounded-lg cursor-not-allowed text-xs">🔄 Regenerate</button>`;
             const fullHtml = `
                 <div class="prose dark:prose-invert max-w-none text-sm">${html}</div>
-                ${regenBtn}
+                <button onclick="generateMaterials()" class="mt-3 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-xs">
+                    🔄 Regenerate
+                </button>
             `;
             contentCache.summary = fullHtml;
             document.getElementById('content-summary').innerHTML = fullHtml;

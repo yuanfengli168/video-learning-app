@@ -380,16 +380,24 @@ def detect_audio_language(
             "error": f"file not found: {video_path}",
         }
 
-    # Pick the detection model. Use the same one the user would
-    # transcribe with, so the detection and the real run are
-    # consistent. MLX turbo is the default smart pick.
+    # Pick the detection model.
+    #
+    # 2026-09-05 fork-safety fix: this ALWAYS uses the CPU `tiny`
+    # model via faster-whisper, even on MLX-capable Macs. The old
+    # default (mlx-community/whisper-large-v3-turbo) crashed with
+    # SIGABRT inside gunicorn workers — the worker is a forked
+    # child, and spinning up Metal state here while the BackgroundTask
+    # thread forks ffmpeg trips macOS's fork-safety abort ("crashed
+    # on child side of fork pre-exec"). Detection only needs the
+    # language token from a few 30s windows, not transcription
+    # accuracy, so `tiny` (75 MB, already cached) is both safe and
+    # much faster to load than the 1.6 GB turbo model. The REAL
+    # transcription still uses whatever the user picked (MLX turbo
+    # included) — it runs in an isolated subprocess (see
+    # transcribe_with_backend()).
+    backend = "faster-whisper"
     if model_id is None:
-        if is_mlx_available():
-            model_id = "mlx-community/whisper-large-v3-turbo"
-            backend = "mlx-whisper"
-        else:
-            model_id = "base"
-            backend = "faster-whisper"
+        model_id = "tiny"
     else:
         backend = "mlx-whisper" if model_id.startswith("mlx-") else "faster-whisper"
 
@@ -813,29 +821,70 @@ def transcribe_with_backend(
         # seconds"), so no HH.MM conversion is needed. We just
         # strip whitespace and round to 2 decimals (matches
         # faster-whisper output).
-        import mlx_whisper  # local import — only required when used
-        kwargs: dict[str, Any] = {
-            "path_or_hf_repo": model_id,
-            # Anti-drift params (always on for MLX — even with
-            # a locked language, these prevent a different class
-            # of "the model is fine but it loops" bug).
-            "condition_on_previous_text": False,
-            "compression_ratio_threshold": 1.8,
-        }
+        #
+        # SUBPROCESS MODE (2026-09-05 fork-safety fix): this used
+        # to `import mlx_whisper` and call transcribe() in-process.
+        # Inside a gunicorn worker (itself a forked child; the app
+        # runs preload_app=True) that crashes with SIGABRT —
+        # "crashed on child side of fork pre-exec" — when the
+        # BackgroundTask thread forks ffmpeg while Metal/MLX state
+        # is live (macOS fork-safety abort). Verified the same
+        # transcription works flawlessly in a fresh process on
+        # Python 3.14 + mlx 0.32.2. So we delegate to
+        # scripts/mlx_transcribe_worker.py as a subprocess: the
+        # Metal/GPU state lives and dies entirely in that fresh
+        # child process, the gunicorn worker stays Metal-free,
+        # and the result shape below is identical to the old
+        # in-process path.
+        import json as _json
+        import subprocess as _subprocess
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        _worker = _Path(__file__).resolve().parents[2] / "scripts" / "mlx_transcribe_worker.py"
+        if not _worker.exists():
+            raise FileNotFoundError(
+                f"MLX worker script not found: {_worker} "
+                f"(required for mlx-whisper transcription)"
+            )
+
+        _cmd = [_sys.executable, str(_worker), str(video_path), "--model", model_id]
         if locked_language:
-            kwargs["language"] = locked_language
-            kwargs["initial_prompt"] = get_initial_prompt(locked_language)
-        result_dict = mlx_whisper.transcribe(
-            str(video_path),
-            **kwargs,
+            _cmd += ["--language", locked_language]
+            _prompt = get_initial_prompt(locked_language)
+            if _prompt:
+                _cmd += ["--initial-prompt", _prompt]
+
+        _proc = _subprocess.run(
+            _cmd,
+            capture_output=True,
+            text=True,
+            # Generous ceiling: model load (~30s) + MLX transcribe
+            # of up to a 2.5h file (~5-10x realtime) fits in 4h.
+            timeout=4 * 60 * 60,
         )
-        segments: list[dict[str, Any]] = []
-        for seg in result_dict.get("segments", []):
-            segments.append({
-                "start": round(float(seg.get("start", 0.0)), 2),
-                "end": round(float(seg.get("end", 0.0)), 2),
-                "text": str(seg.get("text", "")).strip(),
-            })
+        if _proc.returncode != 0:
+            _stderr = (_proc.stderr or "").strip()[:800]
+            raise RuntimeError(
+                f"MLX worker failed (rc={_proc.returncode}): "
+                f"{_stderr or 'no stderr captured'}"
+            )
+        try:
+            result_dict = _json.loads(_proc.stdout)
+        except _json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"MLX worker returned non-JSON stdout "
+                f"(first 300 chars: {(_proc.stdout or '')[:300]!r})"
+            ) from exc
+
+        segments: list[dict[str, Any]] = [
+            {
+                "start": round(float(s.get("start", 0.0)), 2),
+                "end": round(float(s.get("end", 0.0)), 2),
+                "text": str(s.get("text", "")).strip(),
+            }
+            for s in result_dict.get("segments", [])
+        ]
         # mlx-whisper 0.4+ doesn't return duration in the dict
         # (unlike faster-whisper's info.duration). Compute it from
         # the last segment's end time. Fall back to 0 if there
