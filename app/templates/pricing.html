@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Plans — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto py-10 px-4 sm:px-6 lg:px-8">
+
+    {# ── Beta banner ── #}
+    <div class="mb-8 text-center">
+        <span class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 text-sm font-medium">
+            🚧 We're in beta
+        </span>
+        <h1 class="text-3xl font-bold text-gray-900 dark:text-white mt-4 mb-2">Plans &amp; Pricing</h1>
+        <p class="text-gray-500 dark:text-gray-400 max-w-xl mx-auto">
+            We're still building. During beta, the paid version is quite limited —
+            here's what's available today.
+        </p>
+    </div>
+
+    {# ── The two plan cards ── #}
+    <div class="grid md:grid-cols-2 gap-6 mb-10">
+
+        {# FREE #}
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow p-6 flex flex-col">
+            <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-1">Free</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Learn from the curated catalog.</p>
+            <p class="text-4xl font-extrabold text-gray-900 dark:text-white mb-6">$0<span class="text-base font-medium text-gray-400">/month</span></p>
+            <ul class="space-y-3 text-sm text-gray-600 dark:text-gray-300 mb-8">
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Browse the full admin-curated video catalog</li>
+                <li class="flex gap-2"><span class="text-green-500">✓</span> AI chat with every public video</li>
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Auto-generated learning materials (summaries, quizzes, flashcards)</li>
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Daily AI requests — powered by Groq</li>
+            </ul>
+            {% if user_role == 'FREE' %}
+            <span class="mt-auto text-center px-6 py-2.5 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 text-sm font-medium">Your current plan</span>
+            {% else %}
+            <span class="mt-auto text-center px-6 py-2.5 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 text-sm font-medium">Default for everyone</span>
+            {% endif %}
+        </div>
+
+        {# PAID #}
+        <div class="relative bg-white dark:bg-gray-800 rounded-2xl shadow-lg ring-2 ring-indigo-500 p-6 flex flex-col">
+            <span class="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-indigo-600 text-white text-xs font-semibold">Recommended</span>
+            <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-1">Paid <span class="text-xs font-normal text-gray-400">(beta)</span></h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Everything in Free, plus your own library.</p>
+            <p class="text-4xl font-extrabold text-gray-900 dark:text-white mb-6">$—<span class="text-base font-medium text-gray-400">/month</span></p>
+            <ul class="space-y-3 text-sm text-gray-600 dark:text-gray-300 mb-4">
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Everything in Free</li>
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Upload your own videos and build courses</li>
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Transcribe &amp; regenerate materials on your videos</li>
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Higher AI limits + priority engine (Ollama)</li>
+                <li class="flex gap-2"><span class="text-green-500">✓</span> Personal activity history</li>
+            </ul>
+            <p class="text-xs text-amber-600 dark:text-amber-400 mb-6 flex gap-1.5">
+                <span>🚧</span>
+                <span>Paid spots are quite limited during beta — we're onboarding users gradually to keep quality high.</span>
+            </p>
+            {% if user_role == 'PAID' or user_role == 'ADMIN' %}
+            <span class="mt-auto text-center px-6 py-2.5 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 text-sm font-medium">You're in! 🎉</span>
+            {% else %}
+            <a href="mailto:jackyopenclaw.168@gmail.com?subject=Paid%20plan%20(beta)%20%E2%80%94%20I'd%20like%20to%20try%20it"
+               class="mt-auto text-center px-6 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700">
+                ✉️ Try the paid version
+            </a>
+            <p class="text-xs text-gray-400 mt-2 text-center">Spots are limited — we reply within a day.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {# ── Beta note ── #}
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow p-6 text-center max-w-2xl mx-auto">
+        <h3 class="font-semibold text-gray-900 dark:text-white mb-2">How beta works</h3>
+        <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed mb-4">
+            The paid version is quite limited at this time. We're inviting a small group of
+            early users to try it first — pricing will be finalized once beta wraps up.
+            If you'd like to be part of the early group, just reach out:
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <a href="mailto:jackyopenclaw.168@gmail.com?subject=Paid%20plan%20(beta)%20%E2%80%94%20I'd%20like%20to%20try%20it"
+               class="px-5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700">
+                ✉️ jackyopenclaw.168@gmail.com
+            </a>
+            <span class="text-xs text-gray-400">— mention "paid plan" and we'll get you set up.</span>
+        </div>
+        <p class="text-xs text-gray-400 mt-6">
+            Coming out of beta: more upload capacity, mobile apps, and team plans.
+        </p>
+    </div>
+
+    <div class="text-center mt-8">
+        <a href="/" class="text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">← Back to dashboard</a>
+    </div>
+</div>
+{% endblock %}

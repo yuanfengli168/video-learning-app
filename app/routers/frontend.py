@@ -440,6 +440,25 @@ async def usage_page(
     return templates.TemplateResponse(request, "usage.html", ctx)
 
 
+@router.get("/pricing", response_class=HTMLResponse)
+async def pricing_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(get_current_user_optional),
+) -> HTMLResponse:
+    """Pricing page — beta-flavored plans overview (2026-09-05).
+
+    The dashboard's FREE-upgrade CTA links here. During beta the paid
+    tier is invite-only and limited: the page shows both plans side by
+    side, and routes interested users to email the owner
+    (jackyopenclaw.168@gmail.com) instead of a payment flow.
+    Signed-out visitors are welcome too (the page is public).
+    """
+    return templates.TemplateResponse(
+        request, "pricing.html", _ctx(request, user, db=db)
+    )
+
+
 @router.get("/activity", response_class=HTMLResponse)
 async def activity_page(
     request: Request,
