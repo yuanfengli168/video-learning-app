@@ -1198,6 +1198,30 @@ an existing if/else).
 - **Day 9**: Buffer → real hotfix day after 10-min phone smoke test caught 3 bugs. Commit `6765fad`.
 - **Days 9-14**: Real-video testing, security hardening, soft launch, public beta.
 
+## [2.1.0.7] - 2026-09-05/06 — Usage pages, admin analytics, telemetry & retention (8-commit batch)
+
+✨ **The usage + analytics plan (decided 2026-09-05, 6 commits) + live-testing hardening (2 commits).** All numbers come from the `events` table (worker-independent truth — the in-memory quota trackers are per-gunicorn-worker and would show 1-of-4 slices; see `app/services/usage.py` docstring).
+
+### ✨ Features
+
+- **Telemetry pipeline (2 commits)** — `POST /api/telemetry` (auth'd, `ui.*` source-allowlisted so `services.*` audit events can't be client-forged, batch/context caps, video_id tier-visibility checks to block catalog-probe oracles) + batched JS beacon (10s flush, `sendBeacon` on page-hide, seek debounce) hooking play/pause/seek/ended, materials tabs, transcribe/generate clicks, chat sends, and logins. Privacy disclosure line in the sidebar footer.
+- **`/usage` page** — FREE: plain-words daily claim + bar; PAID: dual bars (50 per rolling 7h + 100 per fixed Mon–Sun week, display-only for soft launch; per-user per `e2f4aa8`). Failed calls and `ui.*` events never count.
+- **`/admin/analytics`** — counters (unique users, logins, plays/pauses/seeks, chats, tab clicks, LLM ok/fail), pure-CSS daily-activity chart, top videos (LEFT JOIN so deleted videos degrade), most-active users. Bounded `?days=` window (clamped 1–90).
+- **`/admin/usage`** — per-user quota monitor: 7h + week bars, color-coded, role badges — the "this user is done for the week" at-a-glance view.
+- **`/activity` (PAID+)** — personal event feed (summary cards + 100-row recent feed), strictly own-events (service takes the authenticated uid; no query param selects others).
+- **`/pricing`** — beta-flavored plans page (the dashboard's "See plans" previously 404'd). Two cards, tier-aware CTAs (FREE → mailto contact, PAID/ADMIN → "You're in 🎉"), honest beta copy; no provider names on the page.
+- **90-day retention** — `scripts/prune_events.py`: archive-first (events → `Storage-Backup-HDD/video-learning-app-data/events-archive-YYYY-MM.jsonl`, kept forever, `_exported` marker dedupe) then batched delete; HDD unmountable → prunes nothing. Nightly 00:30 launchd (after backup-daily).
+
+### 🐛 Fixes (live-testing batch)
+
+- **Beacon never fired** — `isSignedIn()` read the httpOnly `fb_token` cookie via `document.cookie` (JS can never see it), so zero `ui.*` events ever landed. Fixed via a server-rendered `<meta name="app-signed-in">` + login-page meta injection.
+- **Admin mislabeled FREE on the usage monitor** — the `int(role or 2)` falsy bug (ADMIN=0 → FREE). Tier-aware bars added: FREE rows show the 15/day claim, not the paid 50/100 bars.
+- **Transcribe/Generate buttons** were clickable for users the API 403s (PAID on catalog videos, FREE everywhere) — now greyed with tier-specific tooltips ("not allowed on admin-curated videos" / upgrade hint).
+
+### 📋 Verified
+
+- Full suite **1312 passing** (42+ new tests across the batch: telemetry contract, week-bounds, aggregation, tier greying, prune safety, pricing rendering).
+
 ## [2.1.0.6] - 2026-09-05 — MLX transcription: 4-day crash saga → subprocess isolation 🚀
 
 🐛 **Every `local-large-turbo` (MLX Whisper) transcribe killed a gunicorn worker with SIGABRT ("Python quit unexpectedly"), or intermittently failed with `[metal::Device] XPC_ERROR_CONNECTION_INVALID`.** Over 09-03→09-05 four stacked issues were uncovered and fixed one by one. Full root-cause chain in [`doc/mlx-fork-crash-postmortem.md`](doc/mlx-fork-crash-postmortem.md).

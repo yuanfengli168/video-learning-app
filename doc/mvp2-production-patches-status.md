@@ -2,15 +2,15 @@
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Goal**: Make this Mac Studio (`Yuanfengs-Mac-Studio.local`) a 24/7 production server for video-learning-app.
-> **Last updated**: 2026-08-27
+> **Last updated**: 2026-09-06
 
 ---
 
 ## 🎯 Current state
 
-- **Tests**: 1201 passing, 0 failing, 89% coverage
+- **Tests**: 1312 passing, 0 failing, 89% coverage
 - **Branch**: ahead of `main` (pivot to admin-curated YouTube catalog)
-- **Feature status**: Day 1-9 shipped (Day 10 — security hardening — next)
+- **Feature status**: Day 1-9 shipped + post-Day-9 hardening/features batch (2026-09-03→06) done. Day 10 — security hardening — next.
 - **Server**: gunicorn 4 workers × 2 threads (since Day 6)
 
 ---
@@ -46,6 +46,7 @@
 | 22 | **Day 8 (done, commits `115444d`+`9e79c36`)**: YouTube IFrame API integration — `yt_player.js` wrapper for unified `<video>` and YouTube iframe control; jump-to-timestamp via `YTPlayer.seekTo()`; transcript-follow reads `currentTime` via wrapper (works for both backends); localStorage-based resume-from-last-position; 28 new tests (19 .mjs + 9 pytest wrapper). | done |
 | 23 | **Day 9 (done, commit `6765fad`)**: Buffer day → real hotfix day after phone smoke test caught 3 bugs — (a) Firebase authorized domains (`trycloudflare.com` added in console, deployment.md now has the steps); (b) `SessionExpiryMiddleware` was catching all exceptions as bad cookies → split into ValueError+bounce vs FirebaseError/let-through; (c) Python worker SIGSEGV on macOS `SCDynamicStoreCopyProxiesWithOptions` (EXC_GUARD) → fixed by `export NO_PROXY=*` in start.sh. 3 new tests. Server verified end-to-end through Cloudflare Tunnel on real phone. | done |
 | 18 | **Day 10 (next)**: Tier 1 security hardening (firewall, secret perms, FileVault check). Per go-live plan. | in progress |
+| 24 | **Post-Day-9 batch (done, 2026-09-03→06)**: MLX transcription fork-crash fix + [`mlx-fork-crash-postmortem.md`](mlx-fork-crash-postmortem.md); role-enrichment fix (`e079356` — PAID got FREE LLM chain); [`roles-tiers-cheatsheet.md`](roles-tiers-cheatsheet.md); usage+analytics feature batch (8 commits `af9e29d`→`811ebbe`): telemetry pipeline + beacon, `/usage` (FREE claim / PAID 50-7h + 100-wk bars), `/admin/analytics`, `/admin/usage`, `/activity` (PAID+), `/pricing`, 90-day retention w/ HDD archive — plus the 3 live-testing bugfixes (httpOnly-cookie beacon bug, `0 or 2` falsy role bug, button greying). 1312 tests. | done |
 | 19 | **Day 11-13**: Invite 10-20 friends for soft launch, bug bash + load test, polish + docs | per go-live plan |
 | 20 | **Day 14**: LAUNCH | 🎯 |
 
