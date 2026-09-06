@@ -142,12 +142,20 @@ def _create_video(paid_client: TestClient, title: str = "lecture") -> str:
 
 def test_video_view_loads_transcript_follow_script(paid_client: TestClient):
     """The video page must include the deferred transcript-follow script so
-    TranscriptFollow is available before renderTranscript runs."""
+    TranscriptFollow is available before renderTranscript runs.
+
+    The src is versioned for cache-busting (2026-09-06): the rendered
+    form is src="/static/js/transcript-follow.js?v=<mtime>" — the mtime
+    changes on every edit+restart so no browser runs stale JS. We
+    assert on a regex instead of the exact literal."""
     with _mock_auth():
         video_id = _create_video(paid_client)
         response = paid_client.get(f"/video/{video_id}", headers=_auth_headers())
     assert response.status_code == 200
-    assert '<script src="/static/js/transcript-follow.js" defer></script>' in response.text
+    assert re.search(
+        r"<script src=\"/static/js/transcript-follow\.js\?v=\d+\" defer></script>",
+        response.text,
+    ), "video page must load versioned transcript-follow.js"
 
 
 def test_video_view_loads_transcript_follow_css(paid_client: TestClient):

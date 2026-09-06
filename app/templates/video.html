@@ -510,8 +510,11 @@
      via the wrapper, not video.currentTime directly). Both defer so they
      execute in order, DOMContentLoaded fires, then our inline <script>
      below runs YTPlayer.init() and wires up the rest of the page. -->
-<script src="/static/js/yt_player.js" defer></script>
-<script src="/static/js/transcript-follow.js" defer></script>
+<!-- v= mtime cache-busting: after any JS edit + restart, the version
+     param changes and every browser fetches the fresh file on its next
+     page load — no more stale-JS mysteries. -->
+<script src="{{ asset('/static/js/yt_player.js') }}" defer></script>
+<script src="{{ asset('/static/js/transcript-follow.js') }}" defer></script>
 <script>
 const videoId = '{{ video.id }}';
 // 2026-09-05 telemetry: expose the video id to the beacon + wire the

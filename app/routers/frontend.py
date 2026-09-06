@@ -107,6 +107,49 @@ def _format_duration_filter(seconds: float | int | None) -> str:
 templates.env.filters["format_duration"] = _format_duration_filter
 
 
+# ── Asset cache-busting (2026-09-06) ──────────────────────────────
+#
+# The transcript-follow bug hunt showed that static JS is served with
+# NO cache-busting: <script src="/static/js/yt_player.js">. A browser
+# that has the page cached can run STALE JS indefinitely after a fix
+# ships, and "did the fix work?" becomes indistinguishable from
+# "did the browser reload?". At launch that's a support nightmare.
+#
+# Fix: version every static asset reference with the file's mtime.
+# The version is computed once at import (module-level) — it's a single
+# stat() per asset on startup, and templates reference assets via the
+# `asset()` context function so all pages get it consistently.
+#
+# We intentionally do NOT hash file contents: mtime changes whenever
+# we edit + restart, which is exactly the freshness signal we want,
+# and it's one syscall instead of reading every file into memory.
+
+# frontend.py lives at app/routers/frontend.py → static is app/static
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+_asset_versions: dict[str, str] = {}
+
+
+def _compute_asset_versions() -> dict[str, str]:
+    """mtime-based version per static file (JS + CSS), computed once."""
+    versions: dict[str, str] = {}
+    for sub in ("js", "css"):
+        subdir = _STATIC_DIR / sub
+        if not subdir.exists():
+            continue
+        for f in subdir.iterdir():
+            if f.is_file():
+                try:
+                    # Key by the URL path the templates use, including
+                    # the /static prefix (see the `asset` lambda below).
+                    versions[f"/static/{sub}/{f.name}"] = str(int(f.stat().st_mtime))
+                except OSError:
+                    versions[f"/static/{sub}/{f.name}"] = "0"
+    return versions
+
+
+_asset_versions = _compute_asset_versions()
+
+
 def _ctx(
     request: Request,
     user: dict[str, Any] | None,
@@ -136,6 +179,9 @@ def _ctx(
             "appId": settings.firebase_app_id,
         },
         "sidebar_courses": [],
+        # Cache-busting: resolve /static/js/x.js → /static/js/x.js?v=<mtime>
+        # so every deploy invalidates browser caches automatically.
+        "asset": lambda path: f"{path}?v={_asset_versions.get(path, '0')}",
     }
     if user and db is not None:
         ctx["sidebar_courses"] = (

@@ -115,12 +115,13 @@ const VIDEO_HTML = readFileSync(
 // dependencies.
 function extractScriptBlock() {
     // Find the <script> tag that immediately follows the
-    // <script src="/static/js/transcript-follow.js" defer></script>
-    // line. That's the inline script that defines loadSummary.
-    const anchor = '<script src="/static/js/transcript-follow.js" defer></script>';
-    const start = VIDEO_HTML.indexOf(anchor);
-    if (start < 0) throw new Error('transcript-follow script tag not found in video.html');
-    const inlineStart = VIDEO_HTML.indexOf('<script>', start);
+    // transcript-follow.js <script> line. That's the inline script
+    // that defines loadSummary. (The src is versioned for cache
+    // busting — src="/static/js/transcript-follow.js?v=<mtime>" —
+    // so we match on a regex, not the exact literal.)
+    const anchorIdx = VIDEO_HTML.indexOf('<script src="{{ asset(\'/static/js/transcript-follow.js\') }}" defer></script>');
+    if (anchorIdx < 0) throw new Error('transcript-follow script tag not found in video.html');
+    const inlineStart = VIDEO_HTML.indexOf('<script>', anchorIdx);
     const inlineEnd = VIDEO_HTML.indexOf('</script>', inlineStart);
     return VIDEO_HTML.slice(inlineStart + '<script>'.length, inlineEnd);
 }

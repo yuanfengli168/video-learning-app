@@ -39,7 +39,7 @@
        data attribute (the fb_token cookie is httpOnly, so JS can't
        read it — document.cookie would always report signed-out). #}
     {% if user %}<meta name="app-signed-in" content="true">{% endif %}
-    <script src="/static/js/telemetry.js"></script>
+    <script src="{{ asset('/static/js/telemetry.js') }}"></script>
     {% block head %}{% endblock %}
 </head>
 <body class="h-full bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 flex">

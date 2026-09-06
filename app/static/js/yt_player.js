@@ -252,10 +252,43 @@
     // ─── Time-update loop (for YouTube, which doesn't fire timeupdate) ──
 
     let rafId = null;
+    let lastSampledTime = 0;
+
+    /**
+     * Start the rAF polling loop. Idempotent (safe to call from
+     * anywhere, repeatedly) — the guard short-circuits if running.
+     *
+     * 2026-09-06 robustness fix (transcript-follow dead bug):
+     *   The loop used to start ONLY from the YT.Player onReady
+     *   callback, and the tick had no try/catch around getCurrent().
+     *   Two failure modes produced the user-visible symptom
+     *   "video plays but the transcript never highlights/scrolls":
+     *     (a) if onReady never fires (or fires before any wiring),
+     *         subscribers never receive time updates;
+     *     (b) if getCurrent() throws ONCE (e.g. the YT API object in
+     *         a transient bad state), the exception escapes tick(),
+     *         requestAnimationFrame(tick) never re-schedules, and
+     *         the loop dies SILENTLY forever — no console error,
+     *         because nothing wraps the tick.
+     *   Fixes: the loop now also starts lazily from onTimeUpdate()
+     *   (first subscriber), and each tick isolates getCurrent() in
+     *   try/catch so a bad sample skips that frame instead of
+     *   killing the loop.
+     */
     function startTimeUpdateLoop(getCurrent, getDuration) {
         if (rafId !== null) return; // already running
         const tick = () => {
-            const t = getCurrent();
+            let t = lastSampledTime;
+            try {
+                t = getCurrent();
+                if (typeof t === 'number' && isFinite(t)) {
+                    lastSampledTime = t;
+                }
+            } catch (e) {
+                // Bad sample — keep polling; YT API can throw
+                // transiently mid-handshake. Do NOT rethrow (that
+                // would kill the loop forever — see comment above).
+            }
             timeUpdateHandlers.forEach((h) => {
                 try { h(t); } catch (e) { console.error('YTPlayer timeupdate handler error:', e); }
             });
@@ -329,9 +362,28 @@
      * Register a handler for the 'timeupdate' event. Receives the
      * current time in seconds. Fires ~60fps for both backends (rAF
      * polling for YouTube, native events for <video>).
+     *
+     * 2026-09-06: also (lazily) ensures the rAF polling loop is
+     * running for the YouTube backend — previously the loop only
+     * started from YT's onReady, which left subscribers dead if
+     * onReady never fired. See the comment on startTimeUpdateLoop.
      */
     function onTimeUpdate(handler) {
         timeUpdateHandlers.push(handler);
+        // Lazy-start: if we have a YouTube player instance, make sure
+        // the polling loop is live (idempotent no-op if already).
+        // The instance's _raw is the YT.Player object.
+        if (
+            playerInstance &&
+            playerInstance.kind === 'youtube' &&
+            playerInstance._raw &&
+            typeof playerInstance._raw.getCurrentTime === 'function'
+        ) {
+            startTimeUpdateLoop(
+                () => playerInstance.getCurrentTime(),
+                () => playerInstance.getDuration()
+            );
+        }
         return () => {
             const idx = timeUpdateHandlers.indexOf(handler);
             if (idx !== -1) timeUpdateHandlers.splice(idx, 1);
@@ -449,6 +501,24 @@
         _savePosition: savePosition,
         _loadPosition: loadPosition,
         _storageKey: storageKey,
+        // 2026-09-06: one-shot diagnostic for exactly the class of
+        // bug where "the video plays but the transcript doesn't
+        // follow". Paste into DevTools:
+        //   YTPlayer.debug()
+        // → {initialized, kind, apiReady, loopRunning, subscribers,
+        //    lastTime, ytState}
+        debug: () => ({
+            initialized: !!playerInstance,
+            kind: playerInstance ? playerInstance.kind : null,
+            apiScriptLoaded: apiScriptLoaded,
+            apiReady: apiReady,
+            loopRunning: rafId !== null,
+            subscribers: timeUpdateHandlers.length,
+            lastTime: playerInstance ? playerInstance.getCurrentTime() : null,
+            ytState: (playerInstance && playerInstance._raw && typeof playerInstance._raw.getPlayerState === 'function')
+                ? playerInstance._raw.getPlayerState()
+                : null,
+        }),
     };
 
 })(window);
