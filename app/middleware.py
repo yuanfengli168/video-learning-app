@@ -246,7 +246,25 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         #
         # The login page is the only place Firebase Auth runs, so we
         # skip COEP there. All other pages keep 'credentialless'.
-        if request.url.path != "/login":
+        #
+        # 2026-09-06: same treatment for /video/{id} pages. Verified
+        # by a controlled A/B test (two synthetic pages from the same
+        # origin, only difference = the COEP header): with
+        # 'credentialless' Chrome 148 aborts the YouTube embed
+        # navigation itself with ERR_BLOCKED_BY_RESPONSE
+        # (reason "origin"); without the header the exact same iframe
+        # loads and renders the player UI. YouTube's embed sends its
+        # own 'cross-origin-opener-policy-report-only' and no CORP on
+        # the /embed/ response, which credentialless-mode Chrome
+        # refuses to navigate an iframe to. The video pages are the
+        # only pages embedding a cross-origin iframe besides login,
+        # so the isolation loss is limited to exactly the pages that
+        # need it.
+        _path = request.url.path
+        if not (
+            _path == "/login"
+            or (_path.startswith("/video/") and _path.count("/") == 2)
+        ):
             response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
 
         # HSTS only when we're confident the request is over HTTPS.

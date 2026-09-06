@@ -214,15 +214,16 @@ def test_coop_is_same_origin_allow_popups_not_same_origin(client: TestClient):
 
 
 def test_coep_is_credentialless_not_require_corp(client: TestClient):
-    """Non-login pages must have COEP 'credentialless'.
+    """Non-exempt pages must have COEP 'credentialless'.
 
-    The /login page is intentionally exempt — see
-    test_login_page_has_no_coep for the rationale.
+    The /login and /video/{id} pages are intentionally exempt — see
+    test_login_page_has_no_coep and test_video_pages_have_no_coep for
+    the rationale.
     """
     response = client.get("/api/health")
     coep = response.headers["cross-origin-embedder-policy"]
     assert coep == "credentialless", (
-        f"COEP must be 'credentialless' on non-login pages, got: {coep!r}."
+        f"COEP must be 'credentialless' on non-exempt pages, got: {coep!r}."
     )
 
 
@@ -246,6 +247,44 @@ def test_login_page_has_no_coep(client: TestClient):
         "(firebaseapp.com/__/auth/iframe) can load. "
         "Setting COEP on /login blocks Google sign-in with "
         "ERR_BLOCKED_BY_RESPONSE."
+    )
+
+
+def test_video_pages_have_no_coep(client: TestClient):
+    """The /video/{id} pages must NOT set Cross-Origin-Embedder-Policy.
+
+    The catalog player embeds the YouTube IFrame player from
+    www.youtube-nocookie.com. Chrome 148 (verified 2026-09-06 via a
+    controlled A/B test: two synthetic pages from the same origin,
+    identical except for the COEP header) refuses to navigate an
+    iframe to the YouTube embed under COEP 'credentialless':
+
+        net::ERR_BLOCKED_BY_RESPONSE (reason: "origin")
+
+    The iframe renders as an empty black box and the page shows
+    'www.youtube-nocookie.com refused to connect'. Without the
+    header, the exact same iframe loads and renders the full
+    player UI. Same failure mode as the Firebase auth iframe on
+    /login (see test_login_page_has_no_coep).
+
+    The video pages are the only pages embedding a third-party
+    iframe besides login, so the isolation loss is limited to
+    exactly the pages that need it.
+    """
+    # /video/<uuid> — 2 slashes after the host, matching the
+    # middleware's path check (startswith /video/ AND exactly 2
+    # slashes so /video/x/y is NOT exempted).
+    response = client.get("/video/5cb59f85-5bf6-4884-b5f0-b119aeffa8c2")
+    assert "cross-origin-embedder-policy" not in response.headers, (
+        "COEP must be absent on /video/{id} so the YouTube embed "
+        "iframe can navigate. Setting COEP on video pages blocks "
+        "the catalog player with ERR_BLOCKED_BY_RESPONSE."
+    )
+    # Deeper paths must keep COEP (only the exact player page is exempt)
+    response = client.get("/video/5cb59f85-5bf6-4884-b5f0-b119aeffa8c2/edit")
+    assert "cross-origin-embedder-policy" in response.headers, (
+        "Deeper /video/... paths (e.g. /video/{id}/edit) must keep "
+        "COEP: credentialless — only the exact player page is exempt."
     )
 
 
