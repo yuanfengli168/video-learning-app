@@ -89,7 +89,11 @@ CSP = (
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
     "https://cdn.jsdelivr.net https://unpkg.com "
     "https://cdn.tailwindcss.com https://yuanfengli168.github.io "
-    "https://www.gstatic.com https://apis.google.com; "
+    "https://www.gstatic.com https://apis.google.com "
+    # 2026-09-06: the Day-8 YTPlayer wrapper loads the IFrame API
+    # script from www.youtube.com — without this the API never
+    # initializes and the catalog player is a dead black box.
+    "https://www.youtube.com; "
     "style-src 'self' 'unsafe-inline' "
     "https://cdn.jsdelivr.net https://cdn.tailwindcss.com "
     "https://yuanfengli168.github.io; "
@@ -99,12 +103,22 @@ CSP = (
     "https://cdn.jsdelivr.net https://yuanfengli168.github.io "
     "https://firestore.googleapis.com https://identitytoolkit.googleapis.com "
     "https://www.googleapis.com "
-    "https://apis.google.com https://accounts.google.com; "
+    "https://apis.google.com https://accounts.google.com "
+    # 2026-09-06: the IFrame API handshake (postMessage bridge +
+    # XHR to youtube.com) — required for seekTo/play/pause to work.
+    "https://www.youtube.com https://www.youtube-nocookie.com; "
     "frame-src 'self' https://yuanfengli168.github.io "
-    "https://accounts.google.com https://*.firebaseapp.com; "
+    "https://accounts.google.com https://*.firebaseapp.com "
+    # 2026-09-06: Day-8 regression fix — the player embeds from
+    # youtube-nocookie.com (privacy-enhanced), but frame-src never
+    # allowlisted it, so every catalog video silently refused to
+    # render its iframe for ALL users. www.youtube.com is also
+    # needed for the IFrame API internals.
+    "https://www.youtube-nocookie.com https://www.youtube.com; "
     "worker-src 'self' blob:; "
     "child-src 'self' https://yuanfengli168.github.io "
-    "https://accounts.google.com https://*.firebaseapp.com; "
+    "https://accounts.google.com https://*.firebaseapp.com "
+    "https://www.youtube-nocookie.com https://www.youtube.com; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "

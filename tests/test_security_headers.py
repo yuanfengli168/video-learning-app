@@ -279,3 +279,38 @@ def test_csp_allows_google_oauth_popup_frames(client: TestClient):
         f"frame-src/child-src must include https://accounts.google.com for "
         f"the Google OAuth popup. Current CSP:\n{csp}"
     )
+
+
+# ── CSP: YouTube catalog player must not be blocked ──────────────────────────
+# Symptom (2026-09-06, user-reported): every admin-curated YouTube video
+# in the catalog showed a dead black box — the Day-8 yt_player.js wrapper
+# loads the IFrame API from www.youtube.com and embeds the player from
+# www.youtube-nocookie.com, but neither origin was in the CSP allowlist
+# (script-src/frame-src/child-src/connect-src). Silent failure, all users.
+
+
+def test_csp_allows_youtube_embed_frames(client: TestClient):
+    """frame-src/child-src must include the YouTube embed origins or the
+    catalog player's iframe is refused by every browser."""
+    response = client.get("/api/health")
+    csp = response.headers["content-security-policy"]
+    assert "https://www.youtube-nocookie.com" in csp, (
+        f"frame-src/child-src must include https://www.youtube-nocookie.com "
+        f"for the privacy-enhanced embed. Current CSP:\n{csp}"
+    )
+    assert "https://www.youtube.com" in csp, (
+        f"frame-src/child-src must include https://www.youtube.com for the "
+        f"IFrame API internals. Current CSP:\n{csp}"
+    )
+
+
+def test_csp_allows_youtube_iframe_api(client: TestClient):
+    """script-src must include www.youtube.com for the IFrame API script
+    (/iframe_api), and connect-src for its handshake — without them the
+    wrapper initializes a player that can't seekTo/play/pause."""
+    response = client.get("/api/health")
+    csp = response.headers["content-security-policy"]
+    assert "https://www.youtube.com" in csp, (
+        f"script-src/connect-src must include https://www.youtube.com for "
+        f"the IFrame API. Current CSP:\n{csp}"
+    )
