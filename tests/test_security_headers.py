@@ -72,11 +72,20 @@ def test_x_content_type_options_is_nosniff(client: TestClient):
     assert response.headers["x-content-type-options"] == "nosniff"
 
 
-def test_referrer_policy_is_no_referrer(client: TestClient):
-    """Referrer-Policy: no-referrer — don't leak our URLs to third
-    parties (e.g. when a user clicks a link to an external resource)."""
+def test_referrer_policy_is_strict_origin_when_cross_origin(client: TestClient):
+    """Referrer-Policy: strict-origin-when-cross-origin — same-origin
+    requests get the full URL (we don't leak anything to ourselves),
+    cross-origin HTTPS requests get only the origin, cross-origin
+    HTTP→HTTPS downgrade requests get no Referer.
+
+    2026-09-06: was `no-referrer` (zero leak), but YouTube's IFrame
+    player rejects embeds with no Referer as "Error 153:
+    embedder.identity.missing.referrer" — the embed shows a "Video
+    player configuration error" dialog instead of the video. Sending
+    at least the origin fixes the embed. The trade-off is acceptable:
+    we still don't leak the full URL path to third parties."""
     response = client.get("/api/health")
-    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
 
 
 def test_csp_includes_required_origins(client: TestClient):
@@ -313,4 +322,52 @@ def test_csp_allows_youtube_iframe_api(client: TestClient):
     assert "https://www.youtube.com" in csp, (
         f"script-src/connect-src must include https://www.youtube.com for "
         f"the IFrame API. Current CSP:\n{csp}"
+    )
+
+
+# ── Permissions-Policy: YouTube iframe needs delegated features ─────────────
+# Symptom (2026-09-06, deeper than CSP): even with CSP allow-listing
+# the embed origins, the iframe still failed to load with
+# `net::ERR_BLOCKED_BY_RESPONSE` and YouTube rendered Error 153
+# (embedder.identity.missing.referrer) inside the embed. Root cause:
+# the previous Permissions-Policy was `picture-in-picture=()` and
+# `fullscreen=(self)` — both **ban** cross-origin iframes from using
+# those features, which Chrome treats as fatal for YouTube's embed
+# (which declares `allow="...; picture-in-picture"` on the iframe).
+# Now those features are delegated to youtube.com + youtube-nocookie.com.
+
+
+def test_permissions_policy_allows_youtube_picture_in_picture(client: TestClient):
+    """Permissions-Policy must delegate picture-in-picture to the
+    YouTube origins, otherwise Chrome aborts the embed with
+    ERR_BLOCKED_BY_RESPONSE (the iframe declares `allow=...picture-in-picture`
+    but the page's policy forbids it)."""
+    response = client.get("/api/health")
+    pp = response.headers["permissions-policy"]
+    assert "picture-in-picture" in pp, "picture-in-picture directive missing"
+    assert "youtube-nocookie.com" in pp, (
+        f"picture-in-picture must be delegated to youtube-nocookie.com. "
+        f"Current Permissions-Policy:\n{pp}"
+    )
+    assert "youtube.com" in pp, (
+        f"picture-in-picture must be delegated to youtube.com. "
+        f"Current Permissions-Policy:\n{pp}"
+    )
+
+
+def test_permissions_policy_allows_youtube_fullscreen(client: TestClient):
+    """Permissions-Policy must delegate fullscreen to the YouTube
+    origins, otherwise the embed's fullscreen button silently no-ops
+    AND Chrome may abort the embed entirely (the iframe declares
+    `allowfullscreen`)."""
+    response = client.get("/api/health")
+    pp = response.headers["permissions-policy"]
+    assert "fullscreen" in pp, "fullscreen directive missing"
+    assert "youtube-nocookie.com" in pp, (
+        f"fullscreen must be delegated to youtube-nocookie.com. "
+        f"Current Permissions-Policy:\n{pp}"
+    )
+    assert "youtube.com" in pp, (
+        f"fullscreen must be delegated to youtube.com. "
+        f"Current Permissions-Policy:\n{pp}"
     )

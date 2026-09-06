@@ -19,8 +19,14 @@ Headers added
 - `X-Content-Type-Options: nosniff` — prevent MIME-type sniffing.
   Stops the browser from "helpfully" re-interpreting a file as
   something it's not.
-- `Referrer-Policy: no-referrer` — don't leak our URLs to third
-  parties (e.g. when a user clicks a link to an external resource).
+- `Referrer-Policy: strict-origin-when-cross-origin` — only send the
+  origin (never the full path) on cross-origin requests; same-origin
+  requests get the full referrer. **Not** `no-referrer` because YouTube's
+  IFrame player rejects embeds with no Referer header as "Error 153:
+  embedder.identity.missing.referrer" — the embed shows a "Video player
+  configuration error" dialog instead of the video. Same-origin
+  requests don't leak anything sensitive, so sending the full URL to
+  ourselves is fine.
 - `Permissions-Policy` — disable browser features we don't use
   (camera, microphone, geolocation, payment, USB, etc.). Limits
   the blast radius if an attacker gets JS execution via XSS.
@@ -128,22 +134,30 @@ CSP = (
 # Permissions-Policy disables browser features we don't use. If a
 # future feature needs one (e.g. the camera for video recording),
 # remove that feature from the list.
+#
+# 2026-09-06: YouTube iframe needs `picture-in-picture`, `fullscreen`,
+# `autoplay`, `encrypted-media`, `accelerometer`, `gyroscope` to load.
+# The previous `picture-in-picture=()` and `fullscreen=(self)` blocked
+# those features from cross-origin iframes, causing Chrome to abort
+# the YouTube embed with `net::ERR_BLOCKED_BY_RESPONSE` and the page
+# to render an empty black player box. Now those features are
+# allowlisted for youtube.com + youtube-nocookie.com specifically.
 PERMISSIONS_POLICY = (
-    "accelerometer=(), "
-    "autoplay=(), "
+    "accelerometer=(self \"https://www.youtube.com\" \"https://www.youtube-nocookie.com\"), "
+    "autoplay=(self \"https://www.youtube.com\" \"https://www.youtube-nocookie.com\"), "
     "camera=(), "
     "cross-origin-isolated=(), "
     "display-capture=(), "
-    "encrypted-media=(), "
-    "fullscreen=(self), "
+    "encrypted-media=(self \"https://www.youtube.com\" \"https://www.youtube-nocookie.com\"), "
+    "fullscreen=(self \"https://www.youtube.com\" \"https://www.youtube-nocookie.com\"), "
     "geolocation=(), "
-    "gyroscope=(), "
+    "gyroscope=(self \"https://www.youtube.com\" \"https://www.youtube-nocookie.com\"), "
     "keyboard-map=(), "
     "magnetometer=(), "
     "microphone=(), "
     "midi=(), "
     "payment=(), "
-    "picture-in-picture=(), "
+    "picture-in-picture=(self \"https://www.youtube.com\" \"https://www.youtube-nocookie.com\"), "
     "publickey-credentials-get=(), "
     "screen-wake-lock=(), "
     "sync-xhr=(), "
@@ -192,7 +206,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Content-Security-Policy"] = CSP
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # 2026-09-06: changed from `no-referrer` to
+        # `strict-origin-when-cross-origin` to fix YouTube embed
+        # Error 153. See comment on the header docstring at the top.
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = PERMISSIONS_POLICY
         # `same-origin-allow-popups` (not plain `same-origin`) is
         # required for Firebase popup-based Google sign-in.
