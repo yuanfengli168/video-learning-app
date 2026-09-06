@@ -415,3 +415,35 @@ test('native backend does not load YouTube iframe_api', () => {
     assert.ok(branchIdx > -1 && callIdx > branchIdx, 'loadYouTubeApi is called inside the youtube branch');
     assert.ok(callIdx < initBody.indexOf('buildNativePlayer'), 'loadYouTubeApi is called BEFORE the native branch (so native branch can skip it)');
 });
+
+
+test('both player instances expose onTimeUpdate + kind (transcript-follow contract)', () => {
+    // 2026-09-06 regression guard. transcript-follow.js keys its
+    // wrapper-vs-raw-<video> detection on:
+    //
+    //     typeof videoEl.onTimeUpdate === 'function' && videoEl.kind
+    //
+    // The Day-8 instances shipped `.kind` but NOT `.onTimeUpdate`, so
+    // the check fell into the raw-DOM branch and called
+    // `instance.addEventListener` — a TypeError that silently killed
+    // transcript follow/highlight on every YouTube video.
+    //
+    // This source-level guard ensures BOTH instance literals (youtube
+    // and native) expose both fields. If a future refactor renames or
+    // removes either, this fails loudly.
+    const ytIdx = SRC.indexOf("kind: 'youtube'");
+    assert.ok(ytIdx > -1, 'YouTube instance must have kind: youtube');
+    const ytBlock = SRC.slice(ytIdx, SRC.indexOf('_raw: ytPlayer'));
+    assert.ok(
+        /onTimeUpdate\s*:/.test(ytBlock),
+        'YouTube instance must expose onTimeUpdate(handler) — transcript-follow.js contract'
+    );
+
+    const nativeIdx = SRC.indexOf("kind: 'native'");
+    assert.ok(nativeIdx > -1, 'native instance must have kind: native');
+    const nativeBlock = SRC.slice(nativeIdx, SRC.indexOf('_raw: video'));
+    assert.ok(
+        /onTimeUpdate\s*:/.test(nativeBlock),
+        'native instance must expose onTimeUpdate(handler) — transcript-follow.js contract'
+    );
+});

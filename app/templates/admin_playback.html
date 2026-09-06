@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+
+{% block title %}Playback Analytics — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">📺 Playback Analytics</h1>
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+                Who watched what, for how long — derived from
+                <code class="text-xs">ui.player</code> events.
+            </p>
+        </div>
+        <div class="flex items-center gap-2">
+            {# Day-window selector — same pattern as /admin/analytics. #}
+            <div class="inline-flex rounded-lg shadow-sm" role="group">
+                {% for d in (1, 7, 30, 90) %}
+                <a href="/admin/playback?days={{ d }}"
+                   class="px-3 py-2 text-sm border border-gray-200 dark:border-gray-700
+                          {% if d == days %}bg-indigo-600 text-white border-indigo-600
+                          {% else %}bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
+                          {% endif %}
+                          {% if loop.first %}rounded-l-lg{% endif %}
+                          {% if loop.last %}rounded-r-lg{% endif %}">
+                    {{ d }}d
+                </a>
+                {% endfor %}
+            </div>
+            <a href="/admin/analytics"
+               class="text-sm px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">
+                ← Analytics
+            </a>
+        </div>
+    </div>
+
+    {# ─────────────── Top videos by watch time ─────────────── #}
+    <section class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-4">
+        <h2 class="text-lg font-semibold mb-1 text-gray-900 dark:text-white">
+            Top videos <span class="text-sm font-normal text-gray-500">(by watch time)</span>
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Watch time is the sum of all play→pause/ended segments across all users,
+            capped at the video's duration so a stuck tab can't inflate the count.
+        </p>
+        {% if stats.videos_by_watch_time %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-400 uppercase">
+                        <th class="pb-2 pr-4">#</th>
+                        <th class="pb-2 pr-4">Video</th>
+                        <th class="pb-2 pr-4">Watch time</th>
+                        <th class="pb-2 pr-4">Plays</th>
+                        <th class="pb-2">Unique viewers</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                {% for v in stats.videos_by_watch_time %}
+                    <tr>
+                        <td class="py-2 pr-4 text-gray-400 font-mono">{{ loop.index }}</td>
+                        <td class="py-2 pr-4">
+                            <a href="/video/{{ v.video_id }}"
+                               class="text-indigo-600 dark:text-indigo-400 hover:underline truncate max-w-[420px] inline-block align-bottom">
+                                {{ v.title }}
+                            </a>
+                        </td>
+                        <td class="py-2 pr-4 font-mono font-semibold">
+                            {% set total = v.watch_sec %}
+                            {% set hh = total // 3600 %}
+                            {% set mm = (total % 3600) // 60 %}
+                            {% set ss = total % 60 %}
+                            {% if hh %}{{ hh }}h {% endif %}{{ mm }}m {{ ss }}s
+                        </td>
+                        <td class="py-2 pr-4 font-mono">{{ v.plays }}</td>
+                        <td class="py-2 font-mono">{{ v.unique_viewers }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-400">No playback events in this window yet —
+           start a video and the beacon will populate this table.</p>
+        {% endif %}
+    </section>
+
+    {# ─────────────── Top users by watch time ─────────────── #}
+    <section class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-4">
+        <h2 class="text-lg font-semibold mb-1 text-gray-900 dark:text-white">
+            Top viewers <span class="text-sm font-normal text-gray-500">(by watch time)</span>
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            "Completed" = at least one <code>ended</code> event for that video.
+        </p>
+        {% if stats.users_by_watch_time %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-400 uppercase">
+                        <th class="pb-2 pr-4">#</th>
+                        <th class="pb-2 pr-4">User</th>
+                        <th class="pb-2 pr-4">Watch time</th>
+                        <th class="pb-2 pr-4">Videos started</th>
+                        <th class="pb-2">Videos completed</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                {% for u in stats.users_by_watch_time %}
+                    <tr>
+                        <td class="py-2 pr-4 text-gray-400 font-mono">{{ loop.index }}</td>
+                        <td class="py-2 pr-4 truncate max-w-[280px]">{{ u.email }}</td>
+                        <td class="py-2 pr-4 font-mono font-semibold">
+                            {% set total = u.watch_sec %}
+                            {% set hh = total // 3600 %}
+                            {% set mm = (total % 3600) // 60 %}
+                            {% set ss = total % 60 %}
+                            {% if hh %}{{ hh }}h {% endif %}{{ mm }}m {{ ss }}s
+                        </td>
+                        <td class="py-2 pr-4 font-mono">{{ u.videos_started }}</td>
+                        <td class="py-2 font-mono">{{ u.videos_completed }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-400">No playback events from any user yet.</p>
+        {% endif %}
+    </section>
+
+    {# ─────────────── Full per-user × per-video table ─────────────── #}
+    <section class="bg-white dark:bg-gray-800 rounded-xl shadow p-6">
+        <h2 class="text-lg font-semibold mb-1 text-gray-900 dark:text-white">
+            Per (user × video) detail
+            <span class="text-sm font-normal text-gray-500">
+                — {{ stats.per_user_video|length }} row{{ '' if stats.per_user_video|length == 1 else 's' }}
+            </span>
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            One row per user × video pair. Sorted by watch time descending.
+            "Completion" is watch_sec ÷ video.duration (only when the duration is
+            known — YouTube videos uploaded before the duration capture shipped
+            will show <code class="text-xs">—</code>).
+        </p>
+        {% if stats.per_user_video %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-400 uppercase">
+                        <th class="pb-2 pr-3">User</th>
+                        <th class="pb-2 pr-3">Role</th>
+                        <th class="pb-2 pr-3">Video</th>
+                        <th class="pb-2 pr-3 text-right">Watch</th>
+                        <th class="pb-2 pr-3 text-right">Plays</th>
+                        <th class="pb-2 pr-3 text-right">Pauses</th>
+                        <th class="pb-2 pr-3 text-right">Seeks</th>
+                        <th class="pb-2 pr-3 text-right">Ended</th>
+                        <th class="pb-2 text-right">Completion</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                {% for row in stats.per_user_video %}
+                    <tr>
+                        <td class="py-2 pr-3 truncate max-w-[200px]">{{ row.email }}</td>
+                        <td class="py-2 pr-3">
+                            {% if row.role == 0 %}<span class="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">ADMIN</span>
+                            {% elif row.role == 1 %}<span class="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">PAID</span>
+                            {% else %}<span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">FREE</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-2 pr-3">
+                            <a href="/video/{{ row.video_id }}"
+                               class="text-indigo-600 dark:text-indigo-400 hover:underline truncate max-w-[360px] inline-block align-bottom">
+                                {{ row.video_title }}
+                            </a>
+                        </td>
+                        <td class="py-2 pr-3 text-right font-mono">
+                            {% set total = row.watch_sec %}
+                            {% set hh = total // 3600 %}
+                            {% set mm = (total % 3600) // 60 %}
+                            {% set ss = total % 60 %}
+                            {% if hh %}{{ hh }}h {% endif %}{{ mm }}m {{ ss }}s
+                        </td>
+                        <td class="py-2 pr-3 text-right font-mono">{{ row.plays }}</td>
+                        <td class="py-2 pr-3 text-right font-mono">{{ row.pauses }}</td>
+                        <td class="py-2 pr-3 text-right font-mono">{{ row.seeks }}</td>
+                        <td class="py-2 pr-3 text-right font-mono">{{ row.ended_count }}</td>
+                        <td class="py-2 text-right">
+                            {% if row.completion_pct is none %}
+                                <span class="text-gray-400">—</span>
+                            {% else %}
+                                <div class="inline-flex items-center gap-2">
+                                    <span class="font-mono text-xs {{ 'text-emerald-600 dark:text-emerald-400' if row.completion_pct >= 80 else ('text-amber-600 dark:text-amber-400' if row.completion_pct >= 30 else 'text-gray-500') }}">{{ row.completion_pct }}%</span>
+                                    <div class="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                                        <div class="h-1.5 rounded-full {{ 'bg-emerald-500' if row.completion_pct >= 80 else ('bg-amber-500' if row.completion_pct >= 30 else 'bg-gray-400') }}"
+                                             style="width: {{ row.completion_pct }}%"></div>
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-400">No playback events in this window yet.</p>
+        {% endif %}
+    </section>
+
+    <p class="text-xs text-gray-400 mt-6">
+        Sessions split at 5-minute gaps (treats "close tab and come back" as two
+        separate sessions). Watch time for an unclosed final play caps at the
+        video's duration, so a tab left open overnight doesn't inflate the
+        numbers. Data source: <code>events</code> table, <code>ui.player</code>
+        source only.
+    </p>
+</div>
+{% endblock %}

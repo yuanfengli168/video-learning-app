@@ -106,6 +106,14 @@
                     <span class="mr-3">🕒</span> Your Activity
                 </a>
                 {% endif %}
+                {# 2026-09-06 — visible to every signed-in user: the
+                   beta contact path. Users who want to try the paid
+                   plan (or report anything) shouldn't have to hunt
+                   for an email address; the pricing page explains the
+                   beta and this link goes one click from anywhere. #}
+                <a href="/pricing" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                    <span class="mr-3">💎</span> Plans &amp; Contact
+                </a>
             </div>
             {% if is_admin %}
             <div class="pt-2 space-y-1">
@@ -124,6 +132,10 @@
                 </a>
                 <a href="/admin/usage" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20">
                     <span class="mr-3">🧮</span> Usage Monitor
+                </a>
+                {# 2026-09-06 playback analytics — who watched what for how long #}
+                <a href="/admin/playback" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20">
+                    <span class="mr-3">📺</span> Playback
                 </a>
                 <a href="/admin/backups" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20">
                     <span class="mr-3">💾</span> Backup Health

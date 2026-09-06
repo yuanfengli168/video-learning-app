@@ -720,6 +720,46 @@ async def admin_usage_monitor_page(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# /admin/playback  (2026-09-06 — playback analytics)
+#
+# Answers the question every admin eventually asks:
+#   "Who watched what? For how long?"
+#
+# Distinct from /admin/analytics (which counts events + LLM calls).
+# This page derives REAL watch time from the play/pause/ended/seek
+# telemetry stream (see app/static/js/telemetry.js), and surfaces it
+# in three views:
+#
+#   1. Per (user × video) row: watch_sec, plays/pauses/seeks, % completion
+#   2. Top videos by total watch time (with unique-viewer counts)
+#   3. Top users by total watch time
+#
+# See app/services/analytics.py::get_playback_analytics for the watch-time
+# math (sessions split on > 5 min gaps; an unfinished play caps at
+# video duration so a stuck tab doesn't inflate).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/admin/playback", response_class=HTMLResponse)
+async def admin_playback_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+    days: int = 7,
+) -> HTMLResponse:
+    """Admin playback analytics: who watched what, for how long."""
+    from app.services.analytics import get_playback_analytics
+
+    days = max(1, min(days, 90))
+    stats = get_playback_analytics(db, days=days)
+    return templates.TemplateResponse(
+        request,
+        "admin_playback.html",
+        _ctx(request, user, db=db, stats=stats, days=days),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # /admin/backups  (Day 10 — backup health dashboard)
 # ─────────────────────────────────────────────────────────────────────────
 #

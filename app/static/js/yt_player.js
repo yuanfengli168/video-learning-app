@@ -194,6 +194,19 @@
             seekTo: (seconds) => ytPlayer.seekTo(seconds, true),
             getCurrentTime: () => ytPlayer.getCurrentTime() || 0,
             getDuration: () => ytPlayer.getDuration() || 0,
+            // 2026-09-06 regression fix: transcript-follow.js checks
+            // `typeof video.onTimeUpdate === 'function' && video.kind`
+            // to decide wrapper-vs-raw-<video>. The Day-8 instance
+            // shipped `.kind` but NOT `.onTimeUpdate`, so the check
+            // failed, fell into the raw-DOM branch, and
+            // `instance.addEventListener` threw a TypeError —
+            // silently killing the transcript follow/highlight for
+            // every YouTube video. (Masked until the COEP fix because
+            // the player itself was a dead black box before that.)
+            // Delegates to the module-level subscriber registry — the
+            // rAF loop (startTimeUpdateLoop) already polls and fires
+            // those handlers for this backend.
+            onTimeUpdate: (handler) => onTimeUpdate(handler),
             _raw: ytPlayer,
         };
     }
@@ -227,6 +240,11 @@
             },
             getCurrentTime: () => video.currentTime || 0,
             getDuration: () => video.duration || 0,
+            // 2026-09-06 regression fix: same as the YouTube instance —
+            // transcript-follow.js keys on this method existing. For the
+            // native backend the module-level handlers fire from the
+            // video element's own timeupdate/seeked events (emit()).
+            onTimeUpdate: (handler) => onTimeUpdate(handler),
             _raw: video,
         };
     }

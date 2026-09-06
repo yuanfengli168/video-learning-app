@@ -278,3 +278,321 @@ def get_all_users_usage(db: Session) -> list[dict[str, Any]]:
     # to), then by weekly consumption descending.
     result.sort(key=lambda x: (x["role"] not in (0, 1), -x["used_week"]))
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Playback analytics (2026-09-06)
+#
+# Powers /admin/playback — answers "who played which video, for how long".
+# Different from /admin/analytics (event counters + LLM usage): this page
+# is about REAL watch time derived from the play/pause/ended/seek events
+# the telemetry beacon already emits (see app/static/js/telemetry.js).
+#
+# Watch-time computation strategy:
+#   For each user × video pair, walk the events in chronological order.
+#   Each `play` event starts a "play segment". The next non-play event
+#   (pause / ended / seek / or session timeout > 5 min) closes the
+#   segment. Sum the segment durations.
+#
+#   We deliberately do NOT use `position_ms` from the events — it's the
+#   position-in-video, not the watch-time, and a user can rewind to
+#   the start. The cleanest signal is the actual elapsed wall-clock
+#   between play and the next stop event.
+#
+#   Edge cases handled:
+#   - No `ended` after final `play`: we count up to NOW (capped at
+#     video duration if we have it). If a play event has no closer
+#     but its position_ms is near the end, we treat it as ended.
+#   - Multiple sessions per user/video: split on > 5 min gaps.
+#   - Tab close mid-play: not detected here; the beacon does
+#     `visibilitychange → flushSync` but doesn't emit a pause. The
+#     watch time is then understated by however long the tab stayed
+#     open without any other event. Acceptable approximation.
+#
+# All aggregation is server-side from the events table — same
+# worker-independent truth as the rest of the analytics layer.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+# Max gap between two events that still counts as one play session.
+# Longer than this = user closed the tab and came back; count as
+# separate sessions so the watch-time math doesn't span hours.
+_SESSION_GAP_SEC = 300  # 5 min
+
+
+def get_playback_analytics(db: Session, days: int = 7) -> dict[str, Any]:
+    """Per-user × per-video playback analytics for the last `days` days.
+
+    Shape:
+      {
+        "window_days": 7,
+        "per_user_video": [               # one row per (user, video) pair
+          {
+            "user_id": ..., "email": ..., "role": ...,
+            "video_id": ..., "video_title": ..., "duration_sec": ...,
+            "plays": n,                    # play events
+            "pauses": n,                   # pause events
+            "seeks": n,                    # seek events (engagement signal)
+            "ended_count": n,              # ended events (= video finished)
+            "watch_sec": n,                # total active watch time
+            "completion_pct": n            # 0–100, watch_sec / duration_sec
+                                            # (None if no duration known)
+          }
+        ],
+        "videos_by_watch_time": [          # top 10 videos by total watch time
+          {"video_id": ..., "title": ..., "watch_sec": n, "unique_viewers": n,
+           "plays": n}
+        ],
+        "users_by_watch_time": [           # top 10 users by total watch time
+          {"user_id": ..., "email": ..., "watch_sec": n,
+           "videos_started": n, "videos_completed": n}
+        ],
+      }
+    """
+    days = max(1, min(days, 90))
+
+    # Pull the events we'll need, in order. Per-(user, video) we need
+    # the full play/pause/ended/seek stream to reconstruct sessions.
+    rows = db.execute(
+        text(
+            """
+            SELECT e.user_id, e.video_id, e.ts, e.context_json,
+                   u.email, u.role,
+                   v.title, v.duration
+            FROM events e
+            LEFT JOIN users u ON u.user_id = e.user_id
+            LEFT JOIN videos v ON v.id = e.video_id
+            WHERE e.source = 'ui.player'
+              AND e.ts >= datetime('now', :days_cutoff)
+            ORDER BY e.user_id, e.video_id, e.ts ASC
+            """
+        ),
+        {"days_cutoff": f"-{days} days"},
+    ).fetchall()
+
+    import json
+    from datetime import datetime, timezone
+
+    def _parse_ts(s: str) -> datetime:
+        # Stored as ISO 8601 (with ' ' or 'T' separator, with or without
+        # tz). Try a couple of formats; fall back to fromisoformat which
+        # accepts most modern Python 3.11+ strings.
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace(" ", "T"))
+        except Exception:
+            return None
+
+    def _parse_action(context_json: str | None) -> tuple[str, int]:
+        """Return (action, position_ms) from a context_json string.
+
+        Robust to:
+          - null
+          - empty string
+          - non-JSON garbage (returns ('other', 0))
+          - missing fields (defaults to 'other' / 0)
+        """
+        if not context_json:
+            return ("other", 0)
+        try:
+            ctx = json.loads(context_json)
+        except Exception:
+            return ("other", 0)
+        action = (ctx or {}).get("action") or "other"
+        position_ms = int((ctx or {}).get("position_ms") or (ctx or {}).get("to_ms") or 0)
+        return (str(action), position_ms)
+
+    # Group events into per-(user, video) session streams, then compute
+    # watch time. Grouping key is (user_id, video_id) since the same
+    # user can have multiple sessions per video (multi-day watching).
+    groups: dict[tuple[str | None, str | None], list] = {}
+    for r in rows:
+        key = (r[0], r[1])
+        groups.setdefault(key, []).append(r)
+
+    per_user_video: list[dict[str, Any]] = []
+    video_agg: dict[str, dict] = {}      # video_id -> totals
+    user_agg: dict[str, dict] = {}        # user_id -> totals
+    # `now` is used ONLY for closing an unclosed final play (capped at
+    # the video duration anyway). Events come from SQLite's
+    # datetime('now') — naive UTC — so we keep a naive 'now' for
+    # consistent subtraction. Python 3.14 deprecates utcnow(); use
+    # now(UTC) and drop tzinfo to stay naive.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    for (uid, vid), evs in groups.items():
+        plays = pauses = seeks = ended_count = 0
+        watch_sec = 0
+        # Track the active play's start time so we can compute the
+        # next-segment's duration when we see a non-play event.
+        active_play_start: datetime | None = None
+        last_ts: datetime | None = None
+
+        email = evs[0][4] if evs else None
+        role = evs[0][5] if evs else None
+        title = evs[0][6] if evs else None
+        duration_sec = evs[0][7] if evs else None  # may be None for YouTube videos
+
+        for ev in evs:
+            ts = _parse_ts(ev[2])
+            if ts is None:
+                continue
+            action, _pos = _parse_action(ev[3])
+
+            # Session boundary — closes an ABANDONED play only.
+            #
+            # Key insight: during continuous playback the beacon emits
+            # NO events (it fires on state changes only). So a
+            # play→ended pair can legitimately span the entire video
+            # (10+ min). The 5-min gap must therefore NOT close a play
+            # when the current event is itself a closer (pause/ended/
+            # seek) — those always win and close the segment naturally.
+            #
+            # The ONLY case where a gap means "user left the tab
+            # playing and closed it" is: a NEW play starts after the
+            # gap. Then the previous play was abandoned mid-watch and
+            # we close it at the last event we ever saw.
+            if (
+                action == "play"
+                and active_play_start is not None
+                and last_ts is not None
+                and (ts - last_ts).total_seconds() > _SESSION_GAP_SEC
+            ):
+                # Abandoned play: close at last_ts (the last moment we
+                # know the tab was still open). Contribution is
+                # (last_ts - active_play_start).
+                watch_sec += (last_ts - active_play_start).total_seconds()
+                active_play_start = None
+
+            if action == "play":
+                plays += 1
+                if active_play_start is None:
+                    active_play_start = ts
+            elif action == "pause":
+                pauses += 1
+                if active_play_start is not None:
+                    watch_sec += (ts - active_play_start).total_seconds()
+                    active_play_start = None
+            elif action == "ended":
+                ended_count += 1
+                if active_play_start is not None:
+                    watch_sec += (ts - active_play_start).total_seconds()
+                    active_play_start = None
+            elif action == "seek":
+                seeks += 1
+                # A seek doesn't necessarily stop play, but if a play
+                # is active we close the current segment — the user's
+                # attention jumped, the previous segment is over.
+                if active_play_start is not None:
+                    watch_sec += (ts - active_play_start).total_seconds()
+                    active_play_start = None
+            # 'other' actions ignored for watch time
+
+            last_ts = ts
+
+        # Close any active play at the LAST event we saw (use `now` if
+        # the last event is the play itself — the segment didn't end).
+        if active_play_start is not None:
+            if last_ts is None or last_ts == active_play_start:
+                # No later event at all → use now (capped at duration)
+                closer = now
+            else:
+                closer = last_ts
+            elapsed = (closer - active_play_start).total_seconds()
+            # Cap at the video's duration if we know it (prevents a
+            # stuck tab from inflating watch time past the actual
+            # content length).
+            if duration_sec and elapsed > duration_sec:
+                elapsed = duration_sec
+            # Floor at 0 — a tiny rounding error shouldn't go negative.
+            if elapsed > 0:
+                watch_sec += elapsed
+
+        # Round watch_sec to a whole number; the math above is in
+        # float seconds from datetime deltas but reporting fractional
+        # seconds just looks weird in a UI.
+        watch_sec = int(round(watch_sec))
+
+        completion_pct: int | None = None
+        if duration_sec and duration_sec > 0:
+            completion_pct = min(100, int(round(watch_sec / duration_sec * 100)))
+
+        per_user_video.append(
+            {
+                "user_id": uid,
+                "email": email or "(no email)",
+                "role": role,
+                "video_id": vid,
+                "video_title": title or "(deleted video)",
+                "duration_sec": duration_sec,
+                "plays": plays,
+                "pauses": pauses,
+                "seeks": seeks,
+                "ended_count": ended_count,
+                "watch_sec": watch_sec,
+                "completion_pct": completion_pct,
+            }
+        )
+
+        # Roll-ups.
+        if vid:
+            va = video_agg.setdefault(
+                vid, {"video_id": vid, "title": title or "(deleted video)",
+                      "watch_sec": 0, "plays": 0,
+                      "viewers": set()}
+            )
+            va["watch_sec"] += watch_sec
+            va["plays"] += plays
+            if uid:
+                va["viewers"].add(uid)
+        if uid:
+            ua = user_agg.setdefault(
+                uid, {"user_id": uid, "email": email or "(no email)",
+                      "watch_sec": 0, "videos_started": 0,
+                      "videos_completed": 0}
+            )
+            ua["watch_sec"] += watch_sec
+            ua["videos_started"] += 1
+            if ended_count > 0:
+                ua["videos_completed"] += 1
+
+    # Sort the per-user-video table by watch_sec DESC (most-engaged
+    # first) — that's what an admin scanning for "who watched what"
+    # wants to see.
+    per_user_video.sort(key=lambda x: -x["watch_sec"])
+
+    videos_by_watch_time = [
+        {
+            "video_id": v["video_id"],
+            "title": v["title"],
+            "watch_sec": v["watch_sec"],
+            "unique_viewers": len(v["viewers"]),
+            "plays": v["plays"],
+        }
+        for v in sorted(
+            video_agg.values(),
+            key=lambda x: -x["watch_sec"],
+        )
+    ][:10]
+
+    users_by_watch_time = [
+        {
+            "user_id": u["user_id"],
+            "email": u["email"],
+            "watch_sec": u["watch_sec"],
+            "videos_started": u["videos_started"],
+            "videos_completed": u["videos_completed"],
+        }
+        for u in sorted(
+            user_agg.values(),
+            key=lambda x: -x["watch_sec"],
+        )
+    ][:10]
+
+    return {
+        "window_days": days,
+        "per_user_video": per_user_video,
+        "videos_by_watch_time": videos_by_watch_time,
+        "users_by_watch_time": users_by_watch_time,
+    }
