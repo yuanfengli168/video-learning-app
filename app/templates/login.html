@@ -3,20 +3,288 @@
 {% block breadcrumb %}Sign in{% endblock %}
 
 {% block content %}
-<div class="flex items-center justify-center min-h-[60vh]">
-    <div class="w-full max-w-md">
-        <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 p-8">
-            <div class="text-center mb-6">
-                <div class="text-4xl mb-2">📚</div>
-                <h1 class="text-2xl font-bold">Welcome to {{ app_name }}</h1>
-                <p class="text-gray-400 text-sm mt-1">Sign in to start learning from videos</p>
+<!--
+  Login hero layout — 2026-09-06 redesign.
+
+  Why this looks different from the rest of the app:
+    The login page is the single highest-stakes screen for a new
+    user — the FIRST impression. A wide card on a subtle gradient
+    reads as "real product", not "default Tailwind starter". All
+    the same AuthKit mounting code lives below; we only changed
+    the chrome around it.
+
+  Layout notes:
+    - Outer container is `min-h-[70vh]` and centers vertically on
+      generous screens, so the card sits in the visual sweet spot
+      instead of being wedged at the top.
+    - The card uses `max-w-lg` (not `max-w-md`) — gives the
+      AuthKit-rendered Google button room to breathe; previously
+      it was wrapping into two lines.
+    - The hero icon is a 16x16 colored circle with a white
+      graduation-cap emoji. The old version used a bare 📚
+      floating above the title; an icon in a colored chip reads
+      as "branded" instead of "default".
+    - The "feature pills" row (Watch · Chat · Learn · Free during
+      beta) gives first-time visitors a 3-second value-prop scan
+      before they commit to typing their email.
+    - The "Why sign in?" footer note answers the implicit
+      question every new visitor has: "do I need to sign up just
+      to watch?". Answer: yes, but it takes 5 seconds with
+      Google.
+    - The Tailwind gradient (`from-indigo-50 via-white to-purple-50
+      dark:from-gray-900 dark:via-gray-900 dark:to-gray-800`) is
+      intentionally subtle — bright enough to feel premium, faint
+      enough not to fight the white card on top of it.
+-->
+<div class="relative min-h-[70vh] flex items-center justify-center py-12">
+    <!-- Subtle decorative blobs (decorative-only, pointer-events-none). -->
+    <div aria-hidden="true" class="pointer-events-none absolute inset-0 overflow-hidden">
+        <div class="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-indigo-200 dark:bg-indigo-900/30 blur-3xl opacity-40"></div>
+        <div class="absolute -bottom-32 -right-32 w-96 h-96 rounded-full bg-purple-200 dark:bg-purple-900/30 blur-3xl opacity-40"></div>
+    </div>
+
+    <div class="relative w-full max-w-lg">
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-200/70 dark:border-gray-700/70 p-8 sm:p-10">
+            <!-- Hero header: icon + title + tagline. -->
+            <div class="text-center mb-8">
+                <div class="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-3xl shadow-lg shadow-indigo-500/30 mb-4 select-none">
+                    <span aria-hidden="true">🎓</span>
+                </div>
+                <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+                    Welcome to {{ app_name }}
+                </h1>
+                <p class="text-gray-500 dark:text-gray-400 text-sm sm:text-base mt-2">
+                    Learn from the best videos on the internet — curated, not crowded.
+                </p>
             </div>
 
-            <!-- AuthKit anchor -->
+            <!-- Feature pills: gives the user a 3-second "what is this?" scan. -->
+            <ul class="flex flex-wrap items-center justify-center gap-2 mb-8 text-xs sm:text-sm" aria-label="Features">
+                <li class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
+                    <span aria-hidden="true">📺</span> Watch
+                </li>
+                <li class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                    <span aria-hidden="true">💬</span> Chat with AI
+                </li>
+                <li class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
+                    <span aria-hidden="true">🧠</span> Mindmaps + Quizzes
+                </li>
+                <li class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                    <span aria-hidden="true">✨</span> Free during beta
+                </li>
+            </ul>
+
+            <!-- AuthKit anchor — AuthKit mounts the form/buttons here. -->
+            <!-- We override some AuthKit defaults via the `theme` option below; for
+                 structural tweaks (button sizes, input padding, tab spacing) we
+                 inject a small CSS scope via the <style> tag at the bottom. -->
             <div id="auth-anchor" class="space-y-3"></div>
+
+            <!-- Footer note: answers the implicit "do I have to?" question. -->
+            <p class="text-center text-xs text-gray-400 dark:text-gray-500 mt-6 leading-relaxed">
+                New here? Just continue with Google — it's the fastest way in.
+                <br class="hidden sm:block">
+                We never share your email.
+            </p>
         </div>
+
+        <!-- Footer link to pricing (small, contextual). -->
+        <p class="text-center text-xs text-gray-500 dark:text-gray-400 mt-6">
+            Curious about pricing?
+            <a href="/pricing" class="text-indigo-600 dark:text-indigo-400 hover:underline">See plans</a>
+        </p>
     </div>
 </div>
+
+<!--
+  Local style overrides for AuthKit's rendered output.
+
+  AuthKit (https://yuanfengli168.github.io/authkit/) emits the
+  following class prefixes (verified by inspecting live DOM):
+    - .ak-inline         outer container
+    - .ak-inline-header  title + subtitle block
+    - .ak-inline-body    the form area
+    - .ak-provider-btn   provider button (Google)
+    - .ak-provider-btn--google
+    - .ak-provider-btn__icon / __label / __spinner
+    - .ak-inline-divider the "or" line
+    - .ak-email-form     email/password form
+    - .ak-email-tabs     the Sign In / Sign Up tab strip
+    - .ak-email-tab      individual tab (active: --active)
+    - .ak-email-forgot   "Forgot password?" / "← Back to sign in"
+    - .ak-input          email/password fields
+    - .ak-btn / .ak-btn--primary   submit button
+    - .ak-form-error / .ak-form-success
+  All selectors below are scoped to #auth-anchor so they don't
+  leak into the rest of the app. Tweak as AuthKit evolves.
+-->
+<style>
+    /* Tab strip: even spacing, active tab underlined */
+    #auth-anchor .ak-email-tabs {
+        display: flex;
+        gap: 1.5rem;
+        border-bottom: 1px solid rgb(229 231 235);
+        margin-bottom: 1.25rem;
+    }
+    .dark #auth-anchor .ak-email-tabs {
+        border-color: rgb(55 65 81);
+    }
+    #auth-anchor .ak-email-tab {
+        padding: 0.625rem 0.25rem;
+        font-size: 0.9375rem;
+        font-weight: 500;
+        color: rgb(107 114 128);
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        cursor: pointer;
+        transition: color 120ms, border-color 120ms;
+        background: transparent;
+        border-top: none;
+        border-left: none;
+        border-right: none;
+    }
+    .dark #auth-anchor .ak-email-tab { color: rgb(156 163 175); }
+    #auth-anchor .ak-email-tab.ak-email-tab--active,
+    #auth-anchor .ak-email-tab[aria-selected="true"] {
+        color: rgb(79 70 229);
+        border-bottom-color: rgb(99 102 241);
+    }
+    .dark #auth-anchor .ak-email-tab.ak-email-tab--active,
+    .dark #auth-anchor .ak-email-tab[aria-selected="true"] {
+        color: rgb(165 180 252);
+        border-bottom-color: rgb(129 140 248);
+    }
+
+    /* Google button: full-width, generous height, soft shadow */
+    #auth-anchor .ak-provider-btn {
+        width: 100%;
+        padding: 0.75rem 1rem;
+        font-size: 0.9375rem;
+        font-weight: 500;
+        border-radius: 0.625rem;
+        background: white;
+        color: rgb(55 65 81);
+        border: 1px solid rgb(209 213 219);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.625rem;
+        cursor: pointer;
+        transition: background 120ms, box-shadow 120ms, transform 80ms;
+    }
+    .dark #auth-anchor .ak-provider-btn {
+        background: rgb(31 41 55);
+        color: rgb(229 231 235);
+        border-color: rgb(75 85 99);
+    }
+    #auth-anchor .ak-provider-btn:hover {
+        background: rgb(249 250 251);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .dark #auth-anchor .ak-provider-btn:hover { background: rgb(55 65 81); }
+    #auth-anchor .ak-provider-btn:active { transform: translateY(1px); }
+    /* Keep the G icon inline-flex inside the centered button */
+    #auth-anchor .ak-provider-btn__icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    #auth-anchor .ak-provider-btn__label {
+        display: inline-block;
+    }
+
+    /* Inputs: taller, with icon-friendly padding */
+    #auth-anchor .ak-input {
+        width: 100%;
+        padding: 0.75rem 0.875rem;
+        font-size: 0.9375rem;
+        border-radius: 0.5rem;
+        border: 1px solid rgb(209 213 219);
+        background: white;
+        color: rgb(17 24 39);
+        transition: border-color 120ms, box-shadow 120ms;
+        box-sizing: border-box;
+    }
+    .dark #auth-anchor .ak-input {
+        background: rgb(17 24 39);
+        border-color: rgb(75 85 99);
+        color: rgb(243 244 246);
+    }
+    #auth-anchor .ak-input:focus {
+        outline: none;
+        border-color: rgb(99 102 241);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    }
+
+    /* Divider with centered "or" chip */
+    #auth-anchor .ak-inline-divider {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin: 1.25rem 0;
+        color: rgb(156 163 175);
+        font-size: 0.8125rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        text-align: center;
+    }
+    #auth-anchor .ak-inline-divider::before,
+    #auth-anchor .ak-inline-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: rgb(229 231 235);
+    }
+    .dark #auth-anchor .ak-inline-divider::before,
+    .dark #auth-anchor .ak-inline-divider::after { background: rgb(55 65 81); }
+
+    /* Error text: red, small, with breathing room above */
+    #auth-anchor .ak-form-error {
+        color: rgb(220 38 38);
+        font-size: 0.8125rem;
+        margin-top: 0.5rem;
+    }
+    .dark #auth-anchor .ak-form-error { color: rgb(252 165 165); }
+
+    /* "Forgot password?" link: subtle, right-aligned */
+    #auth-anchor .ak-email-forgot {
+        color: rgb(79 70 229);
+        font-size: 0.8125rem;
+        text-decoration: none;
+        margin-top: 0.5rem;
+        align-self: flex-end;
+        display: inline-block;
+    }
+    #auth-anchor .ak-email-forgot:hover { text-decoration: underline; }
+    .dark #auth-anchor .ak-email-forgot { color: rgb(165 180 252); }
+
+    /* The form itself: vertical layout, generous gap */
+    #auth-anchor .ak-email-form__inner {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    /* Submit button (Sign In / Sign Up primary action) */
+    #auth-anchor .ak-btn--primary {
+        width: 100%;
+        padding: 0.75rem 1rem;
+        font-size: 0.9375rem;
+        font-weight: 600;
+        border-radius: 0.625rem;
+        background: linear-gradient(135deg, rgb(99 102 241), rgb(168 85 247));
+        color: white;
+        border: none;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+        cursor: pointer;
+        margin-top: 0.5rem;
+        transition: opacity 120ms, transform 80ms;
+    }
+    #auth-anchor .ak-btn--primary:hover { opacity: 0.92; }
+    #auth-anchor .ak-btn--primary:active { transform: translateY(1px); }
+</style>
 
 {% block scripts %}
 <script type="module">
