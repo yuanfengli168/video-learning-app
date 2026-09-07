@@ -119,6 +119,51 @@
      *
      * Why not scrollIntoView: see the module header comment.
      */
+    // ── End-of-transcript spacer (2026-09-07) ──
+    //
+    // Problem: scrollToTop() wants to pin the active line to the TOP
+    // of the panel, but the browser clamps scrollTop at
+    // (scrollHeight - clientHeight). Near the end of the transcript the
+    // clamp hits before the line reaches the top, so the active line
+    // lands mid-panel or below the fold — the user clicks a [08:21]
+    // chat time anchor on an 8m55s video and the line does NOT appear
+    // on top, exactly as reported.
+    //
+    // Fix: a trailing spacer div of (container height - 4px) grows
+    // scrollHeight without touching clientHeight, so ANY line —
+    // including the very last — can reach the top.
+    //
+    // Why a spacer ELEMENT and not padding-bottom: under content-box
+    // sizing, padding grows clientHeight by the same amount it grows
+    // scrollHeight (net scrollable range: ZERO — the padding is a
+    // no-op). A spacer div inside the content area adds height to the
+    // scrollable content only, and works identically under content-box
+    // AND border-box. (Tailwind's preflight is border-box, but this
+    // component shouldn't depend on the page's box-sizing.)
+    //
+    // Re-appended on every init() because renderTranscript replaces
+    // container.innerHTML; init runs right after each render, so the
+    // spacer is always fresh. Kept in sync on resizes by a
+    // ResizeObserver on the container.
+    let resizeObserver = null;
+    let endSpacer = null;
+
+    function applyEndPadding() {
+        if (!container) return;
+        // (Re)create the spacer if it's gone (innerHTML replacement
+        // removes it) and append as the LAST child.
+        if (!endSpacer || !endSpacer.isConnected) {
+            endSpacer = document.createElement('div');
+            endSpacer.setAttribute('data-role', 'transcript-end-spacer');
+            endSpacer.setAttribute('aria-hidden', 'true');
+            container.appendChild(endSpacer);
+        }
+        // One panel-height of slack + the 4px scroll gap keeps ANY
+        // line pinnable to the top with a little breathing room below.
+        const pad = Math.max(0, container.clientHeight - 4);
+        endSpacer.style.height = pad + 'px';
+    }
+
     function scrollToTop(lineEl) {
         if (!container || !lineEl) return;
         const containerRect = container.getBoundingClientRect();
@@ -130,6 +175,8 @@
         //   the line is scrolled out of view above)
         const lineInContent = container.scrollTop + (lineRect.top - containerRect.top);
         const desired = lineInContent - 4;  // 4px gap
+        // With the end-padding applied, the natural max already lets
+        // the last line reach the top; the clamp is just a safety net.
         const max = Math.max(0, container.scrollHeight - container.clientHeight);
         container.scrollTop = Math.max(0, Math.min(desired, max));
     }
@@ -281,11 +328,29 @@
         // currentTime (typically 0:00) at the top, regardless of
         // whether the mouse happens to be over the panel. See
         // doc/manualTodo.txt 2026-07-09 #1 (the screenshot bug).
+        //
+        // 2026-09-07: apply the end-of-transcript padding BEFORE the
+        // seed scroll so the clamp math already accounts for it.
+        applyEndPadding();
         updateActiveLine(true);
         initialized = true;
+        // Keep the padding in sync on resizes (panel height changes
+        // with the window). One observer per init; dropped in destroy.
+        if (typeof ResizeObserver !== 'undefined') {
+            resizeObserver = new ResizeObserver(applyEndPadding);
+            resizeObserver.observe(container);
+        }
     }
 
     function destroy() {
+        if (resizeObserver) {
+            resizeObserver.disconnect();
+            resizeObserver = null;
+        }
+        if (endSpacer && endSpacer.isConnected) {
+            endSpacer.remove();
+        }
+        endSpacer = null;
         if (videoEl && onTimeUpdate) {
             // Day 8: dispose YTPlayer subscription if we used it
             if (typeof onTimeUpdateDispose === 'function') {

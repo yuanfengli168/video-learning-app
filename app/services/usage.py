@@ -99,7 +99,13 @@ def _count_llm_calls(
     return int(db.execute(sql, params).scalar() or 0)
 
 
-def get_user_usage(db: Session, uid: str, role: int) -> dict[str, Any]:
+def get_user_usage(
+    db: Session,
+    uid: str,
+    role: int,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """Compute the per-user usage snapshot for the usage page.
 
     Returns a tier-shaped dict:
@@ -112,7 +118,20 @@ def get_user_usage(db: Session, uid: str, role: int) -> dict[str, Any]:
       ADMIN: same shape as PAID (admins share the paid-style display;
               the shared Ollama pool health lives on /admin/llm/budget).
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Keep `now` timezone-aware — `_week_bounds()` does
+    # `now.astimezone(timezone.utc)` internally, which on a naive
+    # datetime would assume the host's local TZ (e.g. +08 on the Mac
+    # Studio) and silently produce the wrong week. We convert to
+    # naive only when handing values to SQL (events.ts is naive UTC).
+    # `now` may be injected for deterministic tests; defaults to now().
+    if now is None:
+        now_aware = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        # Naive input is interpreted as UTC (matches events.ts).
+        now_aware = now.replace(tzinfo=timezone.utc)
+    else:
+        now_aware = now
+    now = now_aware.replace(tzinfo=None)
 
     if role == UserRole.FREE:
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -126,7 +145,12 @@ def get_user_usage(db: Session, uid: str, role: int) -> dict[str, Any]:
     cutoff_7h = now - timedelta(hours=7)
     used_7h = _count_llm_calls(db, uid, since=cutoff_7h)
 
-    week_start, week_end = _week_bounds(now)
+    # Pass tz-aware `now_aware` so `_week_bounds` does NOT mis-treat it
+    # as host-local time.
+    week_start, week_end = _week_bounds(now_aware)
+    # Convert to naive for SQL (events.ts is naive UTC).
+    week_start = week_start.replace(tzinfo=None)
+    week_end = week_end.replace(tzinfo=None)
     used_week = _count_llm_calls(db, uid, since=week_start, until=week_end)
 
     return {

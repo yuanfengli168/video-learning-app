@@ -87,6 +87,10 @@ class FakeContainer extends FakeEventTarget {
         if (sel === '.transcript-line') return this._lines;
         return [];
     }
+    // 2026-09-07: init() appends a trailing end-spacer element (the
+    // end-of-transcript scroll fix). Accept it silently; the spacer
+    // is invisible to the line-based assertions above.
+    appendChild() { return arguments[0]; }
     getBoundingClientRect() {
         return {
             top: this._viewportTop,
@@ -146,6 +150,28 @@ function makeWindow() {
         requestAnimationFrame: (cb) => { win._rafQueue.push(cb); return win._rafQueue.length; },
         cancelAnimationFrame: (id) => { delete win._rafQueue[id - 1]; },
     };
+    // ── Minimal document shim (2026-09-07) ──
+    // transcript-follow.js now creates a trailing spacer element on
+    // init (end-of-transcript scroll fix), so the IIFE needs
+    // `document.createElement`. The fake element below is disposable:
+    // the tests never exercise spacer geometry — the FakeContainer's
+    // querySelectorAll('.transcript-line') returns only real line
+    // fakes, so the spacer is invisible to all existing assertions.
+    const fakeElement = () => ({
+        style: {},
+        classList: { add() {}, remove() {}, contains() { return false; } },
+        addEventListener() {}, removeEventListener() {},
+        setAttribute() {}, getAttribute() { return null; },
+        appendChild() {}, remove() {}, isConnected: true,
+        getBoundingClientRect: () => ({ top: 0, bottom: 0 }),
+    });
+    globalThis.document = {
+        createElement: () => fakeElement(),
+        createTreeWalker: () => ({ nextNode: () => null }),
+        addEventListener() {}, removeEventListener() {},
+        querySelector: () => null, querySelectorAll: () => [],
+        getElementById: () => null,
+    };
     globalThis.requestAnimationFrame = win.requestAnimationFrame;
     globalThis.cancelAnimationFrame = win.cancelAnimationFrame;
     return win;
@@ -156,6 +182,8 @@ function cleanupGlobalThis() {
     // Remove the rAF shims so the next test installs a fresh queue.
     delete globalThis.requestAnimationFrame;
     delete globalThis.cancelAnimationFrame;
+    // And the document shim (added 2026-09-07 — see makeWindow).
+    delete globalThis.document;
 }
 
 
@@ -590,4 +618,32 @@ test('integration: timeupdate with newer idx overwrites pending rAF force flag',
     // Highlight should be on line 1 (latest), not line 0.
     assert.equal(lines[1].classList.contains('is-follow-active'), true);
     assert.equal(lines[0].classList.contains('is-follow-active'), false);
+});
+
+
+// ── End-of-transcript spacer regression (2026-09-07) ────────────────────────
+// The user clicked a [08:21] chat time anchor on an 8m55s video and
+// the line did NOT pin to the top — the scroll clamped at the bottom.
+// Fix: init() appends a trailing spacer (container-height minus 4px)
+// so ANY line — including the last — can reach the top. These guards
+// fail loudly if the spacer is removed or stops being sized.
+
+test('source-level: init applies an end-of-transcript spacer', () => {
+    const { TF } = loadTranscriptFollow();
+    assert.ok(TF, 'TranscriptFollow must install');
+    // The spacer creation + sizing must exist in the source.
+    assert.ok(
+        SRC.includes('transcript-end-spacer'),
+        'init must create a [data-role="transcript-end-spacer"] element'
+    );
+    assert.ok(
+        /clientHeight\s*-\s*4/.test(SRC),
+        'spacer height must be (clientHeight - 4) — one panel height minus the scroll gap'
+    );
+    // destroy must clean it up.
+    const destroyIdx = SRC.indexOf('function destroy()');
+    assert.ok(
+        SRC.slice(destroyIdx).includes('endSpacer.remove()'),
+        'destroy() must remove the spacer'
+    );
 });

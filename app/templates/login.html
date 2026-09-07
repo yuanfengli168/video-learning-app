@@ -79,7 +79,37 @@
             <!-- We override some AuthKit defaults via the `theme` option below; for
                  structural tweaks (button sizes, input padding, tab spacing) we
                  inject a small CSS scope via the <style> tag at the bottom. -->
-            <div id="auth-anchor" class="space-y-3"></div>
+            <!-- AuthKit mount point. Until the ES module fetch + Firebase
+                 init completes (~200-800ms on first visit), show a skeleton
+                 that mirrors the eventual layout (Google button + divider +
+                 two inputs + submit) so the card never looks empty/broken.
+                 AuthKit replaces the anchor's children when it mounts, so
+                 the skeleton removes itself automatically. -->
+            <div id="auth-anchor" class="space-y-3" aria-busy="true">
+                <!-- Google button skeleton -->
+                <div class="auth-skeleton w-full h-11 rounded-[0.625rem]"></div>
+                <!-- Divider -->
+                <div class="flex items-center gap-3 my-5">
+                    <div class="auth-skeleton flex-1 h-px"></div>
+                    <span class="text-xs uppercase tracking-wider text-gray-300 dark:text-gray-600">loading</span>
+                    <div class="auth-skeleton flex-1 h-px"></div>
+                </div>
+                <!-- Tabs skeleton -->
+                <div class="flex gap-6 mb-5">
+                    <div class="auth-skeleton w-16 h-5 rounded"></div>
+                    <div class="auth-skeleton w-16 h-5 rounded"></div>
+                </div>
+                <!-- Inputs skeleton -->
+                <div class="space-y-3">
+                    <div class="auth-skeleton w-full h-11 rounded-lg"></div>
+                    <div class="auth-skeleton w-2/3 h-11 rounded-lg"></div>
+                </div>
+                <!-- Submit skeleton -->
+                <div class="auth-skeleton w-full h-11 rounded-[0.625rem] mt-1"></div>
+                <p class="text-xs text-gray-400 dark:text-gray-500 text-center mt-2">
+                    Loading sign-in options…
+                </p>
+            </div>
 
             <!-- Footer note: answers the implicit "do I have to?" question. -->
             <p class="text-center text-xs text-gray-400 dark:text-gray-500 mt-6 leading-relaxed">
@@ -123,6 +153,45 @@
   leak into the rest of the app. Tweak as AuthKit evolves.
 -->
 <style>
+    /* ── Loading skeleton (shown inside #auth-anchor until AuthKit mounts) ── */
+    .auth-skeleton {
+        position: relative;
+        overflow: hidden;
+        background-color: rgb(243 244 246); /* gray-100 */
+    }
+    .dark .auth-skeleton {
+        background-color: rgb(31 41 55); /* gray-800 */
+    }
+    .auth-skeleton::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background: linear-gradient(
+            90deg,
+            rgba(0, 0, 0, 0) 0,
+            rgba(255, 255, 255, 0.35) 50%,
+            rgba(0, 0, 0, 0) 100%
+        );
+        animation: auth-skeleton-shimmer 1.4s ease-in-out infinite;
+    }
+    .dark .auth-skeleton::after {
+        background: linear-gradient(
+            90deg,
+            rgba(0, 0, 0, 0) 0,
+            rgba(255, 255, 255, 0.06) 50%,
+            rgba(0, 0, 0, 0) 100%
+        );
+    }
+    @keyframes auth-skeleton-shimmer {
+        100% { transform: translateX(100%); }
+    }
+    /* Accessibility: users with reduced-motion preferences get a static
+       skeleton rather than an animated shimmer. */
+    @media (prefers-reduced-motion: reduce) {
+        .auth-skeleton::after { animation: none; }
+    }
+
     /* Tab strip: even spacing, active tab underlined */
     #auth-anchor .ak-email-tabs {
         display: flex;
@@ -294,6 +363,12 @@
 <script type="module">
     import AuthKit from 'https://yuanfengli168.github.io/authkit/index.js';
 
+    // Clear the loading state the moment the module starts mounting —
+    // init() replaces the skeleton with the real form, so aria-busy
+    // (set in the skeleton markup) must go too. Screen readers announce
+    // a stale "busy" region otherwise.
+    const _anchor = document.getElementById('auth-anchor');
+
     await AuthKit.init({
         firebase: {
             apiKey: "{{ firebase_config.apiKey }}",
@@ -319,6 +394,10 @@
             loginPage: '/login',
         },
     });
+
+    // init() has returned — the real form is mounted (the skeleton is
+    // gone). Mark the region ready for assistive tech.
+    if (_anchor) _anchor.setAttribute('aria-busy', 'false');
 
     // Bug fix: switching accounts in the same browser.
     //

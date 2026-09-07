@@ -34,13 +34,22 @@ def _mock_auth():
     )
 
 
-def _seed_llm_events(db_session, uid: str, count: int, *, hours_ago: float = 0.0):
+def _seed_llm_events(
+    db_session, uid: str, count: int, *, hours_ago: float = 0.0,
+    now: datetime | None = None,
+):
     """Write `count` successful-LLM-call events for `uid`.
 
     hours_ago shifts all timestamps back so they fall outside windows.
     (0.0 = now, inside both the 7h and week windows.)
+
+    `now` lets tests pin the reference clock so hour-shifts are
+    relative to a known point (avoids Sunday→Monday boundary flakes
+    when the suite runs on the live host clock).
     """
-    ts = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours_ago)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    ts = now.replace(tzinfo=None) - timedelta(hours=hours_ago)
     for _ in range(count):
         db_session.execute(
             text(
@@ -99,17 +108,29 @@ def test_paid_usage_shape(db_session):
 
 
 def test_week_window_excludes_last_week(db_session):
-    """Events 8 days ago fall OUTSIDE the fixed week (Mon–Sun window)."""
-    _seed_llm_events(db_session, "u-old", 10, hours_ago=24 * 8)
-    snap = get_user_usage(db_session, "u-old", role=1)
+    """Events 8 days ago fall OUTSIDE the fixed week (Mon–Sun window).
+
+    Pins `now` to a known Wednesday at 12:00 UTC so 8-day-old events
+    are unambiguously in the previous week regardless of clock skew.
+    """
+    fixed_now = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)  # Wed
+    _seed_llm_events(db_session, "u-old", 10, hours_ago=24 * 8, now=fixed_now)
+    snap = get_user_usage(db_session, "u-old", role=1, now=fixed_now)
     assert snap["week"]["used"] == 0
 
 
 def test_7h_window_excludes_old_calls(db_session):
     """Events 8 hours ago fall OUTSIDE the rolling 7h window but INSIDE
-    the week window (8h < 7 days)."""
-    _seed_llm_events(db_session, "u-7h", 10, hours_ago=8)
-    snap = get_user_usage(db_session, "u-7h", role=1)
+    the fixed Mon→Sun week window.
+
+    The test pins `now` to a known Wednesday at 12:00 UTC so the
+    8-hour-old events land safely inside the current week regardless
+    of when the suite runs (avoids the Sunday→Monday boundary flake
+    the real clock hits on the Mac Studio host).
+    """
+    fixed_now = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)  # Wed
+    _seed_llm_events(db_session, "u-7h", 10, hours_ago=8, now=fixed_now)
+    snap = get_user_usage(db_session, "u-7h", role=1, now=fixed_now)
     assert snap["last7h"]["used"] == 0
     assert snap["week"]["used"] == 10
 
