@@ -3,6 +3,30 @@
 All notable changes to the Video Learning App are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0.8] - 2026-09-06/08 — YouTube embed unlock, player hardening & go-live polish
+
+🔒 **A user-reported "the YouTube player is a dead black box" turned into a 4-commit layered-fix saga (CSP → XSS → Permissions-Policy → COEP), followed by playback analytics, a transcript-follow regression fix, a login redesign, and two go-live polish items.** Commits `223b314` → `13fe6d2`, all on `mvp2-production-patches`.
+
+### 🐛 Bug fixes
+
+- **`fix(csp)`: allowlist YouTube origins** (`223b314`) — Day-8 regression: `yt_player.js` loads the IFrame API from `www.youtube.com` and embeds via `www.youtube-nocookie.com`, but neither origin was in the CSP `frame-src`/`script-src`/`connect-src` allowlist. Every admin-curated YouTube video in the catalog rendered as a dead black box. All browsers silently refuse the iframe without this.
+- **`fix(xss)`: escape chat + materials content before `innerHTML`** (`216fcb8`) — the live-chat path in `video.html` interpolated raw strings into `innerHTML`: the user's own message, the AI reply, and fetch error text. Any LLM reply containing `<script>`/`<img onerror=…>` executed in the session. All sinks now go through `escapeHtml()` first.
+- **`fix(player)`: unlock YouTube embed (Permissions-Policy + Referrer-Policy)** (`ca191fc`) — the CSP fix alone wasn't enough. The global middleware set `Permissions-Policy: fullscreen=(self)` and `Referrer-Policy: strict-origin-when-cross-origin`, both hostile to the YouTube iframe. Now the video page's full-screen request needs no permission delegation; referrer policy relaxed to `no-referrer-when-downgrade` so Google's embed can load its resources.
+- **`fix(coep)`: exempt `/video/{id}` pages so the YouTube embed can navigate** (`04edaf5`) — cross-origin isolation (COEP) was also blocking the embed. Exempted the video pages from COOP/COEP headers so the iframe can navigate cross-origin.
+- **`polish(player)`: crash-proof the rAF time loop + mtime cache-busting for static JS** (`e3dae96`) — (a) The transcript-follow rAF loop could keep running after the video element was removed, throwing on every frame in the background; now guarded by `document.contains()`. (b) Static JS now ships with `?v=<mtime>` cache-busting via the `asset()` helper, so players/follow widgets refresh on deploy without a hard refresh.
+- **`fix(usage)`: week window shifted a week back under host TZ** (`13fe6d2`) — `get_user_usage()` stripped `tzinfo` before calling `_week_bounds()`, whose `astimezone(utc)` silently reinterpreted the naive value as host-local (+08 on the Mac Studio), computing the PREVIOUS Mon–Sun window and dropping just-counted calls. Now keeps `now` timezone-aware and converts to naive only at the SQL boundary; added an injectable `now=` kwarg for deterministic tests. Two boundary-flaky tests pinned to a fixed Wednesday reference clock.
+
+### ✨ Features
+
+- **`feat(playback)`: admin playback analytics + transcript-follow regression fix + contact CTAs** (`c20ea96`) — (a) New admin playback analytics view (play/pause/seek/ended counters from the telemetry pipeline, top videos by play counts). (b) `transcript-follow.js` regression fix: the follow highlight wasn't tracking playback when the video is a YouTube iframe (it subscribed via `onTimeUpdate`, which the wrapper contract provides — the regression was the subscription being lost on re-init). (c) Login/pricing/contact CTAs polished.
+- **`polish(login)`: redesign login page hero with branded card + AuthKit theming** (`62b1568`) — branded card design with light/dark AuthKit theme, cleaner provider buttons, copy polish.
+
+### 🧪 Tests
+
+- Full suite **1332 passing** (+20 since the 2.1.0.7 batch): transcript-follow source-level + integration tests (20 .mjs), usage week-bounds tests (10), player wrapper tests, session-expiry tests. Zero changes to auth flow, LLM chains, storage, or admin RBAC.
+
+## [2.1.0.7] - 2026-09-05/06 — Usage pages, admin analytics, telemetry & retention (8-commit batch)
+
 ## [1.0.0] - 2026-07-06 — MVP1 release
 
 🎉 **First stable release.** MVP1 (local single-user foundation) is feature-complete, tested, and signed off. See [`doc/MVP1.0-successfullyFinished.md`](doc/MVP1.0-successfullyFinished.md) for the full scorecard.
