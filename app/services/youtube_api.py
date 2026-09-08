@@ -81,6 +81,9 @@ class VideoMetadata:
     """Highest-resolution thumbnail available."""
     duration_seconds: int
     """Duration in seconds (parsed from ISO 8601, e.g. 'PT3M34S' → 214)."""
+    view_count: int | None = None
+    """YouTube view count at fetch time (2026-09-09 dashboard Top
+    Viewed tab). None when the API didn't return statistics."""
     caption_tracks: list[CaptionTrack] = field(default_factory=list)
     """Available caption tracks (language + auto-gen flag)."""
 
@@ -91,6 +94,7 @@ class VideoMetadata:
             "channel": self.channel,
             "thumbnail_url": self.thumbnail_url,
             "duration_seconds": self.duration_seconds,
+            "view_count": self.view_count,
             "caption_tracks": [c.to_dict() for c in self.caption_tracks],
         }
 
@@ -241,6 +245,16 @@ class YouTubeAPIClient:
         duration_iso = snippet.get("duration", "")
         duration_seconds = parse_iso8601_duration(duration_iso)
 
+        # 2026-09-09: viewCount for the dashboard Top Viewed tab.
+        # 'statistics' is now part of _videos_list; missing/garbage → None.
+        view_count: int | None = None
+        raw_views = snippet.get("viewCount")
+        if raw_views is not None:
+            try:
+                view_count = int(raw_views)
+            except (TypeError, ValueError):
+                view_count = None
+
         # Captions are best-effort — don't fail the whole call
         try:
             captions = self.list_caption_tracks(video_id)
@@ -254,8 +268,47 @@ class YouTubeAPIClient:
             channel=channel,
             thumbnail_url=thumbnail_url,
             duration_seconds=duration_seconds,
+            view_count=view_count,
             caption_tracks=captions,
         )
+
+    def get_view_counts(self, video_ids: list[str]) -> dict[str, int]:
+        """Batched view-count fetch — videos.list supports up to 50 ids
+        per call (1 quota unit). Returns {youtube_id: view_count} for
+        the ids YouTube knows; missing/private ids are simply absent
+        from the result. Used by the nightly 00:00 SGT refresh job
+        (scripts/refresh_youtube_views.py) and safe to call for any
+        catalog size (23 videos today = one call)."""
+        result: dict[str, int] = {}
+        for i in range(0, max(1, len(video_ids)), 50):
+            chunk = video_ids[i:i + 50]
+            if not chunk:
+                break
+            params = {
+                "part": "statistics",
+                "id": ",".join(chunk),
+                "key": self.api_key,
+            }
+            url = f"{YOUTUBE_API_BASE}/videos"
+            try:
+                resp = httpx.get(url, params=params, timeout=self.timeout)
+            except httpx.HTTPError as e:
+                raise YouTubeAPIError(f"HTTP error calling YouTube API: {e}") from e
+            if resp.status_code != 200:
+                raise YouTubeAPIError(
+                    f"YouTube API {resp.status_code} on batched statistics: "
+                    f"{resp.text[:200]}"
+                )
+            for item in resp.json().get("items", []):
+                vid = item.get("id", "")
+                stats = item.get("statistics", {})
+                raw = stats.get("viewCount")
+                if vid and raw is not None:
+                    try:
+                        result[vid] = int(raw)
+                    except (TypeError, ValueError):
+                        continue
+        return result
 
     def list_playlist_videos(self, playlist_id_or_url: str) -> list[VideoMetadata]:
         """Expand a YouTube PLAYLIST into its videos, in playlist order.
@@ -328,12 +381,17 @@ class YouTubeAPIClient:
         return videos
 
     def _videos_list(self, video_id: str) -> dict | None:
-        """Call videos.list?part=snippet,contentDetails and return the first item.
+        """Call videos.list?part=snippet,contentDetails,statistics and return
+        the first item's merged dict.
+
+        2026-09-09: 'statistics' added so enrichment stores viewCount
+        for the dashboard Top Viewed tab. Kept in one call (same 1
+        quota unit as before).
 
         Returns None if the video doesn't exist.
         """
         params = {
-            "part": "snippet,contentDetails",
+            "part": "snippet,contentDetails,statistics",
             "id": video_id,
             "key": self.api_key,
         }

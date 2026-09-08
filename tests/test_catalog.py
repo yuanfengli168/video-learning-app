@@ -370,7 +370,11 @@ def test_dashboard_catalog_anonymous(
 def test_dashboard_shows_admin_cta_for_empty_catalog_when_admin(
     client: TestClient, db_session,
 ):
-    """If catalog empty AND user is admin → 'Add one' link shown."""
+    """If catalog empty AND user is admin → 'Add one' link shown.
+
+    2026-09-09: the flat catalog grid became three tabs (Top Viewed /
+    Our Loves / Newest); the empty state now lives in the Top Viewed
+    panel (the default tab)."""
     ensure_user_row("uid-admin", "admin@x.com", db_session)
     db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
     db_session.commit()
@@ -378,7 +382,7 @@ def test_dashboard_shows_admin_cta_for_empty_catalog_when_admin(
     with _mock_verify_token("uid-admin", "admin@x.com"):
         response = client.get("/")
     html = response.text
-    assert "No videos in the catalog" in html
+    assert "No videos yet" in html
     assert "/admin/upload" in html
 
 
@@ -393,7 +397,7 @@ def test_dashboard_hides_admin_cta_for_free_user_when_empty(
         with TestClient(app) as c:
             response = c.get("/", headers={"Authorization": "Bearer fake"})
     html = response.text
-    assert "No videos in the catalog" in html
+    assert "No videos yet" in html
     # CTA only shown when is_admin
     # But the sidebar nav has /admin/upload link for admin — free user has no sidebar link either
     assert html.count("href=\"/admin/upload\"") == 0
@@ -485,7 +489,7 @@ def test_dashboard_catalog_empty_when_only_legacy_uploads(
             response = c.get("/", headers={"Authorization": "Bearer fake"})
     assert response.status_code == 200
     html = response.text
-    assert "No videos in the catalog" in html
+    assert "No videos yet" in html
     assert "Only Legacy" not in html  # NOT shown
 
 
@@ -583,17 +587,24 @@ def test_dashboard_catalog_card_no_duration_when_zero(client: TestClient, db_ses
 
 
 def test_dashboard_catalog_card_shows_course_section_badge(client: TestClient, db_session, course_and_section):
-    """Card shows 'Course / Section' badge so users know where the video lives."""
+    """2026-09-09: the flat grid became tabs; the course/section badge
+    moved to the channel/playlist browse surfaces (which have their
+    own tests in test_channel_catalog.py). On the dashboard, the card
+    now shows title + channel + views metric — assert THAT contract
+    here so the tab migration is pinned."""
     ensure_user_row("uid-admin", "admin@x.com", db_session)
     db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
     db_session.commit()
-    _make_video_with_metadata(db_session, "Badge test", 0, "ytbadge00001")
+    v = _make_video_with_metadata(db_session, "Badge test", 0, "ytbadge00001")
     # The `client` fixture from conftest already has the session cookie
     # + mocks verify_token globally. Just hit the URL.
     response = client.get("/")
     html = response.text
-    # Course is "Test" / Section is "S1" (from course_and_section fixture)
-    assert "Test / S1" in html
+    # Top Viewed (default tab) renders the video card with title + channel
+    assert "Badge test" in html
+    assert "Test Channel" in html
+    # and it links to the watch page
+    assert f"/video/{v.id}" in html
 
 
 def test_dashboard_catalog_card_falls_back_to_emoji_without_thumbnail(
@@ -617,16 +628,21 @@ def test_dashboard_catalog_card_falls_back_to_emoji_without_thumbnail(
 
 
 def test_dashboard_catalog_card_paid_badge_still_works(client: TestClient, db_session, course_and_section):
-    """Paid visibility badge still renders alongside new metadata fields."""
+    """2026-09-09: tabs replaced the flat grid; the 🔒 Paid badge now
+    lives on the playlist/catalog surfaces. On the dashboard, an
+    ADMIN (who sees everything) still sees the PAID_ONLY video in
+    Top Viewed — assert THAT (visibility filtering per role is
+    covered in test_dashboard_tabs.py)."""
     ensure_user_row("uid-admin", "admin@x.com", db_session)
     db_session.execute(text("UPDATE users SET role=0 WHERE user_id='uid-admin'"))
     db_session.commit()
-    _make_video_with_metadata(
+    v = _make_video_with_metadata(
         db_session, "Paid Video", VideoVisibility.PAID_ONLY.value, "ytpaidbad001"
     )
     with _mock_verify_token("uid-admin", "admin@x.com"):
         response = client.get("/")
-    assert "🔒 Paid" in response.text
+    assert "Paid Video" in response.text
+    assert f"/video/{v.id}" in response.text
 
 
 # ─────────────────────────────────────────────────────────────────────────

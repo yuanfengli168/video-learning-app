@@ -42,7 +42,7 @@ from app.auth.admin import (
 from app.auth.dependencies import get_current_user
 from app.auth.roles import Capability, UserRole, VideoVisibility
 from app.database import get_db
-from app.models import Channel, Course, Section, Video
+from app.models import Asset, Channel, Course, Section, Video
 from app.services.youtube import extract_youtube_id, is_valid_youtube_id
 
 
@@ -192,6 +192,15 @@ class YouTubeBulkImportRequest(BaseModel):
         default=None, max_length=36,
         description="Existing Course UUID in the channel to add into.",
     )
+    # 2026-09-08: chain transcript → materials. Before this the YouTube
+    # import path stopped at the transcript (the uploaded-video path
+    # chains both), so imported playlists had no summary/mindmap/
+    # flashcards/quiz. ON by default for bulk — the whole point of
+    # bulk is one-click playlists.
+    generate_materials: bool = Field(
+        default=True,
+        description="Also generate materials after each transcript lands.",
+    )
     visibility: int = Field(default=VideoVisibility.PUBLIC)
 
     @field_validator("visibility")
@@ -327,6 +336,7 @@ async def admin_add_youtube_video(
     yt_thumbnail: str | None = None
     yt_channel: str | None = None
     yt_caption_languages: list[str] = []
+    yt_view_count: int | None = None
 
     from app.services.youtube_api import (
         YouTubeAPIKeyMissing,
@@ -350,6 +360,7 @@ async def admin_add_youtube_video(
             yt_thumbnail = meta.thumbnail_url or None
             yt_channel = meta.channel or None
             yt_caption_languages = [c.language for c in meta.caption_tracks]
+            yt_view_count = meta.view_count
             enrichment_status = "enriched"
         except YouTubeVideoNotFound:
             # Video was deleted from YouTube between admin paste and our call
@@ -384,6 +395,9 @@ async def admin_add_youtube_video(
         channel=yt_channel,
         caption_languages=_json.dumps(yt_caption_languages),
         duration=yt_duration or 0.0,
+        # 2026-09-09: YouTube views for the Top Viewed tab (enrichment-
+        # time snapshot; the nightly refresh job keeps it current).
+        view_count=yt_view_count,
         # Visibility (PUBLIC/PAID_ONLY/ADMIN_ONLY) from request
         visibility=body.visibility,
         # status='pending' until processing completes (Day 3+ caption download)
@@ -467,6 +481,10 @@ async def admin_add_youtube_video(
     # Reuses the same _run_caption_download_job() used by the retry
     # endpoint so admin-initiated adds and manual retries share
     # one code path.
+    # 2026-09-08: single adds now ALSO chain to material generation
+    # (same fix as bulk — the YouTube path previously stopped at the
+    # transcript, unlike the uploaded-video path). The importing
+    # admin's uid/role are the generate owner-context.
     from app.services.youtube_captions_job import (
         _run_caption_download_job,
     )
@@ -474,6 +492,9 @@ async def admin_add_youtube_video(
     background_tasks.add_task(
         _run_caption_download_job,
         video_id=video.id,
+        generate_materials=True,
+        generate_user_id=uid,
+        generate_user_role=int(user.get("role", 0) or 0),
     )
 
     visibility_name = {
@@ -756,7 +777,10 @@ async def admin_bulk_import_youtube(
 
     # ── 4. Kick caption jobs, staggered 10s apart ──────────────────
     # background_tasks run AFTER the response; the sleep staggers the
-    # yt-dlp calls so YouTube doesn't 429 us.
+    # yt-dlp calls so YouTube doesn't 429 us. The caption job CHAINS
+    # to _run_generate_job on success when generate_materials is set,
+    # so the LLM call starts right after each transcript lands —
+    # still staggered, because the stagger is in the caption phase.
     delay = 0
     for vid in added_ids:
         row = (
@@ -767,7 +791,12 @@ async def admin_bulk_import_youtube(
         if row is None:
             continue  # race: deleted between commit and here
         background_tasks.add_task(
-            _staggered_caption_job, row.id, delay
+            _staggered_caption_job,
+            row.id,
+            delay,
+            generate_materials=body.generate_materials,
+            generate_user_id=uid,
+            generate_user_role=int(user.get("role", 0) or 0),
         )
         delay += 10
 
@@ -791,14 +820,128 @@ async def admin_bulk_import_youtube(
     }
 
 
-def _staggered_caption_job(video_id: str, delay_seconds: int) -> None:
+def _staggered_caption_job(
+    video_id: str,
+    delay_seconds: int,
+    *,
+    generate_materials: bool = False,
+    generate_user_id: str = "",
+    generate_user_role: int = 0,
+) -> None:
     """Caption download with a start delay — avoids the YouTube 429
-    storm when several videos are bulk-added (2026-09-08)."""
+    storm when several videos are bulk-added (2026-09-08).
+    Passes the material-generation chain flags through to the caption
+    job (2026-09-08)."""
     if delay_seconds > 0:
         import time as _time
         _time.sleep(min(delay_seconds, 300))  # cap at 5 min safety net
     from app.services.youtube_captions_job import _run_caption_download_job
-    _run_caption_download_job(video_id=video_id)
+    _run_caption_download_job(
+        video_id=video_id,
+        generate_materials=generate_materials,
+        generate_user_id=generate_user_id,
+        generate_user_role=generate_user_role,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /api/admin/channels/{id}/generate-missing  (2026-09-08 — backfill)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/channels/{channel_id}/generate-missing")
+async def admin_generate_missing_materials(
+    channel_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Generate materials for every video in a channel that has a
+    transcript but no generated_at (the pre-2026-09-08 imports that
+    stopped at the transcript).
+
+    Skips videos already generated (idempotent) and videos with no
+    transcript yet (they're still pending/error — their own pipeline
+    handles them). Jobs are staggered 5s apart so the LLM provider
+    rate limiter (per-user) doesn't trip.
+
+    Returns the queued count so the UI can say "Generating N…".
+    """
+    uid = user.get("uid", "")
+    role = int(user.get("role", 0) or 0)
+
+    channel = db.get(Channel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    from sqlalchemy import exists
+
+    # Videos in this channel WITH a transcript asset but NULL generated_at
+    pending = (
+        db.execute(
+            select(Video)
+            .join(Section, Video.section_id == Section.id)
+            .join(Course, Section.course_id == Course.id)
+            .where(
+                Course.channel_id == channel.id,
+                Video.generated_at.is_(None),
+                exists(
+                    select(Asset.id).where(
+                        Asset.video_id == Video.id,
+                        Asset.asset_type == "transcript",
+                    )
+                ),
+            )
+            .order_by(Section.order_index.asc(), Video.order_index.asc())
+        )
+        .scalars()
+        .all()
+    )
+
+    delay = 0
+    for video in pending:
+        background_tasks.add_task(
+            _staggered_generate_job,
+            video.id,
+            delay,
+            generate_user_id=uid,
+            generate_user_role=role,
+        )
+        delay += 5
+
+    return {
+        "queued": len(pending),
+        "channel": channel.name,
+        "message": (
+            f"Queued material generation for {len(pending)} video(s) in "
+            f"'{channel.name}'. Each takes ~15-60s (staggered 5s apart); "
+            f"watch the videos turn ready on the playlist page."
+        ) if pending else (
+            "Nothing to generate — every video in this channel already "
+            "has materials (or has no transcript yet)."
+        ),
+    }
+
+
+def _staggered_generate_job(
+    video_id: str,
+    delay_seconds: int,
+    *,
+    generate_user_id: str = "",
+    generate_user_role: int = 0,
+) -> None:
+    """Material generation with a start delay — backfill path."""
+    if delay_seconds > 0:
+        import time as _time
+        _time.sleep(min(delay_seconds, 300))
+    from app.jobs import start_job
+    from app.routers.generation import _run_generate_job
+    start_job(video_id, "generate", total=100)
+    _run_generate_job(
+        video_id,
+        generate_user_id,
+        generate_user_role,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────

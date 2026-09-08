@@ -275,6 +275,17 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "ALTER TABLE courses ADD COLUMN channel_id VARCHAR(36) "
         "REFERENCES channels(id) ON DELETE SET NULL",
     ),
+    # 2026-09-09 — videos.view_count. YouTube view count at last
+    # refresh, for the dashboard 'Top Viewed' tab. Snapshot refreshed
+    # daily at 00:00 SGT by scripts/refresh_youtube_views.py (launchd);
+    # single-video enrichment fills it at import time. Nullable:
+    # legacy rows + playlist-mode bulk imports (playlistItems.list has
+    # no statistics part) start NULL until the first nightly refresh.
+    (
+        "videos",
+        "view_count",
+        "ALTER TABLE videos ADD COLUMN view_count INTEGER",
+    ),
 ]
 
 

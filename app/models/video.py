@@ -83,6 +83,12 @@ class Video(Base):
     # tables. Existing rows keep their integer values (SQLite will
     # happily cast int → float on read).
     duration: Mapped[float] = mapped_column(Float, default=0.0)  # seconds
+    # 2026-09-09 dashboard tabs: YouTube view count at last refresh.
+    # Snapshot refreshed daily at 00:00 SGT by
+    # scripts/refresh_youtube_views.py (launchd). NULL = never fetched
+    # (sorts last on Top Viewed; enrichment at import time fills it).
+    # YouTube counts are int64 — SQLite handles it natively.
+    view_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
     section_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("sections.id", ondelete="CASCADE"), nullable=False

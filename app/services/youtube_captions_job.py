@@ -151,7 +151,13 @@ def _set_video_error_status(db: Session, video_id: str, error_msg: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _run_caption_download_job(video_id: str) -> None:
+def _run_caption_download_job(
+    video_id: str,
+    *,
+    generate_materials: bool = False,
+    generate_user_id: str = "",
+    generate_user_role: int = 0,
+) -> None:
     """Download YouTube captions for the given video and persist them.
 
     Called by FastAPI BackgroundTasks after the admin adds a video.
@@ -163,8 +169,24 @@ def _run_caption_download_job(video_id: str) -> None:
       ready         → transcript Asset written, transcribed_at stamped
       error         → download failed (whisper_fallback_reason set)
 
+    2026-09-08: optional CHAIN to material generation. The YouTube
+    import path previously stopped at the transcript — the uploaded-
+    video path chains transcribe → generate, but YouTube adds didn't,
+    so imported videos had exactly 1 asset (transcript) and
+    generated_at NULL. With generate_materials=True the job calls
+    _run_generate_job right after a successful caption save, using
+    the importing ADMIN's uid/role (the admin is the owner-context
+    for LLM tier purposes: the admin chain runs, and the per-user
+    rate limiter counts against them). Generate failure does NOT
+    roll back the transcript — the video stays 'ready' and the
+    admin can hit Generate on the video page.
+
     Args:
         video_id: UUID of the Video row.
+        generate_materials: Also generate summary/mindmap/flashcards/
+            quiz/topic_timestamps after the transcript lands.
+        generate_user_id: uid for the generate call (the admin).
+        generate_user_role: role int (0=admin) for the tier chain.
 
     Side effects:
       - Mutates video.status
@@ -400,6 +422,32 @@ def _run_caption_download_job(video_id: str) -> None:
         )
         video.last_transcribe_job = serialize_job(job)
         db.commit()
+
+        # 2026-09-08: chain to materials. Only fires on caption SUCCESS
+        # — a caption failure leaves the video in 'error' with the
+        # admin's retry button as the path forward. Generation runs
+        # in-line (this IS already a background task) right after
+        # the commit above so the generate job sees the transcript.
+        # NB: start_job is the module-top import — no local import
+        # here (a local import shadows it for the whole function and
+        # trips UnboundLocalError at the transcribe start_job above).
+        if generate_materials:
+            try:
+                from app.routers.generation import _run_generate_job
+                start_job(video_id, "generate", total=100)
+                _run_generate_job(
+                    video_id,
+                    generate_user_id,
+                    generate_user_role,
+                )
+            except Exception:
+                # Generation failure must NOT flip the transcript's
+                # success — the video stays 'ready' with transcript,
+                # and the admin can Generate from the video page.
+                logger.exception(
+                    "chained material generation failed for %s",
+                    video_id,
+                )
 
     except Exception as exc:
         # Final defense — anything we missed above lands here.

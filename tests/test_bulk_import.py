@@ -31,10 +31,11 @@ def _disable_youtube_api(monkeypatch):
     youtube_api.settings.youtube_api_key = ""
     # Stub the staggered caption job — background tasks would otherwise
     # run real yt-dlp against our fake IDs (slow, network-dependent).
+    # NB: 2026-09-08 the wrapper gained generate_* kwargs — accept **kw.
     import app.routers.admin as admin_router
     monkeypatch.setattr(
         admin_router, "_staggered_caption_job",
-        lambda video_id, delay: None,
+        lambda video_id, delay, **kwargs: None,
     )
     yield
     youtube_api.settings.youtube_api_key = original

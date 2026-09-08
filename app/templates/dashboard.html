@@ -74,29 +74,46 @@
     </div>
     {% endif %}
 
-    <!-- Catalog — admin-curated YouTube videos (visibility-filtered per user) -->
+    <!-- Catalog (2026-09-09) — three filter tabs on the shop-window.
+         Top Viewed (default) + Our Loves = VIDEO leaderboards (the
+         metric is per-video); Newest = PLAYLIST leaderboard ranked by
+         most-recently-added video (a 9-video import is ONE new thing).
+         Caps not pagination — leaderboards don't paginate; 'See all'
+         links to the catalog browse surfaces. Sort is LIVE at render;
+         only the view-count data is snapshotted nightly (00:10 SGT). -->
     <div>
-        <h2 class="text-lg font-semibold mb-3">📺 Catalog</h2>
-        {% if catalog_videos %}
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {% for v in catalog_videos %}
+        <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h2 class="text-lg font-semibold">📺 Catalog</h2>
+            <a href="/catalog" class="text-xs text-gray-400 hover:text-indigo-500">All channels →</a>
+        </div>
+
+        {# Tab strip — JS toggles panels, no server round-trip. #}
+        <div class="flex gap-1 border-b border-gray-200 dark:border-gray-700 mb-4 overflow-x-auto" role="tablist">
+            <button onclick="dashTab('top-viewed')" id="dashtab-top-viewed"
+                    class="dashtab-btn px-4 py-2 text-sm font-medium border-b-2 border-indigo-500 text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                🔥 Top Viewed
+            </button>
+            <button onclick="dashTab('our-loves')" id="dashtab-our-loves"
+                    class="dashtab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 whitespace-nowrap">
+                ❤️ Our Loves
+            </button>
+            <button onclick="dashTab('newest')" id="dashtab-newest"
+                    class="dashtab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 whitespace-nowrap">
+                🆕 Newest
+            </button>
+        </div>
+
+        {# ── Top Viewed (videos by YouTube views) ── #}
+        <div id="dashpanel-top-viewed">
+        {% if top_viewed %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {% for v in top_viewed %}
             <a href="/video/{{ v.id }}"
                class="block bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden hover:shadow-md transition-shadow">
                 <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-3xl relative">
                     {% if v.thumbnail_url %}
-                    <img src="{{ v.thumbnail_url }}"
-                         alt="{{ v.title }}"
-                         class="w-full h-full object-cover"
-                         loading="lazy"
-                         referrerpolicy="no-referrer">
-                    {% else %}
-                    🎬
-                    {% endif %}
-                    {# Duration overlay bottom-right (only if > 0).
-                       v.duration is a Float. We use the `int` filter on
-                       each subexpression because Jinja's // and %
-                       on Floats return Floats (renders as "3.0:34.0"
-                       without the filter). #}
+                    <img src="{{ v.thumbnail_url }}" alt="{{ v.title }}" class="w-full h-full object-cover" loading="lazy" referrerpolicy="no-referrer">
+                    {% else %}🎬{% endif %}
                     {% if v.duration %}
                     {% set d_secs = v.duration | int %}
                     <span class="absolute bottom-1 right-1 text-xs px-1.5 py-0.5 rounded bg-black/70 text-white">
@@ -106,40 +123,94 @@
                 </div>
                 <div class="p-3">
                     <h3 class="font-medium text-sm leading-snug line-clamp-2">{{ v.title }}</h3>
-                    {# Channel name (YouTube videos only — empty for legacy uploads) #}
                     {% if v.channel %}
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{{ v.channel }}</p>
                     {% endif %}
-                    <div class="flex flex-wrap gap-1 mt-1.5">
-                        {% if v.visibility == 1 %}
-                        <span class="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
-                            🔒 Paid
-                        </span>
-                        {% elif v.visibility == 2 %}
-                        <span class="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">
-                            🛡️ Admin
-                        </span>
-                        {% endif %}
-                        {# Course / Section badge (small, unobtrusive) #}
-                        {% if v.section and v.section.course %}
-                        <span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300 truncate max-w-[160px]"
-                              title="{{ v.section.course.title }} / {{ v.section.title }}">
-                            {{ v.section.course.title }} / {{ v.section.title }}
-                        </span>
-                        {% endif %}
-                    </div>
+                    {# The metric (small gray text) — YouTube views. #}
+                    <p class="text-xs text-gray-400 mt-1">
+                        {% if v.view_count %}{{ v.view_count | format_views }}{% else %}—{% endif %}
+                    </p>
                 </div>
             </a>
             {% endfor %}
         </div>
         {% else %}
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-6 text-center text-gray-400">
-            No videos in the catalog yet.
-            {% if is_admin %}
-            <a href="/admin/upload" class="underline text-indigo-600 dark:text-indigo-400">Add one →</a>
-            {% endif %}
+            No videos yet.{% if is_admin %} <a href="/admin/upload" class="underline text-indigo-600 dark:text-indigo-400">Add one →</a>{% endif %}
         </div>
         {% endif %}
+        </div>
+
+        {# ── Our Loves (videos by our 30-day play events) ── #}
+        <div id="dashpanel-our-loves" class="hidden">
+        {% if our_loves %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {# loves = (video, plays) pairs; 🔥 on the top 3; play count
+               shown only at >= 5 (small numbers undermine 'attractive'). #}
+            {% for v, plays in our_loves %}
+            <a href="/video/{{ v.id }}"
+               class="block bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden hover:shadow-md transition-shadow">
+                <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-3xl relative">
+                    {% if v.thumbnail_url %}
+                    <img src="{{ v.thumbnail_url }}" alt="{{ v.title }}" class="w-full h-full object-cover" loading="lazy" referrerpolicy="no-referrer">
+                    {% else %}🎬{% endif %}
+                    {% if loop.index <= 3 %}
+                    <span class="absolute top-1 left-1 text-xs px-1.5 py-0.5 rounded-full bg-orange-500/90 text-white">🔥</span>
+                    {% endif %}
+                </div>
+                <div class="p-3">
+                    <h3 class="font-medium text-sm leading-snug line-clamp-2">{{ v.title }}</h3>
+                    {% if v.channel %}
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">{{ v.channel }}</p>
+                    {% endif %}
+                    <p class="text-xs text-gray-400 mt-1">
+                        {% if plays >= 5 %}played {{ plays }}× this month{% else %}&nbsp;{% endif %}
+                    </p>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-6 text-center text-gray-400">
+            No plays yet — be the first! Videos light up here once people watch them.
+        </div>
+        {% endif %}
+        </div>
+
+        {# ── Newest (channel playlists by most-recently-added video) ── #}
+        <div id="dashpanel-newest" class="hidden">
+        {% if newest %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {% for entry in newest %}
+            {# Playlist card — clicks into the playlist page. Cover =
+               the newest video's thumbnail (the 'new thing' itself). #}
+            <a href="/channel/{{ entry.channel_slug }}/playlist/{{ entry.course.id }}"
+               class="block bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden hover:shadow-md transition-shadow">
+                <div class="aspect-video bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-3xl relative">
+                    {% if entry.cover and entry.cover.thumbnail_url %}
+                    <img src="{{ entry.cover.thumbnail_url }}" alt="{{ entry.course.title }}" class="w-full h-full object-cover" loading="lazy" referrerpolicy="no-referrer">
+                    {% else %}🎬{% endif %}
+                    {# YouTube playlist cue: gradient strip #}
+                    <div class="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+                </div>
+                <div class="p-3">
+                    <h3 class="font-medium text-sm leading-snug line-clamp-2">{{ entry.course.title }}</h3>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                        {{ entry.channel.name if entry.channel }}
+                    </p>
+                    <p class="text-xs text-gray-400 mt-1">
+                        {% if entry.new_this_week > 0 %}{{ entry.new_this_week }} new this week{% else %}updated{% endif %}
+                    </p>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-6 text-center text-gray-400">
+            No channel playlists yet.{% if is_admin %} <a href="/admin/upload" class="underline text-indigo-600 dark:text-indigo-400">Import one →</a>{% endif %}
+        </div>
+        {% endif %}
+        </div>
     </div>
 
     <!-- Your Courses — only PAID+ADMIN can create courses (MANAGE_OWN_COURSE). -->
@@ -504,5 +575,27 @@ document.addEventListener('keydown', (e) => {
         }
     }
 });
+// ── Dashboard tab toggle (2026-09-09) ────────────────────────────
+// Top Viewed (default) / Our Loves / Newest — pure client-side panel
+// switch, no server round-trip. Null guards everywhere: a panel that
+// didn't render (empty state) simply isn't there to hide.
+function dashTab(tab) {
+    ['top-viewed', 'our-loves', 'newest'].forEach(t => {
+        const panel = document.getElementById('dashpanel-' + t);
+        const btn = document.getElementById('dashtab-' + t);
+        if (panel) panel.classList.add('hidden');
+        if (btn) {
+            btn.classList.remove('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
+            btn.classList.add('border-transparent', 'text-gray-500');
+        }
+    });
+    const target = document.getElementById('dashpanel-' + tab);
+    const targetBtn = document.getElementById('dashtab-' + tab);
+    if (target) target.classList.remove('hidden');
+    if (targetBtn) {
+        targetBtn.classList.add('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
+        targetBtn.classList.remove('border-transparent', 'text-gray-500');
+    }
+}
 </script>
 {% endblock %}

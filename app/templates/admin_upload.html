@@ -245,6 +245,16 @@
                 placeholder="One video URL per line, in order…&#10;or paste a single YouTube PLAYLIST link (https://www.youtube.com/playlist?list=…)"
                 class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 font-mono text-xs"
             ></textarea>
+            <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                <input
+                    type="checkbox"
+                    id="bulk-generate-toggle"
+                    checked
+                    class="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+                >
+                Also generate materials (summary, mindmap, flashcards, quiz) —
+                ~15-60s per video after its transcript downloads
+            </label>
             <button
                 type="button"
                 id="bulk-submit-btn"
@@ -253,6 +263,36 @@
                 Import Videos
             </button>
             <div id="bulk-result" class="hidden p-4 rounded-lg text-sm"></div>
+        </div>
+
+        {# Backfill for pre-chain imports (2026-09-08): videos that
+           already have a transcript but no materials get generated
+           in one click. New imports chain automatically — this is
+           for the 9 Claude Code 101 videos imported before that. #}
+        <div class="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <p class="text-xs text-gray-400 mb-2">
+                Already imported a playlist without materials? Generate
+                them for every transcript-ready video in the channel:
+            </p>
+            <div class="flex items-center gap-2">
+                <select
+                    id="backfill-channel"
+                    class="flex-1 px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+                >
+                    <option value="">— Pick a channel —</option>
+                    {% for ch in channels %}
+                    <option value="{{ ch.id }}">{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+                <button
+                    type="button"
+                    id="backfill-btn"
+                    class="px-4 py-1.5 text-sm bg-gray-700 dark:bg-gray-600 text-white rounded-lg hover:bg-gray-800 dark:hover:bg-gray-500 disabled:opacity-50"
+                >
+                    ⚡ Generate Missing
+                </button>
+            </div>
+            <div id="backfill-result" class="hidden mt-2 text-xs text-gray-500 dark:text-gray-400"></div>
         </div>
     </div>
 
@@ -485,6 +525,10 @@ document.getElementById('bulk-submit-btn').addEventListener('click', async funct
         channel_id: channelId,
         new_channel_name: newName,
         new_playlist_title: newPlaylist,
+        // 2026-09-08: chain transcript → materials after each import.
+        // Default ON (the whole point of bulk is one-click playlists);
+        // untick to import transcripts only.
+        generate_materials: document.getElementById('bulk-generate-toggle').checked,
     };
     if (isPlaylistUrl) {
         payload.playlist_url = lines[0];
@@ -535,6 +579,36 @@ document.getElementById('bulk-submit-btn').addEventListener('click', async funct
     } finally {
         btn.disabled = false;
         btn.textContent = 'Import Videos';
+    }
+});
+// ── Backfill: generate materials for imported-without-materials ──
+document.getElementById('backfill-btn').addEventListener('click', async function () {
+    const btn = this;
+    const result = document.getElementById('backfill-result');
+    const channelId = document.getElementById('backfill-channel').value;
+    if (!channelId) { alert('Pick a channel first.'); return; }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Queuing…';
+    try {
+        const resp = await fetch('/api/admin/channels/' + channelId + '/generate-missing', {
+            method: 'POST',
+            credentials: 'include',
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            result.textContent = '❌ ' + (body.detail || resp.statusText);
+            result.classList.remove('hidden');
+            return;
+        }
+        result.textContent = body.message || ('Queued ' + body.queued + '.');
+        result.classList.remove('hidden');
+    } catch (err) {
+        result.textContent = '❌ Network error: ' + err.message;
+        result.classList.remove('hidden');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '⚡ Generate Missing';
     }
 });
 </script>

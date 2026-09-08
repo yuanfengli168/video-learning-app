@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE — refresh_youtube_views.py (nightly 00:10 SGT)
+  Do not load directly. Run scripts/install-launchdaemon.sh which
+  patches the script path to the runtime location and loads it.
+
+  What: refreshes videos.view_count from the YouTube Data API for the
+  dashboard 'Top Viewed' tab (the tab SORTS live at render time; only
+  the DATA is snapshotted here). 50 ids per API call → 23 videos cost
+  1 of 10,000 daily quota units.
+
+  When: 00:10 — after backup-daily's 00:00 snapshot (so the nightly DB
+  backup captures the pre-refresh state; the next night captures the
+  fresh one) and before prune-events' 00:30. The Mac runs Singapore
+  time, so Hour=0 IS midnight SGT — no timezone math.
+
+  Runs as root via system launchd (same TCC rationale as the backup
+  jobs: the DB lives on /Volumes/Storage-Fast-NVMe).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.videoapp.refresh-youtube-views</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{VENV_PYTHON}}</string>
+        <string>{{SCRIPT_PATH}}</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>0</integer>
+        <key>Minute</key>
+        <integer>10</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{RUNTIME_DIR}}/refresh-youtube-views.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{RUNTIME_DIR}}/refresh-youtube-views.log</string>
+
+    <!-- Retries: if YouTube is down at 00:10, retry at 01:10, 02:10 -->
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>

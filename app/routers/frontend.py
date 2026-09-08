@@ -107,6 +107,21 @@ def _format_duration_filter(seconds: float | int | None) -> str:
 templates.env.filters["format_duration"] = _format_duration_filter
 
 
+def _format_views_filter(count: int | None) -> str:
+    """1234567 → '1.2M views'; 1234 → '1.2K views'; None/0 → ''.
+
+    2026-09-09 dashboard Top Viewed tab: YouTube views in small gray
+    text under the card title. Shared helper lives in
+    app/services/dashboard_tabs.py::format_views — this is just the
+    Jinja registration.
+    """
+    from app.services.dashboard_tabs import format_views
+    return format_views(count)
+
+
+templates.env.filters["format_views"] = _format_views_filter
+
+
 # ── Asset cache-busting (2026-09-06) ──────────────────────────────
 #
 # The transcript-follow bug hunt showed that static JS is served with
@@ -266,6 +281,33 @@ async def dashboard(
     catalog_videos = db.execute(
         visible_videos_for_user(db, user, limit=50)
     ).scalars().all()
+
+    # ── Dashboard tabs (2026-09-09) ─────────────────────────────────
+    # Three leaderboards on the shop-window page; caps not pagination
+    # (leaderboards don't paginate). Sort is LIVE at render; only the
+    # view-count data is snapshotted nightly (00:10 SGT launchd).
+    #   Top Viewed (default): videos by YouTube views — big numbers
+    #     make the landing page feel established.
+    #   Our Loves: videos by our 30-day play events — 🔥 top 3.
+    #   Newest: channel playlists ranked by most-recently-added video
+    #     — a 9-video import is ONE new thing, so a playlist card
+    #     reads cleaner than nine identical video cards.
+    from app.services.dashboard_tabs import (
+        top_viewed_videos,
+        our_loves_videos,
+        newest_playlists,
+        count_new_videos_since,
+    )
+
+    role = user.get("role") if user else None
+    top_viewed = top_viewed_videos(db, role)
+    our_loves = our_loves_videos(db, role)
+    newest = newest_playlists(db, role)
+    for entry in newest:
+        entry["new_this_week"] = count_new_videos_since(
+            db, entry["course"].id
+        )
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -273,6 +315,9 @@ async def dashboard(
             **ctx,
             "courses": ctx.get("sidebar_courses", []),
             "catalog_videos": catalog_videos,
+            "top_viewed": top_viewed,
+            "our_loves": our_loves,
+            "newest": newest,
         },
     )
 
