@@ -1255,3 +1255,75 @@ def test_video_page_switchTab_hides_all_six_panels(paid_client: TestClient):
         "multi-panel rendering bug. See MVP2.0.2 and MVP2.1.0.3 "
         "release notes for prior occurrences."
     )
+
+
+def test_video_page_switchTab_null_guarded_for_role_gated_tabs(client: TestClient, paid_client: TestClient, db_session):
+    """REGRESSION (2026-09-08): switchTab() must null-guard its element
+    lookups, because role-gated tabs (tools) don't exist in the DOM
+    for FREE users.
+
+    The bug: when the Tools tab was hidden from FREE (role gate on
+    the run_plugin capability), switchTab()'s forEach threw
+    TypeError: Cannot read properties of null on the 'tools'
+    iteration — killing the whole function BEFORE the clicked
+    panel was un-hidden. Result: FREE users saw NO content on ANY
+    tab (flashcards/quiz/mindmap/discuss all dead) while PAID/ADMIN
+    worked fine. The backend returned 200 on every asset — it was
+    purely a client-side crash.
+
+    This test asserts the guards exist in the page source. A
+    stronger future version would run the JS in a headless browser.
+    """
+    import io
+    # FREE users can't create courses (403 by design), so seed the
+    # course/section/video as PAID, then VIEW as FREE (the base
+    # client). The video defaults to PUBLIC visibility so the FREE
+    # user can open the page.
+    with _mock_auth():
+        course_resp = paid_client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        section_resp = paid_client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "Week 1"},
+            headers=_auth_headers(),
+        )
+        section_id = section_resp.json()["section_id"]
+        fake_video = io.BytesIO(b"fake")
+        upload_resp = paid_client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
+            headers=_auth_headers(),
+        )
+        video_id = upload_resp.json()["video_id"]
+
+    # FREE viewer: use a uid that is NOT in conftest's _TEST_UIDS so
+    # no fixture ever promoted it. user.get("role") resolves FREE
+    # (row auto-created as role=2 on first authenticated request).
+    free_user = {"uid": "free-viewer-role-gate-test", "email": "free@test.com"}
+    with patch("app.auth.dependencies.verify_token", return_value=free_user):
+        response = client.get(f"/video/{video_id}")
+
+    assert response.status_code == 200
+    html = response.text
+    # The role gate means the tools elements genuinely don't exist
+    assert 'id="tab-tools"' not in html
+    assert 'id="content-tools"' not in html
+    # And switchTab must therefore null-guard its lookups
+    import re
+    m = re.search(
+        r"function\s+switchTab\s*\([^)]*\)\s*\{(.+?)\n\}",
+        html,
+        re.DOTALL,
+    )
+    assert m, "switchTab function not found in video.html"
+    body = m.group(1)
+    assert "const panel = document.getElementById('content-' + t);" in body
+    assert "if (panel) panel.classList.add('hidden');" in body
+    assert "if (btn) {" in body, (
+        "switchTab() must null-guard the tab-button lookup. A role-"
+        "gated tab (tools, FREE users) has no #tab-tools element — "
+        "an unguarded lookup throws TypeError and kills every tab "
+        "switch for that user (2026-09-08 FREE-user regression)."
+    )

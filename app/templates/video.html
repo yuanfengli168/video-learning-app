@@ -595,10 +595,23 @@ function switchTab(tab) {
     // regression shape as the 2.0.7 fix. The test now asserts
     // 'all six' (regression-test for future tab additions).
     ['summary', 'flashcards', 'quiz', 'mindmap', 'discuss', 'tools'].forEach(t => {
-        document.getElementById('content-' + t).classList.add('hidden');
+        // 2026-09-08 FREE-user regression fix: 'tools' is role-gated —
+        // the panel + button don't exist in the DOM for FREE users
+        // (run_plugin capability check in the template above). Without
+        // the null guards, this forEach threw TypeError on the 'tools'
+        // iteration and killed switchTab() BEFORE the clicked panel
+        // could be un-hidden — so FREE users saw no content on ANY
+        // tab (flashcards/quiz/mindmap/discuss all dead), while
+        // PAID/ADMIN (who have the elements) worked fine. Guard every
+        // lookup: a tab that isn't rendered simply isn't there to
+        // hide, which is already the desired state.
+        const panel = document.getElementById('content-' + t);
         const btn = document.getElementById('tab-' + t);
-        btn.classList.remove('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
-        btn.classList.add('border-transparent', 'text-gray-500');
+        if (panel) panel.classList.add('hidden');
+        if (btn) {
+            btn.classList.remove('border-indigo-500', 'text-indigo-600', 'dark:text-indigo-400');
+            btn.classList.add('border-transparent', 'text-gray-500');
+        }
     });
     document.getElementById('content-' + tab).classList.remove('hidden');
     const activeBtn = document.getElementById('tab-' + tab);
