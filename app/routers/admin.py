@@ -31,7 +31,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth.admin import (
@@ -42,7 +42,7 @@ from app.auth.admin import (
 from app.auth.dependencies import get_current_user
 from app.auth.roles import Capability, UserRole, VideoVisibility
 from app.database import get_db
-from app.models import Section, Video
+from app.models import Channel, Course, Section, Video
 from app.services.youtube import extract_youtube_id, is_valid_youtube_id
 
 
@@ -121,6 +121,20 @@ class YouTubeVideoCreate(BaseModel):
             "with this title. Only meaningful together with a channel."
         ),
     )
+    # 2026-09-08 fix (user report): pick an EXISTING playlist in the
+    # channel — previously only "new playlist" or "latest" existed,
+    # so a channel created yesterday couldn't be targeted directly.
+    # Resolution precedence: new_playlist_title > existing_playlist_id
+    # > newest playlist. The video lands in the picked playlist's
+    # FIRST section.
+    existing_playlist_id: str | None = Field(
+        default=None,
+        max_length=36,
+        description=(
+            "Existing Course UUID under the resolved channel — add the "
+            "video into that playlist."
+        ),
+    )
 
     @field_validator("visibility")
     @classmethod
@@ -136,6 +150,58 @@ class YouTubeVideoCreate(BaseModel):
             raise ValueError(
                 f"visibility must be 0 (PUBLIC), 1 (PAID_ONLY), or 2 (ADMIN_ONLY). "
                 f"Got: {v}"
+            ) from exc
+        return v
+
+
+class YouTubeBulkImportRequest(BaseModel):
+    """Bulk-add videos to a channel playlist (2026-09-08).
+
+    Two input modes (validated by the endpoint):
+      A) urls: list of individual video URLs/IDs (order preserved =
+         order_index)
+      B) playlist_url: a YouTube PLAYLIST URL — auto-expanded in
+         playlist order via the Data API (playlistItems.list)
+
+    Duplicate youtube_ids already in the catalog are SKIPPED (idempotent
+    — safe to re-run). Order is preserved via Video.order_index.
+    """
+
+    urls: list[str] = Field(
+        default_factory=list,
+        description="Individual video URLs/IDs, in the desired order.",
+    )
+    playlist_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="A YouTube playlist URL — expands to its videos in order.",
+    )
+    channel_id: str | None = Field(
+        default=None, max_length=36,
+        description="Existing channel UUID (required unless new_channel_name).",
+    )
+    new_channel_name: str | None = Field(
+        default=None, max_length=255,
+        description="Create a NEW channel with this name (takes precedence).",
+    )
+    new_playlist_title: str | None = Field(
+        default=None, max_length=255,
+        description="Create a NEW playlist in the channel for these videos.",
+    )
+    existing_playlist_id: str | None = Field(
+        default=None, max_length=36,
+        description="Existing Course UUID in the channel to add into.",
+    )
+    visibility: int = Field(default=VideoVisibility.PUBLIC)
+
+    @field_validator("visibility")
+    @classmethod
+    def _validate_visibility(cls, v: int) -> int:
+        try:
+            VideoVisibility(v)
+        except ValueError as exc:
+            raise ValueError(
+                f"visibility must be 0, 1, or 2. Got: {v}"
             ) from exc
         return v
 
@@ -371,6 +437,7 @@ async def admin_add_youtube_video(
             channel_id=body.channel_id,
             new_channel_name=body.new_channel_name,
             new_playlist_title=body.new_playlist_title,
+            existing_playlist_id=body.existing_playlist_id,
         )
         if _created_new_channel:
             created_channel = channel
@@ -437,6 +504,301 @@ async def admin_add_youtube_video(
         created_channel=created_channel is not None,
         created_playlist=created_playlist is not None,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /api/admin/channels/{id}/playlists  (2026-09-08 — upload form picker)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/channels/{channel_id}/playlists")
+async def admin_list_channel_playlists(
+    channel_id: str,
+    name: str | None = None,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Playlists in a channel, for the upload form's dropdown.
+
+    Newest first (matches the "blank = newest" default the resolver
+    uses, so the top option is what a blank pick means).
+
+    Two lookup modes:
+      * channel_id = a Channel UUID → that channel
+      * channel_id = 'by-name' + ?name=… → exact-name match (used when
+        the admin TYPED a channel name that may already exist; mirrors
+        the resolver's reuse-by-name semantics). 404 if no such channel.
+    """
+    if channel_id == "by-name":
+        if not name or not name.strip():
+            raise HTTPException(
+                status_code=400, detail="?name= is required with by-name"
+            )
+        channel = db.execute(
+            select(Channel).where(Channel.name == name.strip())
+        ).scalar_one_or_none()
+        if channel is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No channel named {name!r} yet — it will be "
+                       f"created when you submit.",
+            )
+    else:
+        channel = db.get(Channel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    courses = db.execute(
+        select(Course)
+        .where(Course.channel_id == channel.id)
+        .order_by(Course.created_at.desc())
+    ).scalars().all()
+    return {
+        "channel": channel.name,
+        "channel_id": channel.id,
+        "playlists": [
+            {"id": c.id, "title": c.title} for c in courses
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /api/admin/videos/youtube/bulk  (2026-09-08 — bulk channel import)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/videos/youtube/bulk", response_model=None)
+async def admin_bulk_import_youtube(
+    body: YouTubeBulkImportRequest,
+    background_tasks: BackgroundTasks,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Bulk-add YouTube videos to a channel playlist.
+
+    Modes (exactly one required):
+      * urls:         individual URLs/IDs, order preserved
+      * playlist_url: expands a YouTube playlist via playlistItems.list
+
+    Channel resolution mirrors the single-add endpoint (new_channel_name
+    > channel_id). new_playlist_title creates a Course; blank = newest
+    playlist. Videos land in the playlist's FIRST section with
+    order_index = base + i, preserving playlist order.
+
+    Idempotent: videos whose youtube_id is already in the catalog are
+    skipped and reported as {"status": "skipped", ...}. Re-running with
+    the same list is safe.
+
+    Caption jobs are STAGGERED (10s apart) — adding 9 videos at once
+    otherwise triggers YouTube's HTTP 429 rate limit on yt-dlp caption
+    downloads (hit in practice on 2026-09-08; the retry endpoint
+    recovers, but staggering avoids the storm entirely).
+
+    Enrichment: playlist_url mode gets titles/thumbnails from the
+    playlistItems response (no per-video videos.list calls — quota-
+    friendly). urls mode does one get_video_metadata per video
+    (existing helper, best-effort).
+    """
+    import json as _json
+    import time as _time
+
+    from app.services.youtube import extract_youtube_id
+    from app.services.channel_upload import resolve_channel_target
+    from app.services.youtube_captions_job import _run_caption_download_job
+
+    uid = user.get("uid", "")
+    if not uid:
+        raise HTTPException(status_code=401, detail="No uid in token claims")
+    ensure_user_row(uid, user.get("email"), db)
+
+    # ── 1. Resolve the input list ──────────────────────────────────
+    entries: list[dict[str, Any]] = []  # {youtube_id, title?, thumbnail?}
+    if body.playlist_url:
+        from app.services.youtube_api import (
+            YouTubeAPIKeyMissing,
+            YouTubeAPIClient,
+            YouTubePlaylistNotFound,
+        )
+        try:
+            client = YouTubeAPIClient()
+        except YouTubeAPIKeyMissing:
+            raise HTTPException(
+                status_code=400,
+                detail="Playlist import needs YOUTUBE_API_KEY (metadata "
+                       "comes from playlistItems.list).",
+            )
+        try:
+            pl_videos = client.list_playlist_videos(body.playlist_url)
+        except YouTubePlaylistNotFound as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        entries = [
+            {
+                "youtube_id": v.youtube_id,
+                "title": v.title,
+                "thumbnail": v.thumbnail_url,
+            }
+            for v in pl_videos
+        ]
+    elif body.urls:
+        for raw in body.urls:
+            vid = extract_youtube_id(raw.strip() if raw else "")
+            if not vid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Could not extract a video ID from {raw!r}",
+                )
+            entries.append({"youtube_id": vid})
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'urls' (list of video URLs) or 'playlist_url'.",
+        )
+
+    if not entries:
+        return {
+            "added": 0, "skipped": 0, "results": [],
+            "message": "No videos found in the input.",
+        }
+
+    # ── 2. Resolve channel + playlist target ───────────────────────
+    created_channel_flag = False
+    if body.new_channel_name and body.new_channel_name.strip():
+        # Honest creation reporting: only a NEW-name flow can create a
+        # channel; compare pre-existence (reuse-by-name semantics —
+        # exact-name matches are reused, not created).
+        from app.models import Channel as _Channel
+        from sqlalchemy import select as _select
+        _existed = db.execute(
+            _select(_Channel.id).where(
+                _Channel.name == body.new_channel_name.strip()
+            )
+        ).scalar_one_or_none() is not None
+        created_channel_flag = not _existed
+
+    try:
+        channel, new_playlist, section = resolve_channel_target(
+            db=db,
+            uid=uid,
+            channel_id=body.channel_id,
+            new_channel_name=body.new_channel_name,
+            new_playlist_title=body.new_playlist_title,
+            existing_playlist_id=body.existing_playlist_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if section is None:
+        # Bulk import requires a channel target (the personal-course
+        # flow's section resolution doesn't make sense for 9 videos).
+        raise HTTPException(
+            status_code=400,
+            detail="Bulk import needs a channel: set channel_id or "
+                   "new_channel_name (optionally new_playlist_title).",
+        )
+
+    course = db.get(Course, section.course_id)
+
+    # ── 3. Insert (skip duplicates), preserving order ───────────────
+    # Base order_index = current max + 1, so appended videos keep the
+    # playlist's existing order intact.
+    base = int(
+        db.execute(
+            select(func.max(Video.order_index)).where(
+                Video.section_id == section.id
+            )
+        ).scalar()
+        or 0
+    )
+
+    # Pre-fetch existing youtube_ids in ONE query (not N).
+    ids_in = [e["youtube_id"] for e in entries]
+    existing_rows = (
+        db.execute(
+            select(Video.youtube_id).where(Video.youtube_id.in_(ids_in))
+        )
+        .scalars()
+        .all()
+    )
+    existing = set(existing_rows)
+
+    results: list[dict[str, Any]] = []
+    added_ids: list[str] = []
+    next_index = base
+    for e in entries:
+        vid = e["youtube_id"]
+        if vid in existing:
+            results.append(
+                {"youtube_id": vid, "status": "skipped",
+                 "reason": "already in catalog"}
+            )
+            continue
+        video = Video(
+            title=(e.get("title") or vid)[:255],
+            youtube_id=vid,
+            thumbnail_url=e.get("thumbnail"),
+            duration=0,
+            visibility=body.visibility,
+            status="pending",
+            filename=f"youtube:{vid}",
+            file_path=f"https://www.youtube.com/watch?v={vid}",
+            file_size=0,
+            section_id=section.id,
+            order_index=next_index,
+        )
+        db.add(video)
+        added_ids.append(vid)
+        existing.add(vid)  # also dedupes within the request itself
+        next_index += 1
+        results.append(
+            {"youtube_id": vid, "status": "added", "title": video.title}
+        )
+
+    db.commit()
+
+    # ── 4. Kick caption jobs, staggered 10s apart ──────────────────
+    # background_tasks run AFTER the response; the sleep staggers the
+    # yt-dlp calls so YouTube doesn't 429 us.
+    delay = 0
+    for vid in added_ids:
+        row = (
+            db.execute(select(Video).where(Video.youtube_id == vid))
+            .scalars()
+            .first()
+        )
+        if row is None:
+            continue  # race: deleted between commit and here
+        background_tasks.add_task(
+            _staggered_caption_job, row.id, delay
+        )
+        delay += 10
+
+    channel_name = channel.name if channel else None
+    channel_slug = channel.slug if channel else None
+    return {
+        "added": len(added_ids),
+        "skipped": len(entries) - len(added_ids),
+        "results": results,
+        "channel_name": channel_name,
+        "channel_slug": channel_slug,
+        "playlist_title": course.title if course else None,
+        "created_channel": created_channel_flag,
+        "created_playlist": new_playlist is not None,
+        "message": (
+            f"Added {len(added_ids)} video(s)"
+            f"{' (skipped ' + str(len(entries) - len(added_ids)) + ' duplicate(s))' if len(entries) != len(added_ids) else ''}"
+            f" to '{channel_name} · {course.title if course else '?'}'. "
+            f"Transcripts download in the background (staggered 10s apart)."
+        ),
+    }
+
+
+def _staggered_caption_job(video_id: str, delay_seconds: int) -> None:
+    """Caption download with a start delay — avoids the YouTube 429
+    storm when several videos are bulk-added (2026-09-08)."""
+    if delay_seconds > 0:
+        import time as _time
+        _time.sleep(min(delay_seconds, 300))  # cap at 5 min safety net
+    from app.services.youtube_captions_job import _run_caption_download_job
+    _run_caption_download_job(video_id=video_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────

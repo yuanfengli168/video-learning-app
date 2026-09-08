@@ -33,7 +33,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.services.youtube import extract_youtube_id
+from app.services.youtube import extract_playlist_id, extract_youtube_id
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,11 @@ class YouTubeAPIKeyMissing(YouTubeAPIError):
 
 class YouTubeVideoNotFound(YouTubeAPIError):
     """Raised when the video ID doesn't exist (404 from API or empty items)."""
+
+
+class YouTubePlaylistNotFound(YouTubeAPIError):
+    """Raised when a playlist doesn't exist / is private (404 on
+    playlistItems.list, or the list= param points nowhere)."""
 
 
 class YouTubeQuotaExceeded(YouTubeAPIError):
@@ -251,6 +256,76 @@ class YouTubeAPIClient:
             duration_seconds=duration_seconds,
             caption_tracks=captions,
         )
+
+    def list_playlist_videos(self, playlist_id_or_url: str) -> list[VideoMetadata]:
+        """Expand a YouTube PLAYLIST into its videos, in playlist order.
+
+        Uses playlistItems.list (API key auth — no OAuth needed for public
+        playlists). Handles pagination up to 200 videos.
+
+        Note: playlistItems.list does NOT return duration — that would
+        need one extra videos.list call per video. Bulk import tolerates
+        duration=0 (the caption job fills transcript; duration badge
+        just renders empty on cards until a single-video fetch occurs,
+        e.g. if the admin later opens the video detail page).
+
+        Raises:
+            YouTubePlaylistNotFound: playlist doesn't exist / is private.
+            YouTubeAPIError: other errors.
+        """
+        playlist_id = extract_playlist_id(playlist_id_or_url)
+        if not playlist_id:
+            raise YouTubeAPIError(
+                f"Could not extract a playlist ID from {playlist_id_or_url!r}"
+            )
+        videos: list[VideoMetadata] = []
+        page_token: str | None = None
+        for _ in range(10):  # 10 pages × 50 = 500 max
+            params = {
+                "part": "snippet,contentDetails",
+                "playlistId": playlist_id,
+                "maxResults": 50,
+                "key": self.api_key,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            url = f"{YOUTUBE_API_BASE}/playlistItems"
+            try:
+                resp = httpx.get(url, params=params, timeout=self.timeout)
+            except httpx.HTTPError as e:
+                raise YouTubeAPIError(f"HTTP error calling YouTube API: {e}") from e
+            if resp.status_code == 404:
+                raise YouTubePlaylistNotFound(
+                    f"Playlist {playlist_id!r} not found (or private)"
+                )
+            if resp.status_code != 200:
+                raise YouTubeAPIError(
+                    f"YouTube API {resp.status_code} on playlistItems.list: "
+                    f"{resp.text[:200]}"
+                )
+            data = resp.json()
+            for item in data.get("items", []):
+                snippet = item.get("snippet", {})
+                rb = snippet.get("resourceId", {})
+                vid = rb.get("videoId", "")
+                if not vid or snippet.get("title") == "Private video":
+                    continue
+                videos.append(
+                    VideoMetadata(
+                        youtube_id=vid,
+                        title=snippet.get("title", "") or vid,
+                        channel=snippet.get("videoOwnerChannelTitle", "") or "",
+                        thumbnail_url=pick_best_thumbnail(
+                            snippet.get("thumbnails", {}) or {}
+                        ),
+                        duration_seconds=0,  # not in playlistItems response
+                        caption_tracks=[],
+                    )
+                )
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return videos
 
     def _videos_list(self, video_id: str) -> dict | None:
         """Call videos.list?part=snippet,contentDetails and return the first item.

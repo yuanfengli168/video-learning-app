@@ -137,6 +137,7 @@ def resolve_channel_target(
     channel_id: Optional[str],
     new_channel_name: Optional[str],
     new_playlist_title: Optional[str],
+    existing_playlist_id: Optional[str] = None,
 ) -> tuple[Optional[Channel], Optional[Course], Optional[Section]]:
     """Resolve (channel, new_playlist, section) for an upload request.
 
@@ -166,6 +167,36 @@ def resolve_channel_target(
         course = create_playlist_in_channel(db, channel, new_playlist_title)
         section = course.sections[0]
         return channel, course, section
+
+    # 2026-09-08: explicit existing-playlist pick (user report —
+    # channels created earlier had no way to be targeted directly).
+    # Must belong to THIS channel (a course id from another channel
+    # or a personal course → ValueError, not silent cross-wiring).
+    if existing_playlist_id:
+        course = db.execute(
+            select(Course).where(
+                Course.id == existing_playlist_id,
+                Course.channel_id == channel.id,
+            )
+        ).scalar_one_or_none()
+        if course is None:
+            raise ValueError(
+                f"Playlist {existing_playlist_id!r} not found in "
+                f"channel {channel.name!r}"
+            )
+        section = db.execute(
+            select(Section)
+            .where(Section.course_id == course.id)
+            .order_by(Section.order_index.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if section is None:
+            section = Section(
+                title="Episodes", course_id=course.id, order_index=0
+            )
+            db.add(section)
+            db.flush()
+        return channel, None, section
 
     section = latest_playlist_section(db, channel)
     return channel, None, section

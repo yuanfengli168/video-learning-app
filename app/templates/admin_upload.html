@@ -107,13 +107,28 @@
                     type="text"
                     id="new_playlist_title"
                     name="new_playlist_title"
-                    placeholder="e.g. “GPT-5 Launch Talks” — blank = latest playlist"
+                    placeholder="e.g. “GPT-5 Launch Talks”"
                     maxlength="255"
                     class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
+                <label class="block text-sm font-medium mb-1 mt-4">
+                    …or pick an existing playlist
+                    <span class="text-gray-400 font-normal">(optional)</span>
+                </label>
+                {# Populated by JS when a channel is selected (fetches
+                   /api/admin/channels/{id}/playlists). Hidden + disabled
+                   until a channel is active so it can't submit stale. #}
+                <select
+                    id="existing_playlist_id"
+                    name="existing_playlist_id"
+                    class="hidden w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                    <option value="">— Newest playlist (default) —</option>
+                </select>
                 <p class="mt-1 text-xs text-gray-400">
-                    Blank playlist = the video goes into the channel’s most recent
-                    playlist. Channels with none get “Main Playlist”.
+                    Pick “Claude Code 101” here to add into an existing
+                    playlist. Blank + no new title = the channel’s newest
+                    playlist.
                 </p>
             </div>
 
@@ -180,7 +195,64 @@
                 YouTube ID: <code id="success-ytid"></code><br>
                 <span id="success-channel" class="hidden"></span><br>
                 <a id="success-link" href="#" target="_blank" class="underline">View on watch page →</a>
+                <span id="success-catalog-link"></span>
             </p>
+        </div>
+    </div>
+
+    {# ── Bulk import (2026-09-08) ────────────────────────────────────
+       Paste N video URLs (one per line, order preserved) OR a single
+       YouTube PLAYLIST URL (auto-expands in playlist order). Duplicates
+       already in the catalog are skipped — re-running is safe.
+       Transcript downloads are staggered 10s apart to avoid YouTube's
+       caption rate limit (the 429 storm hit a manual add on 9/8). #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <h2 class="text-xl font-bold mb-2">📦 Bulk Import</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Add a whole YouTube playlist in one go, or paste many video URLs
+            (one per line — order is kept). Already-cataloged videos are
+            skipped automatically.
+        </p>
+        <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-2">
+                <select
+                    id="bulk-channel_id"
+                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+                >
+                    <option value="">— Pick a channel —</option>
+                    {% for ch in channels %}
+                    <option value="{{ ch.id }}">{{ ch.name }}</option>
+                    {% endfor %}
+                </select>
+                <input
+                    type="text"
+                    id="bulk-new_channel_name"
+                    placeholder="or type a NEW channel name…"
+                    maxlength="255"
+                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+                >
+            </div>
+            <input
+                type="text"
+                id="bulk-new_playlist_title"
+                placeholder="New playlist name (optional — blank = newest)"
+                maxlength="255"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+            >
+            <textarea
+                id="bulk-urls"
+                rows="5"
+                placeholder="One video URL per line, in order…&#10;or paste a single YouTube PLAYLIST link (https://www.youtube.com/playlist?list=…)"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 font-mono text-xs"
+            ></textarea>
+            <button
+                type="button"
+                id="bulk-submit-btn"
+                class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium disabled:opacity-50"
+            >
+                Import Videos
+            </button>
+            <div id="bulk-result" class="hidden p-4 rounded-lg text-sm"></div>
         </div>
     </div>
 
@@ -201,10 +273,56 @@
 // Channel-mode toggle (2026-09-08): when a channel is picked/typed,
 // the personal-course Section picker is irrelevant (and confusing) —
 // grey it out with a hint. When no channel, it comes back.
+// Also: load the channel's playlists into the existing-playlist
+// dropdown (fix for the 'I created Claude Code 101 but can't find it'
+// report — previously there was no way to target an existing
+// playlist, only "new" or "latest").
 (function () {
     const sel = document.getElementById('channel_id');
     const newName = document.getElementById('new_channel_name');
     const personal = document.getElementById('personal-section-picker');
+    const playlistSel = document.getElementById('existing_playlist_id');
+
+    async function loadPlaylists() {
+        if (!playlistSel) return;
+        let channelId = sel && sel.value;
+        let channelName = newName && newName.value.trim();
+        if (!channelId && !channelName) {
+            playlistSel.classList.add('hidden');
+            playlistSel.disabled = true;
+            return;
+        }
+        try {
+            // Resolve a typed NEW channel name to its id (create-on-
+            // demand means the name may exist already — reuse it, and
+            // the dropdown then lists its playlists).
+            let url = channelId
+                ? '/api/admin/channels/' + channelId + '/playlists'
+                : '/api/admin/channels/by-name/playlists?name=' + encodeURIComponent(channelName);
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            playlistSel.innerHTML = '';
+            const optDefault = document.createElement('option');
+            optDefault.value = '';
+            optDefault.textContent = '— Newest playlist (default) —';
+            playlistSel.appendChild(optDefault);
+            (data.playlists || []).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.title;
+                playlistSel.appendChild(opt);
+            });
+            playlistSel.classList.remove('hidden');
+            playlistSel.disabled = false;
+        } catch (e) {
+            // Non-fatal: the dropdown just stays hidden; the resolver
+            // falls back to newest-playlist semantics.
+            playlistSel.classList.add('hidden');
+            playlistSel.disabled = true;
+        }
+    }
+
     function refresh() {
         const channelActive = (sel && sel.value) || (newName && newName.value.trim());
         if (!personal) return;
@@ -215,9 +333,16 @@
             personal.classList.remove('opacity-40', 'pointer-events-none');
             personal.removeAttribute('aria-disabled');
         }
+        loadPlaylists();
     }
     if (sel) sel.addEventListener('change', refresh);
-    if (newName) newName.addEventListener('input', refresh);
+    if (newName) {
+        newName.addEventListener('input', () => {
+            // debounce the by-name fetch a little
+            clearTimeout(newName._t);
+            newName._t = setTimeout(refresh, 400);
+        });
+    }
     refresh();
 })();
 
@@ -259,6 +384,10 @@ document.getElementById('admin-upload-form').addEventListener('submit', async fu
         channel_id: document.getElementById('channel_id').value || null,
         new_channel_name: document.getElementById('new_channel_name').value.trim() || null,
         new_playlist_title: document.getElementById('new_playlist_title').value.trim() || null,
+        existing_playlist_id: (function () {
+            const el = document.getElementById('existing_playlist_id');
+            return (el && !el.disabled && el.value) ? el.value : null;
+        })(),
     };
 
     try {
@@ -331,6 +460,81 @@ document.getElementById('admin-upload-form').addEventListener('submit', async fu
     } finally {
         btn.disabled = false;
         btn.textContent = 'Add Video';
+    }
+});
+
+// ── Bulk import (2026-09-08) ─────────────────────────────────────
+// POST /api/admin/videos/youtube/bulk with either a playlist URL or
+// a list of video URLs. Skips already-cataloged videos server-side.
+document.getElementById('bulk-submit-btn').addEventListener('click', async function () {
+    const btn = this;
+    const result = document.getElementById('bulk-result');
+    const raw = document.getElementById('bulk-urls').value.trim();
+    const channelId = document.getElementById('bulk-channel_id').value || null;
+    const newName = document.getElementById('bulk-new_channel_name').value.trim() || null;
+    const newPlaylist = document.getElementById('bulk-new_playlist_title').value.trim() || null;
+
+    if (!raw) { alert('Paste video URLs (one per line) or a YouTube playlist link.'); return; }
+    if (!channelId && !newName) { alert('Pick or type a channel for the import.'); return; }
+
+    // One line = a playlist URL? (contains 'list=' and no other URL lines)
+    const lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
+    const isPlaylistUrl = lines.length === 1 && /[?&]list=/.test(lines[0]);
+
+    const payload = {
+        channel_id: channelId,
+        new_channel_name: newName,
+        new_playlist_title: newPlaylist,
+    };
+    if (isPlaylistUrl) {
+        payload.playlist_url = lines[0];
+    } else {
+        payload.urls = lines;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Importing…';
+    result.classList.remove('hidden');
+    result.className = 'p-4 rounded-lg text-sm bg-gray-50 dark:bg-gray-900/40';
+    result.textContent = 'Importing… this can take a few seconds (YouTube metadata fetch).';
+
+    try {
+        const resp = await fetch('/api/admin/videos/youtube/bulk', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            result.className = 'p-4 rounded-lg text-sm bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200';
+            result.textContent = '❌ ' + (body.detail || resp.statusText);
+            return;
+        }
+        result.className = 'p-4 rounded-lg text-sm bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200';
+        let html = '<p class="font-medium">✅ ' + (body.message || 'Import complete.') + '</p>';
+        if (body.results) {
+            html += '<ul class="mt-2 space-y-0.5 text-xs">';
+            body.results.forEach(r => {
+                if (r.status === 'skipped') {
+                    html += '<li>⏭️ ' + r.youtube_id + ' — skipped (' + r.reason + ')</li>';
+                } else {
+                    html += '<li>➕ ' + (r.title || r.youtube_id) + '</li>';
+                }
+            });
+            html += '</ul>';
+        }
+        if (body.channel_slug) {
+            html += '<a href="/channel/' + body.channel_slug + '" class="underline mt-2 inline-block">→ View in ' + body.channel_name + '</a>';
+        }
+        result.innerHTML = html;
+        document.getElementById('bulk-urls').value = '';
+    } catch (err) {
+        result.className = 'p-4 rounded-lg text-sm bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200';
+        result.textContent = '❌ Network error: ' + err.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Import Videos';
     }
 });
 </script>

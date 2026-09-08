@@ -69,6 +69,50 @@ _EMBED_RE = re.compile(
 )
 
 
+def extract_playlist_id(url_or_id: str | None) -> str | None:
+    """Extract a YouTube playlist ID from a URL or bare ID.
+
+    Supported formats:
+      https://www.youtube.com/playlist?list=PLxxxxxxxxxxxx
+      https://www.youtube.com/watch?v=ID&list=PLxxxxxxxxxxxx (video in a
+          playlist — the &list= param is what we want)
+      bare PL… ID
+
+    Returns the playlist ID (usually PL-prefixed, 13-48 chars), or None.
+    """
+    if not url_or_id or not isinstance(url_or_id, str):
+        return None
+    m = re.search(r"[?&]list=([A-Za-z0-9_-]+)", url_or_id)
+    if m:
+        return m.group(1)
+    s = url_or_id.strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{13,64}", s) and not s.startswith("http"):
+        return s
+    return None
+
+
+def extract_playlist_id(url_or_id: str | None) -> str | None:
+    """Extract a YouTube playlist ID from a URL or bare ID.
+
+    Supported formats:
+      https://www.youtube.com/playlist?list=PLxxxxxxxxxxxx
+      https://www.youtube.com/watch?v=ID&list=PLxxxxxxxxxxxx (the
+          &list= param is what we want)
+      bare ID (13-64 chars, not starting with http)
+
+    Returns the playlist ID, or None.
+    """
+    if not url_or_id or not isinstance(url_or_id, str):
+        return None
+    m = re.search(r"[?&]list=([A-Za-z0-9_-]+)", url_or_id)
+    if m:
+        return m.group(1)
+    s = url_or_id.strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{13,64}", s) and not s.startswith("http"):
+        return s
+    return None
+
+
 def extract_youtube_id(url_or_id: str | None) -> str | None:
     """Extract a YouTube video ID from any supported URL format, or bare ID.
 
