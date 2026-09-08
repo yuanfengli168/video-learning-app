@@ -427,3 +427,58 @@ def test_admin_upload_page_has_channel_pickers(
     assert '<option value="' + ch.id + '">OpenAI</option>' in html
     # The channel-mode toggle JS exists
     assert "personal.classList.add" in html
+
+
+# ── Watch-page breadcrumb shows the channel path ─────────────────────────
+
+
+def test_video_page_breadcrumb_shows_channel_path(
+    client: TestClient, db_session: Session
+):
+    """2026-09-08: channel videos' breadcrumb must be
+    Catalog → Channel → Playlist → Title (so users can navigate
+    back into the channel tree from the watch page — the missing
+    breadcrumb was the 'why don't I see my channel' confusion)."""
+    ch = _mk_channel(db_session, "Claude", slug="claude")
+    course, sec = _mk_playlist(db_session, ch, "Claude Code 101")
+    v = _mk_video(db_session, sec, "bcumb000001")
+    db_session.commit()
+
+    resp = client.get(f"/video/{v.id}")
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'href="/catalog"' in html
+    assert 'href="/channel/claude"' in html
+    assert f'href="/channel/claude/playlist/{course.id}"' in html
+    assert "Claude Code 101" in html
+
+
+def test_video_page_breadcrumb_personal_course_unchanged(
+    client: TestClient, db_session: Session
+):
+    """Personal uploads keep the old Dashboard → Course breadcrumb —
+    no channel link for channel-less courses."""
+    from app.models import Course as _C, Section as _S
+
+    course = _C(title="My Personal Course", user_id="uid-admin")
+    db_session.add(course)
+    db_session.flush()
+    sec = _S(title="Week 1", course_id=course.id, order_index=0)
+    db_session.add(sec)
+    db_session.flush()
+    v = _mk_video(db_session, sec, "persnlbcumb1")
+    db_session.commit()
+
+    resp = client.get(f"/video/{v.id}")
+    assert resp.status_code == 200
+    html = resp.text
+    # Scope to the breadcrumb <header> region — the sidebar's new
+    # "📚 Catalog" nav link legitimately contains href="/catalog"
+    # on EVERY page, so a whole-page assertion would always fail.
+    import re as _re
+    m = _re.search(r"<header[^>]*>(.*?)</header>", html, _re.DOTALL)
+    assert m, "header (breadcrumb region) not found in page"
+    crumb = m.group(1)
+    assert 'href="/catalog"' not in crumb
+    assert "/channel/" not in crumb
+    assert 'href="/course/' + course.id + '"' in crumb

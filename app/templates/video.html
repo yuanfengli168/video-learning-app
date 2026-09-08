@@ -1,7 +1,17 @@
 {% extends "base.html" %}
 {% block title %}{{ video.title }} — {{ app_name }}{% endblock %}
 {% block breadcrumb %}
-    {% if course %}
+    {# Channel content (2026-09-08): Catalog → Channel → Playlist → Video.
+       The video page route loads course.channel via the relationship;
+       personal uploads keep the old Dashboard → Course breadcrumb. #}
+    {% if course and course.channel %}
+    <a href="/catalog" class="text-gray-400 hover:text-indigo-500">Catalog</a>
+    <span class="mx-1 text-gray-400">/</span>
+    <a href="/channel/{{ course.channel.slug }}" class="text-gray-400 hover:text-indigo-500">{{ course.channel.name }}</a>
+    <span class="mx-1 text-gray-400">/</span>
+    <a href="/channel/{{ course.channel.slug }}/playlist/{{ course.id }}" class="text-gray-400 hover:text-indigo-500">{{ course.title }}</a>
+    <span class="mx-1 text-gray-400">/</span>
+    {% elif course %}
     <a href="/" class="text-gray-400 hover:text-indigo-500">Dashboard</a>
     <span class="mx-1 text-gray-400">/</span>
     <a href="/course/{{ course.id }}" class="text-gray-400 hover:text-indigo-500">{{ course.title }}</a>
