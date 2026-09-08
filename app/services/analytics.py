@@ -109,6 +109,40 @@ def get_analytics_overview(db: Session, days: int = 7) -> dict[str, Any]:
         {"days_cutoff": f"-{days} days"},
     ).fetchone()
 
+    # 2b. Plugin runs (Tools tab — webm_to_mp4 etc). Sourced from the
+    #     plugin_runs table (the authoritative record), not events —
+    #     plugin runs never write to events. Tells the admin whether
+    #     the Tools feature is actually used (keep / kill decision).
+    plugins = db.execute(
+        text(
+            """
+            SELECT
+              COUNT(*)                                                  AS total,
+              SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END) AS in_flight,
+              SUM(CASE WHEN status = 'done' AND ok = 1         THEN 1 ELSE 0 END) AS ok,
+              SUM(CASE WHEN status = 'failed'                  THEN 1 ELSE 0 END) AS failed
+            FROM plugin_runs
+            WHERE created_at >= datetime('now', :days_cutoff)
+            """
+        ),
+        {"days_cutoff": f"-{days} days"},
+    ).fetchone()
+
+    plugin_top = db.execute(
+        text(
+            """
+            SELECT p.plugin_key, COUNT(*) AS runs,
+                   COUNT(DISTINCT p.user_id) AS users
+            FROM plugin_runs p
+            WHERE p.created_at >= datetime('now', :days_cutoff)
+            GROUP BY p.plugin_key
+            ORDER BY runs DESC
+            LIMIT 10
+            """
+        ),
+        {"days_cutoff": f"-{days} days"},
+    ).fetchall()
+
     # 3. Top videos by plays (join for titles; LEFT JOIN so catalog
     #    rows deleted since still show counts).
     top_videos = db.execute(
@@ -177,6 +211,15 @@ def get_analytics_overview(db: Session, days: int = 7) -> dict[str, Any]:
         "generate_clicks": _n(actions, 1),
         "llm_calls": _n(llm, 0),
         "llm_failures": _n(llm, 1),
+        # Tools tab (plugin runs) — keep/kill signal for the feature
+        "plugin_runs_total": _n(plugins, 0),
+        "plugin_runs_in_flight": _n(plugins, 1),
+        "plugin_runs_ok": _n(plugins, 2),
+        "plugin_runs_failed": _n(plugins, 3),
+        "plugin_top": [
+            {"plugin": r[0], "runs": _n(r, 1), "users": _n(r, 2)}
+            for r in plugin_top
+        ],
         "top_videos": [
             {
                 "video_id": r[0],

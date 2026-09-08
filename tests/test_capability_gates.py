@@ -53,16 +53,16 @@ def test_admin_has_all_capabilities():
     assert ROLE_CAPABILITIES[UserRole.ADMIN] == expected
 
 
-def test_paid_has_manage_own_course_but_not_run_plugin():
-    """PAID gets MANAGE_OWN_COURSE (own courses) but NOT RUN_PLUGIN (admin-only).
+def test_paid_has_manage_own_course_and_run_plugin():
+    """PAID gets MANAGE_OWN_COURSE + RUN_PLUGIN (2026-09-08 decision).
 
-    PAID gets 6 caps: VIEW_OWN_COURSES, UPLOAD_VIDEO, REGEN_MATERIALS,
-    MANAGE_OWN_COURSE, plus the two built-in caps (VIEW_CATALOG,
-    CHAT).
+    PAID gets: VIEW_OWN_COURSES, UPLOAD_VIDEO, REGEN_MATERIALS,
+    MANAGE_OWN_COURSE, RUN_PLUGIN, plus the two built-in caps
+    (VIEW_CATALOG, CHAT). FREE still has neither.
     """
     paid_caps = ROLE_CAPABILITIES[UserRole.PAID]
     assert Capability.MANAGE_OWN_COURSE in paid_caps
-    assert Capability.RUN_PLUGIN not in paid_caps
+    assert Capability.RUN_PLUGIN in paid_caps
     # No admin-only caps either
     assert Capability.MANAGE_USERS not in paid_caps
     assert Capability.VIEW_ADMIN_DASHBOARD not in paid_caps
@@ -96,7 +96,8 @@ def test_capabilities_for_role_helper():
 def test_user_has_capability_helper():
     """Pure helper returns True/False correctly."""
     assert user_has_capability(UserRole.ADMIN, Capability.RUN_PLUGIN)
-    assert not user_has_capability(UserRole.PAID, Capability.RUN_PLUGIN)
+    assert user_has_capability(UserRole.PAID, Capability.RUN_PLUGIN)
+    assert not user_has_capability(UserRole.FREE, Capability.RUN_PLUGIN)
     assert user_has_capability(UserRole.PAID, Capability.UPLOAD_VIDEO)
     assert not user_has_capability(UserRole.FREE, Capability.UPLOAD_VIDEO)
 
@@ -143,14 +144,14 @@ def test_free_user_cannot_create_section(client: TestClient):
 
 
 def test_free_user_cannot_run_plugin(client: TestClient):
-    """A FREE user gets 403 on /api/plugins (RUN_PLUGIN is admin-only)."""
+    """A FREE user gets 403 on /api/plugins (RUN_PLUGIN is paid+)."""
     r = client.get("/api/plugins")
     assert r.status_code == 403
     assert "run_plugin" in r.text
 
 
 # ── Route gates: PAID user (role=1, has MANAGE_OWN_COURSE + UPLOAD_VIDEO,
-#    but NOT RUN_PLUGIN) ──────────────────────────────────────────────────
+#    + RUN_PLUGIN since 2026-09-08) ────────────────────────────────────────
 
 
 def test_paid_user_can_create_course(paid_client: TestClient):
@@ -160,11 +161,11 @@ def test_paid_user_can_create_course(paid_client: TestClient):
     assert "course_id" in r.json()
 
 
-def test_paid_user_cannot_run_plugin(paid_client: TestClient):
-    """PAID still gets 403 on /api/plugins (RUN_PLUGIN is admin-only)."""
+def test_paid_user_can_run_plugin(paid_client: TestClient):
+    """PAID gets 200 on /api/plugins (RUN_PLUGIN since 2026-09-08)."""
     r = paid_client.get("/api/plugins")
-    assert r.status_code == 403
-    assert "run_plugin" in r.text
+    assert r.status_code == 200, r.text
+    assert "plugins" in r.json()
 
 
 # ── Route gates: ADMIN user (role=0, has everything) ─────────────────────

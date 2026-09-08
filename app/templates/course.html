@@ -79,12 +79,30 @@
                     {% else %}
                     <p class="text-sm text-gray-400 py-2">No videos in this section</p>
                     {% endfor %}
-                    <!-- Upload button -->
+                    <!-- Upload button + progress (2026-09-08: real upload
+                         feedback — before this the button gave NO signal
+                         while the file POSTed, so users clicked again /
+                         navigated away mid-upload). -->
                     <div class="pt-2">
                         <input type="file" id="upload-{{ section.id }}" class="hidden" accept="video/*" multiple onchange="uploadVideo('{{ section.id }}', this)">
-                        <button onclick="document.getElementById('upload-{{ section.id }}').click()" class="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
+                        <button id="upload-btn-{{ section.id }}"
+                                onclick="document.getElementById('upload-{{ section.id }}').click()"
+                                class="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
                             + Upload Video
                         </button>
+                        <div id="upload-progress-{{ section.id }}" class="hidden mt-2">
+                            <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                <svg id="upload-spinner-{{ section.id }}" class="animate-spin h-4 w-4 text-indigo-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                </svg>
+                                <span id="upload-progress-label-{{ section.id }}" class="truncate flex-1">Uploading…</span>
+                                <span id="upload-progress-pct-{{ section.id }}" class="font-mono text-indigo-600 dark:text-indigo-400"></span>
+                            </div>
+                            <div class="mt-1.5 h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                <div id="upload-progress-bar-{{ section.id }}" class="h-full bg-indigo-500 rounded-full transition-all duration-150" style="width: 0%"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -264,31 +282,96 @@ async function uploadVideo(sectionId, input) {
     const files = Array.from(input.files || []);
     if (files.length === 0) return;
 
-    if (files.length === 1) {
-        // Single file: use the regular endpoint and redirect to video page
-        const form = new FormData();
-        form.append('file', files[0]);
-        const resp = await fetch('/api/videos/upload/' + sectionId, { method: 'POST', body: form });
-        const { ok, data } = await safeJsonParse(resp);
-        if (ok) {
-            window.location.href = '/video/' + data.video_id;
+    // 2026-09-08: upload feedback. The old code gave zero signal while
+    // the file POSTed (a 500 MB upload can take minutes on slow wifi),
+    // so users clicked again / navigated away and broke the upload.
+    // Now: spinner + label + real % progress (via XHR upload.onprogress
+    // for single files; per-file steps for bulk), button disabled
+    // while in flight, UI restored on error. On success we navigate
+    // away anyway (single) or reload (bulk), so no success state is
+    // needed — the label switches to "Finishing up…" when the request
+    // body is fully sent and we're waiting for the server's 202.
+    const btn = document.getElementById('upload-btn-' + sectionId);
+    const progressBox = document.getElementById('upload-progress-' + sectionId);
+    const label = document.getElementById('upload-progress-label-' + sectionId);
+    const pct = document.getElementById('upload-progress-pct-' + sectionId);
+    const bar = document.getElementById('upload-progress-bar-' + sectionId);
+
+    const totalBytes = files.reduce((n, f) => n + f.size, 0);
+    const describe = files.length === 1
+        ? files[0].name
+        : `${files.length} files (${(totalBytes / 1048576).toFixed(1)} MB)`;
+
+    const setProgress = (fraction, text) => {
+        const p = Math.min(100, Math.max(0, Math.round(fraction * 100)));
+        if (bar) bar.style.width = p + '%';
+        if (pct) pct.textContent = p > 0 && p < 100 ? p + '%' : '';
+        if (label && text) label.textContent = text;
+    };
+    const startUi = () => {
+        if (btn) { btn.disabled = true; btn.classList.add('opacity-50', 'cursor-not-allowed'); btn.textContent = '⏳ Uploading…'; }
+        if (progressBox) progressBox.classList.remove('hidden');
+        setProgress(0, `Uploading ${describe}…`);
+    };
+    const resetUi = () => {
+        if (btn) { btn.disabled = false; btn.classList.remove('opacity-50', 'cursor-not-allowed'); btn.textContent = '+ Upload Video'; }
+        if (progressBox) progressBox.classList.add('hidden');
+        setProgress(0, '');
+        input.value = '';
+    };
+
+    // XHR wrapper (fetch can't report upload progress; XHR's
+    // upload.onprogress gives real bytes-sent events).
+    const postMultipart = (url, form, onFraction) => new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable && onFraction) onFraction(e.loaded / e.total);
+        };
+        xhr.onload = () => {
+            let data = null;
+            try { data = JSON.parse(xhr.responseText); } catch (_) { /* non-JSON */ }
+            resolve({ status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, data });
+        };
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(form);
+    });
+
+    startUi();
+    try {
+        if (files.length === 1) {
+            // Single file: regular endpoint, redirect to video page.
+            const form = new FormData();
+            form.append('file', files[0]);
+            const resp = await postMultipart('/api/videos/upload/' + sectionId, form,
+                (f) => setProgress(f * 0.98)); // hold 2% for server processing
+            if (resp.ok) {
+                setProgress(1, 'Finishing up…');
+                window.location.href = '/video/' + resp.data.video_id;
+            } else {
+                alert('Upload failed: ' + (resp.data?.detail || `Server error (${resp.status})`));
+                resetUi();
+            }
         } else {
-            alert('Upload failed: ' + (data.detail || 'Unknown error'));
+            // Multiple files: bulk endpoint + reload.
+            const form = new FormData();
+            for (const f of files) form.append('files', f);
+            const resp = await postMultipart('/api/videos/upload-bulk/' + sectionId, form,
+                (f) => setProgress(f * 0.98));
+            if (resp.ok) {
+                const d = resp.data || {};
+                const msg = `Queued: ${d.queued}, Skipped: ${d.skipped}.`
+                    + (d.skipped > 0 ? '\n\nSkipped files:\n' + (d.results || []).filter(r => r.status === 'skipped').map(r => `${r.filename}: ${r.error}`).join('\n') : '');
+                alert(msg);
+                location.reload();
+            } else {
+                alert('Bulk upload failed: ' + (resp.data?.detail || `Server error (${resp.status})`));
+                resetUi();
+            }
         }
-    } else {
-        // Multiple files: use bulk endpoint and reload to show results
-        const form = new FormData();
-        for (const f of files) form.append('files', f);
-        const resp = await fetch('/api/videos/upload-bulk/' + sectionId, { method: 'POST', body: form });
-        const { ok, data } = await safeJsonParse(resp);
-        if (ok) {
-            const msg = `Queued: ${data.queued}, Skipped: ${data.skipped}.`
-                + (data.skipped > 0 ? '\n\nSkipped files:\n' + data.results.filter(r => r.status === 'skipped').map(r => `${r.filename}: ${r.error}`).join('\n') : '');
-            alert(msg);
-            location.reload();
-        } else {
-            alert('Bulk upload failed: ' + (data.detail || 'Unknown error'));
-        }
+    } catch (err) {
+        alert('Upload failed: ' + (err.message || 'Network error'));
+        resetUi();
     }
 }
 

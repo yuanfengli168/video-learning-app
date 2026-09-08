@@ -253,6 +253,17 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "caption_languages",
         "ALTER TABLE videos ADD COLUMN caption_languages TEXT DEFAULT '[]'",
     ),
+    # 2026-09-08 — plugin_runs.user_id. Who submitted the run.
+    # submit() has always received the caller's uid from the HTTP
+    # endpoint but only held it in the in-memory queue; storing it
+    # enables /admin/analytics distinct-user Tools-usage stats and
+    # future per-user audit. Nullable: legacy rows + the synchronous
+    # test mode didn't record it.
+    (
+        "plugin_runs",
+        "user_id",
+        "ALTER TABLE plugin_runs ADD COLUMN user_id VARCHAR(128)",
+    ),
 ]
 
 

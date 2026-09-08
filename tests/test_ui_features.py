@@ -192,6 +192,43 @@ def test_course_page_has_upload_function(paid_client: TestClient):
     assert "uploadVideo" in response.text
     assert "createSection" in response.text
 
+
+def test_course_page_has_upload_progress_ui(paid_client: TestClient):
+    """2026-09-08: the upload button has visible progress feedback.
+
+    Before this, clicking "+ Upload Video" gave NO signal while the
+    file POSTed (a 500 MB video takes minutes) — users clicked again
+    or navigated away mid-upload. Guards the spinner + progress bar
+    + disabled-state UI added to course.html.
+    """
+    with _mock_auth():
+        # Create course + one section (the upload button renders
+        # per-section, inside the section for-loop).
+        course_resp = paid_client.post(
+            "/api/courses", json={"title": "ML"}, headers=_auth_headers()
+        )
+        course_id = course_resp.json()["course_id"]
+        paid_client.post(
+            f"/api/courses/{course_id}/sections",
+            json={"title": "S1"},
+            headers=_auth_headers(),
+        )
+        response = paid_client.get(f"/course/{course_id}", headers=_auth_headers())
+
+    assert response.status_code == 200
+    html = response.text
+    # Upload button is targetable by JS (disable + relabel in flight)
+    assert 'id="upload-btn-' in html
+    # Progress box: spinner + label + percentage + bar
+    assert 'id="upload-progress-' in html
+    assert 'id="upload-progress-label-' in html
+    assert 'id="upload-progress-pct-' in html
+    assert 'id="upload-progress-bar-' in html
+    # XHR-based upload progress (fetch can't report upload progress)
+    assert "upload.onprogress" in html
+    # The in-flight button state ("⏳ Uploading…") is set by JS
+    assert "⏳ Uploading…" in html
+
 def test_video_page_has_topic_banner(paid_client: TestClient):
     """Video page should have a topic notification banner (hidden by default)."""
     import io

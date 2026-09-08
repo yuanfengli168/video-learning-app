@@ -42,10 +42,10 @@ def _seed_video(db: Session) -> Video:
 
 
 # ── Tools tab button presence ───────────────────────────────────────────
-def test_tools_tab_button_renders(client: TestClient, db_session: Session):
-    """The video page includes a Tools tab button."""
+def test_tools_tab_button_renders(admin_client: TestClient, db_session: Session):
+    """The video page includes a Tools tab button (ADMIN sees it)."""
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     assert 'id="tab-tools"' in html
@@ -53,19 +53,43 @@ def test_tools_tab_button_renders(client: TestClient, db_session: Session):
     assert "Tools" in html
 
 
-def test_tools_tab_button_calls_switchTab(client: TestClient, db_session: Session):
-    """The button's onclick is `switchTab('tools')` (the standard pattern)."""
+def test_tools_tab_button_hidden_from_free_user(client: TestClient, db_session: Session):
+    """2026-09-08: FREE users don't see the Tools tab at all —
+    neither the button nor the plugin list. The API already 403s
+    (RUN_PLUGIN capability); this guards the server-side template
+    so we never even render the upsell surface for FREE.
+    """
     _seed_video(db_session)
     resp = client.get("/video/v1")
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'id="tab-tools"' not in html
+    # The plugin card must not render either (the Run button +
+    # "Convert to MP4" copy live in it).
+    assert 'run-plugin-webm_to_mp4' not in html
+
+
+def test_tools_tab_button_visible_to_paid_user(paid_client: TestClient, db_session: Session):
+    """2026-09-08 product decision: PAID sees the Tools tab too."""
+    _seed_video(db_session)
+    resp = paid_client.get("/video/v1")
+    assert resp.status_code == 200
+    assert 'id="tab-tools"' in resp.text
+
+
+def test_tools_tab_button_calls_switchTab(admin_client: TestClient, db_session: Session):
+    """The button's onclick is `switchTab('tools')` (the standard pattern)."""
+    _seed_video(db_session)
+    resp = admin_client.get("/video/v1")
     html = resp.text
     assert "switchTab('tools')" in html
 
 
 # ── Tools tab content panel ─────────────────────────────────────────────
-def test_tools_content_panel_renders(client: TestClient, db_session: Session):
+def test_tools_content_panel_renders(admin_client: TestClient, db_session: Session):
     """The Tools tab content <div> exists, hidden by default."""
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
     assert 'id="content-tools"' in html
     # The other tab content panels use `class="hidden"`. Same here.
@@ -74,10 +98,10 @@ def test_tools_content_panel_renders(client: TestClient, db_session: Session):
     assert 'id="content-tools" class="hidden"' in html
 
 
-def test_tools_panel_lists_v1_plugin(client: TestClient, db_session: Session):
+def test_tools_panel_lists_v1_plugin(admin_client: TestClient, db_session: Session):
     """The v1 WebM -> MP4 plugin is rendered as a card."""
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
     # The plugin key is used as the data attribute
     assert 'data-plugin-key="webm_to_mp4"' in html
@@ -87,10 +111,10 @@ def test_tools_panel_lists_v1_plugin(client: TestClient, db_session: Session):
     assert "Transcode" in html or "H.264" in html
 
 
-def test_tools_panel_renders_run_button(client: TestClient, db_session: Session):
+def test_tools_panel_renders_run_button(admin_client: TestClient, db_session: Session):
     """Each plugin has a Run button with the right id."""
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
     assert 'id="run-plugin-webm_to_mp4"' in html
     assert "Run" in html
@@ -98,7 +122,7 @@ def test_tools_panel_renders_run_button(client: TestClient, db_session: Session)
 
 # ── ffmpeg-not-found state ──────────────────────────────────────────────
 def test_tools_panel_shows_disabled_state_when_ffmpeg_missing(
-    client: TestClient, db_session: Session, monkeypatch
+    admin_client: TestClient, db_session: Session, monkeypatch
 ):
     """If ffmpeg is not on $PATH, the Run button is disabled and a
     warning is shown.
@@ -114,7 +138,7 @@ def test_tools_panel_shows_disabled_state_when_ffmpeg_missing(
     # directly with a local import alias `_shutil`).
     monkeypatch.setattr("shutil.which", lambda x: None)
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # The Run button is disabled
@@ -128,7 +152,7 @@ def test_tools_panel_shows_disabled_state_when_ffmpeg_missing(
 
 # ── JS function presence ────────────────────────────────────────────────
 def test_video_page_includes_runPlugin_function(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """The <script> block in the video page defines runPlugin().
 
@@ -136,7 +160,7 @@ def test_video_page_includes_runPlugin_function(
     would be brittle).
     """
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
     assert "async function runPlugin" in html
     assert "/api/plugins/" in html  # the API path is hardcoded
@@ -144,7 +168,7 @@ def test_video_page_includes_runPlugin_function(
 
 # ── MVP2.1.0.1: "Last run" line UI ─────────────────────────────────────
 def test_tools_panel_shows_empty_state_when_no_runs(
-    client, db_session
+    admin_client, db_session
 ):
     """When the video has no plugin runs, show the empty-state hint."""
     from app.models.course import Course
@@ -160,7 +184,7 @@ def test_tools_panel_shows_empty_state_when_no_runs(
     db_session.add_all([course, section, video])
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # The empty-state hint
@@ -168,7 +192,7 @@ def test_tools_panel_shows_empty_state_when_no_runs(
     assert "click Run to convert to MP4" in html
 
 
-def test_tools_panel_shows_last_successful_run(client, db_session, tmp_path):
+def test_tools_panel_shows_last_successful_run(admin_client, db_session, tmp_path):
     """When the video has a successful run, show the path + Open in Finder button."""
     from app.models.course import Course
     from app.models.section import Section
@@ -204,7 +228,7 @@ def test_tools_panel_shows_last_successful_run(client, db_session, tmp_path):
     db_session.add(run)
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # The success-state UI
@@ -215,7 +239,7 @@ def test_tools_panel_shows_last_successful_run(client, db_session, tmp_path):
     assert "revealInFinder" in html
 
 
-def test_tools_panel_shows_last_failed_run(client, db_session):
+def test_tools_panel_shows_last_failed_run(admin_client, db_session):
     """When the video has a failed run, show the error message (no Open in Finder)."""
     from app.models.course import Course
     from app.models.section import Section
@@ -245,7 +269,7 @@ def test_tools_panel_shows_last_failed_run(client, db_session):
     db_session.add(run)
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # The error-state UI
@@ -263,7 +287,7 @@ def test_tools_panel_shows_last_failed_run(client, db_session):
     assert "Open in Finder" not in failed_section
 
 
-def test_video_page_includes_refreshLastRun_function(client, db_session):
+def test_video_page_includes_refreshLastRun_function(admin_client, db_session):
     """The <script> block defines refreshLastRun() and revealInFinder()."""
     from app.models.course import Course
     from app.models.section import Section
@@ -278,7 +302,7 @@ def test_video_page_includes_refreshLastRun_function(client, db_session):
     db_session.add_all([course, section, video])
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     assert "async function refreshLastRun" in html
@@ -291,7 +315,7 @@ def test_video_page_includes_refreshLastRun_function(client, db_session):
 
 # ── MVP2.1.0.1: "Re-Upload with MP4" button + swap modal ───────────────
 def test_swap_button_renders_when_last_run_successful(
-    client, db_session, tmp_path
+    admin_client, db_session, tmp_path
 ):
     """When last run was successful, show the 'Re-Upload with MP4' button."""
     from app.models.course import Course
@@ -319,7 +343,7 @@ def test_swap_button_renders_when_last_run_successful(
     db_session.add(run)
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     assert "Re-Upload with MP4" in html
@@ -329,7 +353,7 @@ def test_swap_button_renders_when_last_run_successful(
 
 
 def test_swap_button_disabled_when_video_not_ready(
-    client, db_session, tmp_path
+    admin_client, db_session, tmp_path
 ):
     """When video.status != 'ready', the button is disabled with a tooltip."""
     from app.models.course import Course
@@ -358,7 +382,7 @@ def test_swap_button_disabled_when_video_not_ready(
     db_session.add(run)
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # Button is rendered but disabled
@@ -373,7 +397,7 @@ def test_swap_button_disabled_when_video_not_ready(
 
 
 def test_swap_button_not_shown_when_last_run_failed(
-    client, db_session
+    admin_client, db_session
 ):
     """When last run failed, the swap button is NOT shown (no MP4 to swap to)."""
     from app.models.course import Course
@@ -398,7 +422,7 @@ def test_swap_button_not_shown_when_last_run_failed(
     db_session.add(run)
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # No successful last run = no swap button
@@ -408,7 +432,7 @@ def test_swap_button_not_shown_when_last_run_failed(
     assert "Last run failed:" in html
 
 
-def test_swap_modal_is_in_page(client, db_session):
+def test_swap_modal_is_in_page(admin_client, db_session):
     """The swap confirmation modal is rendered (hidden by default)."""
     from app.models.course import Course
     from app.models.section import Section
@@ -423,7 +447,7 @@ def test_swap_modal_is_in_page(client, db_session):
     db_session.add_all([course, section, video])
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # The modal container
@@ -440,7 +464,7 @@ def test_swap_modal_is_in_page(client, db_session):
 
 
 # ── MVP2.1.0.1: Issue 1 — Re-Upload button in JS-rendered template ───
-def test_renderSwapButton_helper_is_defined(client, db_session):
+def test_renderSwapButton_helper_is_defined(admin_client, db_session):
     """The renderSwapButton() helper exists in the page's <script> block.
 
     The JS refreshLastRun() template (called after a
@@ -464,7 +488,7 @@ def test_renderSwapButton_helper_is_defined(client, db_session):
     db_session.add_all([course, section, video])
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     assert "function renderSwapButton" in html
@@ -475,7 +499,7 @@ def test_renderSwapButton_helper_is_defined(client, db_session):
     assert "confirmSwapToMp4" in html
 
 
-def test_video_status_exposed_to_js(client, db_session):
+def test_video_status_exposed_to_js(admin_client, db_session):
     """The video's status is exposed as a JS constant (videoStatus).
 
     The renderSwapButton() helper needs to know
@@ -497,7 +521,7 @@ def test_video_status_exposed_to_js(client, db_session):
     db_session.add_all([course, section, video])
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # The JS constant is rendered with the actual status value
@@ -505,7 +529,7 @@ def test_video_status_exposed_to_js(client, db_session):
 
 
 # ── MVP2.1.0.1: Issue 2 — performSwap() swaps video src without reload ────
-def test_performSwap_uses_video_src_load_instead_of_reload(client, db_session):
+def test_performSwap_uses_video_src_load_instead_of_reload(admin_client, db_session):
     """performSwap() updates the <video> src in place instead of location.reload().
 
     Issue 2 was: after a successful swap, the page
@@ -532,7 +556,7 @@ def test_performSwap_uses_video_src_load_instead_of_reload(client, db_session):
     db_session.add_all([course, section, video])
     db_session.commit()
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     html = resp.text
     # The function exists

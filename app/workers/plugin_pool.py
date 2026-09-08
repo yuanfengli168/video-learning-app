@@ -342,6 +342,7 @@ class PluginPool:
                 id=run_id,
                 plugin_key=plugin_key,
                 video_id=video_id,
+                user_id=user_id,
                 ok=False,
                 message="Queued",
                 status="queued",

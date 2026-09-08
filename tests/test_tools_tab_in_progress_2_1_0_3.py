@@ -142,7 +142,7 @@ def _extract_last_run_div(html: str, plugin_key: str = "webm_to_mp4") -> str:
     return html[open_match.start():i] if depth == 0 else ""
 
 
-def test_last_run_queued_renders_indigo_box(client: TestClient, db_session: Session):
+def test_last_run_queued_renders_indigo_box(admin_client: TestClient, db_session: Session):
     """When the last run is in 'queued' state, the server-render
     must show the indigo "Queued, waiting for a worker slot…"
     box — NOT the red "Last run failed" box.
@@ -153,7 +153,7 @@ def test_last_run_queued_renders_indigo_box(client: TestClient, db_session: Sess
         message="Queued, waiting for a free worker slot.",
     )
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     last_run = _extract_last_run_div(resp.text)
 
@@ -173,7 +173,7 @@ def test_last_run_queued_renders_indigo_box(client: TestClient, db_session: Sess
     assert 'data-run-status="queued"' in last_run
 
 
-def test_last_run_running_renders_indigo_box(client: TestClient, db_session: Session):
+def test_last_run_running_renders_indigo_box(admin_client: TestClient, db_session: Session):
     """When the last run is in 'running' state, the server-render
     must show the indigo "Currently running…" box."""
     _seed_video(db_session)
@@ -182,7 +182,7 @@ def test_last_run_running_renders_indigo_box(client: TestClient, db_session: Ses
         message="Encoding with ffmpeg (50% complete)",
     )
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     last_run = _extract_last_run_div(resp.text)
 
@@ -194,7 +194,7 @@ def test_last_run_running_renders_indigo_box(client: TestClient, db_session: Ses
     assert 'data-run-status="running"' in last_run
 
 
-def test_last_run_done_ok_renders_green_box(client: TestClient, db_session: Session):
+def test_last_run_done_ok_renders_green_box(admin_client: TestClient, db_session: Session):
     """A terminal successful run must render the green box
     (not the new indigo box — the indigo box is for in-progress
     only)."""
@@ -204,7 +204,7 @@ def test_last_run_done_ok_renders_green_box(client: TestClient, db_session: Sess
         message="Wrote 45 MB MP4", output_path="/tmp/lesson.mp4",
     )
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     last_run = _extract_last_run_div(resp.text)
 
@@ -215,7 +215,7 @@ def test_last_run_done_ok_renders_green_box(client: TestClient, db_session: Sess
     assert 'data-run-status="done"' in last_run
 
 
-def test_last_run_done_failed_renders_red_box(client: TestClient, db_session: Session):
+def test_last_run_done_failed_renders_red_box(admin_client: TestClient, db_session: Session):
     """A terminal failed run (status='done', ok=False) must render
     the red box — NOT the new indigo box, NOT the green box."""
     _seed_video(db_session)
@@ -224,7 +224,7 @@ def test_last_run_done_failed_renders_red_box(client: TestClient, db_session: Se
         message="ffmpeg failed: corrupt input", output_path=None,
     )
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     last_run = _extract_last_run_div(resp.text)
 
@@ -235,7 +235,7 @@ def test_last_run_done_failed_renders_red_box(client: TestClient, db_session: Se
 
 
 def test_last_run_explicit_failed_status_renders_red_box(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """A run with status='failed' (the new terminal-failed status
     in MVP2.1.0.1) must also render the red box, not the indigo
@@ -246,7 +246,7 @@ def test_last_run_explicit_failed_status_renders_red_box(
         message="ffmpeg not found on PATH", output_path=None,
     )
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     assert resp.status_code == 200
     last_run = _extract_last_run_div(resp.text)
 
@@ -256,7 +256,7 @@ def test_last_run_explicit_failed_status_renders_red_box(
 
 
 # ── Bug 1: JS auto-poll registration on page load ──────────────────────
-def test_page_registers_auto_poll_on_load(client: TestClient, db_session: Session):
+def test_page_registers_auto_poll_on_load(admin_client: TestClient, db_session: Session):
     """The video page must call startAutoPollIfNeeded() on page
     load (in the Init block at the bottom of the script). This
     is the JS hook that kicks off the silent 1.5s polling for
@@ -272,7 +272,7 @@ def test_page_registers_auto_poll_on_load(client: TestClient, db_session: Sessio
     and the sandbox tests just verify the page loads).
     """
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
 
     # The function must be defined
@@ -289,7 +289,7 @@ def test_page_registers_auto_poll_on_load(client: TestClient, db_session: Sessio
 
 
 def test_refreshLastRun_updates_data_run_status(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """refreshLastRun() (called by the auto-poll) must update the
     data-run-status attribute on the container so the auto-poll
@@ -298,7 +298,7 @@ def test_refreshLastRun_updates_data_run_status(
     stop or never start after the first refresh.
     """
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
 
     # Look for the assignment inside the refreshLastRun body
@@ -312,7 +312,7 @@ def test_refreshLastRun_updates_data_run_status(
 
 
 def test_refreshLastRun_has_three_state_template(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """The JS template in refreshLastRun() must branch on
     status in (queued, running) FIRST, then on ok+output_path,
@@ -321,7 +321,7 @@ def test_refreshLastRun_has_three_state_template(
     auto-poll fetches a new state.
     """
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
 
     # Find the refreshLastRun function body
@@ -352,7 +352,7 @@ def test_refreshLastRun_has_three_state_template(
 
 # ── Bug 1: auto-poll sees data-run-status attribute ────────────────────
 def test_in_progress_box_carries_run_id_and_status_for_poll(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """The indigo box must include data-run-id and data-run-status
     so startAutoPollIfNeeded() can find in-progress runs by
@@ -365,7 +365,7 @@ def test_in_progress_box_carries_run_id_and_status_for_poll(
         message="Encoding…",
     )
 
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
 
     # The container div must have data-run-id and data-run-status
@@ -379,7 +379,7 @@ def test_in_progress_box_carries_run_id_and_status_for_poll(
 
 # ── Bug 2: switchTab forEach covers all SIX tabs ───────────────────────
 def test_switchTab_includes_tools_in_forEach(
-    client: TestClient, db_session: Session
+    admin_client: TestClient, db_session: Session
 ):
     """REGRESSION (MVP2.1.0.3): switchTab()'s forEach must include
     'tools'. Without it, opening Tools then switching to another
@@ -388,7 +388,7 @@ def test_switchTab_includes_tools_in_forEach(
     in MVP2.0.2.
     """
     _seed_video(db_session)
-    resp = client.get("/video/v1")
+    resp = admin_client.get("/video/v1")
     html = resp.text
 
     # Extract switchTab body

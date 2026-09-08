@@ -58,6 +58,56 @@
         </div>
     </div>
 
+    {# ── Tools tab (plugin runs) — keep/kill signal for the feature ── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">🛠️ Tools (plugin runs)</h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Last {{ stats.window_days }} days. Shows whether the paid-tier Tools feature is worth keeping.
+        </p>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+            <div>
+                <div class="text-2xl font-bold text-gray-900 dark:text-white">{{ stats.plugin_runs_total }}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">Total runs</div>
+            </div>
+            <div>
+                <div class="text-2xl font-bold text-green-600 dark:text-green-400">{{ stats.plugin_runs_ok }}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">Succeeded</div>
+            </div>
+            <div>
+                <div class="text-2xl font-bold text-red-600 dark:text-red-400">{{ stats.plugin_runs_failed }}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">Failed</div>
+            </div>
+            <div>
+                <div class="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{{ stats.plugin_runs_in_flight }}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">In flight (queued + running)</div>
+            </div>
+        </div>
+        {% if stats.plugin_top %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-400 border-b dark:border-gray-700">
+                        <th class="py-2 pr-4">Plugin</th>
+                        <th class="py-2 pr-4">Runs</th>
+                        <th class="py-2">Distinct users</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in stats.plugin_top %}
+                    <tr class="border-b dark:border-gray-700/50">
+                        <td class="py-2 pr-4 font-mono text-xs">{{ p.plugin }}</td>
+                        <td class="py-2 pr-4">{{ p.runs }}</td>
+                        <td class="py-2">{{ p.users }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-400 italic">No plugin runs in this window.</p>
+        {% endif %}
+    </div>
+
     {# ── Daily activity mini-chart (pure CSS bars — no chart lib) ── #}
     {% if stats.daily_activity %}
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-8">

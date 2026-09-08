@@ -61,6 +61,15 @@ class PluginRun(Base):
         nullable=False,
         index=True,  # the UI fetches by video, so index this
     )
+    # 2026-09-08: who submitted the run. submit() has always captured
+    # the user_id (the HTTP endpoint passes it in) but never stored
+    # it — the queue held it in memory only. Stored now for
+    # /admin/analytics (distinct-user Tools usage) and for future
+    # per-user audit ("my plugin runs"). Nullable because legacy
+    # rows + the synchronous test mode didn't record it.
+    user_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True,
+    )
     plugin_key: Mapped[str] = mapped_column(String(64), nullable=False)
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
     message: Mapped[str] = mapped_column(Text, default="")

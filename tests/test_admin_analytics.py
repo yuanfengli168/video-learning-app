@@ -127,6 +127,48 @@ def test_analytics_counts_seeded_events(admin_client: TestClient, db_session):
     assert "analytics test video" in html
 
 
+def test_analytics_plugin_run_counters(admin_client: TestClient, db_session):
+    """Plugin-run (Tools tab) stats show up in the analytics overview.
+
+    Guards the 2026-09-08 addition: plugin runs never write to the
+    events table, so their counters come from plugin_runs directly
+    (keep/kill signal for the Tools feature).
+    """
+    from app.models.plugin_run import PluginRun
+
+    vid = _make_video(db_session)
+
+    def _seed_run(uid: str, status_: str, ok: bool) -> None:
+        db_session.add(PluginRun(
+            plugin_key="webm_to_mp4", video_id=vid, user_id=uid,
+            status=status_, ok=ok,
+            message="seed", output_path=None, extra_json="{}",
+        ))
+
+    # Two successes by one user, one failure by another, one in-flight.
+    _seed_run("u-one", "done", True)
+    _seed_run("u-one", "done", True)
+    _seed_run("u-two", "failed", False)
+    _seed_run("u-two", "running", False)
+    db_session.commit()
+
+    from app.services.analytics import get_analytics_overview
+    stats = get_analytics_overview(db_session)
+    assert stats["plugin_runs_total"] == 4
+    assert stats["plugin_runs_ok"] == 2
+    assert stats["plugin_runs_failed"] == 1
+    assert stats["plugin_runs_in_flight"] == 1
+    assert stats["plugin_top"][0]["plugin"] == "webm_to_mp4"
+    assert stats["plugin_top"][0]["runs"] == 4
+    assert stats["plugin_top"][0]["users"] == 2
+
+    # Page renders the Tools section
+    with _mock_admin():
+        resp = admin_client.get("/admin/analytics", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert "plugin runs" in resp.text.lower() or "Tools (plugin runs)" in resp.text
+
+
 def test_analytics_days_param_clamped(admin_client: TestClient, db_session):
     """?days=999 → clamped to 90 (no unbounded scan)."""
     with _mock_admin():

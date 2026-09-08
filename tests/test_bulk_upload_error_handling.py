@@ -181,22 +181,28 @@ def test_dashboard_uses_safeJsonParse_for_bulk_upload():
 
 
 def test_course_uses_safeJsonParse_for_bulk_upload():
-    """course.html's upload handlers (single + bulk) must use
-    safeJsonParse, not call resp.json() directly.
+    """course.html's upload handlers (single + bulk) must parse the
+    response JSON safely.
+
+    2026-09-08 update: the upload path moved from fetch to XHR (for
+    real upload progress), so safeJsonParse is no longer the mechanism
+    here — the XHR wrapper parses inside try/JSON.parse/catch, which
+    handles plain-text 400 responses the same way. The regression this
+    guards: NEVER call resp.json() directly on an upload response.
     """
     course_html = Path("app/templates/course.html").read_text()
-    # Must call safeJsonParse
-    assert "safeJsonParse" in course_html, (
-        "course.html must use safeJsonParse() for upload "
-        "responses, not resp.json() directly."
+    # The XHR wrapper must parse defensively (try/JSON.parse/catch)
+    assert "JSON.parse" in course_html and "catch" in course_html, (
+        "course.html's XHR upload wrapper must parse the response "
+        "inside try/JSON.parse/catch so plain-text 400 responses "
+        "don't crash the handler."
     )
     # The old pattern that did `await resp.json()` directly in
-    # an `alert()` must be gone. The new pattern destructures
-    # the safeJsonParse result.
+    # an `alert()` must be gone.
     assert "(await resp.json()).detail" not in course_html, (
         "Found the old `(await resp.json()).detail` pattern in "
         "course.html — this throws on plain-text 400 "
-        "responses. Replace with safeJsonParse() destructuring."
+        "responses. Replace with safe JSON parsing."
     )
 
 
@@ -291,9 +297,16 @@ def test_all_upload_handlers_use_safeJsonParse():
             f"an upload handler. Use safeJsonParse() instead so "
             f"plain-text 400 responses don't crash the upload."
         )
-    for good in course_good:
+    # 2026-09-08: course.html's upload moved from fetch to XHR (real
+    # upload progress). The XHR wrapper must parse defensively — the
+    # positive check is now try/JSON.parse/catch inside postMultipart,
+    # not safeJsonParse (which stays a fetch-response helper).
+    xhr_good = [
+        "try { data = JSON.parse(xhr.responseText); } catch (_) {",
+    ]
+    for good in xhr_good:
         assert good in course_html, (
-            f"course.html is missing the new `{good}` pattern in an "
-            f"upload handler. The MVP2.0.5 fix requires all upload "
-            f"handlers to use safeJsonParse()."
+            f"course.html is missing the new `{good}` pattern in the "
+            f"XHR upload wrapper. Plain-text 400 responses must not "
+            f"crash the upload handler."
         )

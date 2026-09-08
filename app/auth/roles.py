@@ -142,10 +142,12 @@ class Capability(str, Enum):
     RUN_PLUGIN = "run_plugin"
     """Run a media plugin (e.g. webm_to_mp4 transcoding) on a video.
 
-    Admin-only because plugins spawn ffmpeg subprocesses with
-    significant CPU + disk cost. Day 9 hotfix: was previously
-    open to anyone signed in (security gap, would let free users
-    DoS the server by queuing transcodes).
+    PAID + ADMIN (2026-09-08 product decision — was admin-only since
+    Day 9). Plugins spawn ffmpeg subprocesses with real CPU + disk
+    cost, so FREE stays excluded (a free-user transcode flood would
+    DoS the server). PAID is a small paying cohort, so the exposure
+    is bounded; the plugin pool (limit=3 concurrent) also caps total
+    load regardless of who submits.
     """
 
     MANAGE_USERS = "manage_users"
@@ -184,7 +186,10 @@ ROLE_CAPABILITIES: dict[UserRole, frozenset[Capability]] = {
         Capability.REGEN_MATERIALS,
         # Day 9 hotfix: PAID can manage own courses + sections
         Capability.MANAGE_OWN_COURSE,
-        # No CURATE_CATALOG, no MANAGE_USERS, no admin dashboard, no RUN_PLUGIN
+        # 2026-09-08 product decision: Tools tab (plugins) for PAID too.
+        # Was admin-only; FREE still excluded (ffmpeg cost).
+        Capability.RUN_PLUGIN,
+        # No CURATE_CATALOG, no MANAGE_USERS, no admin dashboard
     }),
 
     UserRole.FREE: frozenset({

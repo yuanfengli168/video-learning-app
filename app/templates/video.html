@@ -241,7 +241,9 @@
                 <button onclick="switchTab('quiz')" id="tab-quiz" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Quiz</button>
                 <button onclick="switchTab('mindmap')" id="tab-mindmap" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Mindmap</button>
                 <button onclick="switchTab('discuss')" id="tab-discuss" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">💬 Discuss</button>
+                {% if "run_plugin" in user_capabilities %}
                 <button onclick="switchTab('tools')" id="tab-tools" class="px-4 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">🛠️ Tools</button>
+                {% endif %}
             </div>
 
             <!-- Tab content -->
@@ -340,9 +342,18 @@
                      a button that POSTs to /api/plugins/{key}/run.
                      The result is shown inline below the button.
                      The "ffmpeg not found" state is rendered when
-                     the plugin is unavailable. -->
+                     the plugin is unavailable.
+
+                     2026-09-08 role gate: the whole panel is
+                     rendered ONLY for roles with the run_plugin
+                     capability (PAID + ADMIN). FREE users get
+                     nothing here at all — not even a greyed
+                     teaser: the tab button is hidden too (see
+                     the tab strip above). The API independently
+                     403s FREE users (require_capability), so a
+                     hand-crafted POST still can't run a plugin. -->
+                {% if "run_plugin" in user_capabilities %}
                 <div id="content-tools" class="hidden">
-                    <div class="space-y-3">
                         {% for plugin in available_plugins %}
                         <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"
                              data-plugin-key="{{ plugin.key }}">
@@ -499,6 +510,7 @@
                         {% endif %}
                     </div>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>
