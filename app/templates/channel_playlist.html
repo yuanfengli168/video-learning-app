@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ course.title if course else 'Playlist' }} — {{ channel.name }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}Catalog / {{ channel.name }} / {{ course.title if course else 'Playlist' }}{% endblock %}
+
+{% macro duration_badge(seconds) -%}
+    {%- if seconds -%}
+        {%- set s = seconds|int -%}
+        {%- set h = (s // 3600) -%}
+        {%- set m = ((s % 3600) // 60) -%}
+        {%- set sec = (s % 60) -%}
+        {{ '%d:%02d:%02d'|format(h, m, sec) if h else '%d:%02d'|format(m, sec) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <div class="mb-2">
+        <a href="/channel/{{ channel.slug }}" class="text-sm text-gray-400 hover:text-indigo-500">← {{ channel.name }}</a>
+    </div>
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
+            {{ course.title if course else 'Playlist' }}
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            {{ videos|length }} video{{ 's' if videos|length != 1 }} ·
+            from {{ channel.name }}
+        </p>
+    </div>
+
+    {% if videos %}
+    {# Same card style as the dashboard catalog grid — consistent
+       YouTube-card look across both browse surfaces. #}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        {% for v in videos %}
+        <a href="/video/{{ v.id }}"
+           class="group bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-md transition-all">
+            <div class="relative aspect-video bg-gray-200 dark:bg-gray-700">
+                {% if v.thumbnail_url %}
+                <img src="{{ v.thumbnail_url }}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy"
+                     referrerpolicy="no-referrer-when-downgrade">
+                {% else %}
+                <div class="w-full h-full flex items-center justify-center text-3xl">🎬</div>
+                {% endif %}
+                {% if v.duration %}
+                <span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-xs font-mono bg-black/80 text-white rounded">
+                    {{ duration_badge(v.duration) }}
+                </span>
+                {% endif %}
+                {# status badge for non-ready videos #}
+                {% if v.status != 'ready' %}
+                <span class="absolute top-1.5 left-1.5 px-2 py-0.5 text-xs font-medium rounded-full
+                    {% if v.status == 'error' %}bg-red-500/90 text-white
+                    {% else %}bg-amber-500/90 text-white{% endif %}">
+                    {{ '⚠ ' ~ v.status if v.status == 'error' else '⏳ ' ~ v.status }}
+                </span>
+                {% endif %}
+            </div>
+            <div class="p-4">
+                <div class="font-semibold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors line-clamp-2">
+                    {{ v.title }}
+                </div>
+                {% if v.channel %}
+                <div class="mt-1 text-xs text-gray-400">{{ v.channel }}</div>
+                {% endif %}
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-16 text-gray-400">
+        <div class="text-4xl mb-3">🎬</div>
+        <p class="text-sm">No videos in this playlist yet.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

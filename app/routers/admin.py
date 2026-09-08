@@ -91,6 +91,36 @@ class YouTubeVideoCreate(BaseModel):
             "has none yet)."
         ),
     )
+    # ── 2026-09-08 channel catalog fields ──
+    # The admin upload page can now target CHANNEL content: pick an
+    # existing channel, create a new one inline, pick/create a playlist
+    # (Course) inside it, or leave both unset (personal course flow,
+    # exactly today's behavior). All three fields are optional and
+    # independently so — the resolver below decides precedence.
+    channel_id: str | None = Field(
+        default=None,
+        max_length=36,
+        description=(
+            "Existing channel UUID. When set (and no new_channel_name), "
+            "the video lands in a playlist under this channel."
+        ),
+    )
+    new_channel_name: str | None = Field(
+        default=None,
+        max_length=255,
+        description=(
+            "Create a NEW channel with this display name (slug derived "
+            "server-side). Takes precedence over channel_id."
+        ),
+    )
+    new_playlist_title: str | None = Field(
+        default=None,
+        max_length=255,
+        description=(
+            "Create a NEW playlist (Course) under the resolved channel "
+            "with this title. Only meaningful together with a channel."
+        ),
+    )
 
     @field_validator("visibility")
     @classmethod
@@ -134,6 +164,13 @@ class YouTubeVideoResponse(BaseModel):
     """One of: 'enriched' (API call succeeded), 'failed' (API call failed),
     'skipped' (no API key configured). Admin can see at a glance whether
     YouTube metadata was populated."""
+    # 2026-09-08 channel catalog info — where the video landed.
+    # All None when the personal-course flow was used.
+    channel_name: str | None = None
+    channel_slug: str | None = None
+    playlist_title: str | None = None
+    created_channel: bool = False
+    created_playlist: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -295,26 +332,57 @@ async def admin_add_youtube_video(
     )
     # Resolve which Section this video lands in.
     #
-    # Priority:
+    # 2026-09-08 channel flow (takes precedence when any channel
+    # field is set):
+    #   1. new_channel_name → create/reuse channel by name
+    #   2. else channel_id  → that channel
+    #   3. new_playlist_title → new playlist (Course) in the channel
+    #   4. else newest playlist's first section ("Main Playlist"
+    #      auto-created if the channel is empty)
+    #
+    # Legacy personal-course flow (no channel fields):
     #   1. Explicit body.section_id from the admin form (UUID)
     #   2. First Section of the admin's first Course (alphabetical)
     #   3. Auto-create a "Default Catalog" Course + "Uncategorized" Section
-    #
-    # Why honor the admin's pick but auto-fall-back: lets admins curate
-    # intentionally while not blocking adds when they're new and have no
-    # courses yet (the "Default Catalog" catch-all is for that case).
     from app.services.section_picker import (
         resolve_section_for_new_video,
     )
+    from app.services.channel_upload import resolve_channel_target
 
+    created_channel: object | None = None
+    created_playlist: object | None = None
     try:
-        chosen_section = resolve_section_for_new_video(
-            db=db, uid=uid, requested_section_id=body.section_id
+        # Only a NEW-channel-name flow can create a channel. When the
+        # form picks an existing channel_id, it obviously existed.
+        _created_new_channel = False
+        if body.new_channel_name and body.new_channel_name.strip():
+            from app.models import Channel as _Channel
+            from sqlalchemy import select as _select
+            _existed_before = db.execute(
+                _select(_Channel.id).where(
+                    _Channel.name == body.new_channel_name.strip()
+                )
+            ).scalar_one_or_none() is not None
+            _created_new_channel = not _existed_before
+
+        channel, new_playlist, chosen_section = resolve_channel_target(
+            db=db,
+            uid=uid,
+            channel_id=body.channel_id,
+            new_channel_name=body.new_channel_name,
+            new_playlist_title=body.new_playlist_title,
         )
+        if _created_new_channel:
+            created_channel = channel
+        created_playlist = new_playlist
+        if chosen_section is None:
+            # No channel context — the personal-course flow, unchanged.
+            chosen_section = resolve_section_for_new_video(
+                db=db, uid=uid, requested_section_id=body.section_id
+            )
     except ValueError as exc:
-        # section_id is invalid (missing, belongs to another admin).
-        # 400 because the request body is wrong, not 403 (which would
-        # leak that other admins have sections).
+        # channel_id/section_id invalid (missing, belongs to another
+        # admin). 400 because the request body is wrong, not 403.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
@@ -358,6 +426,16 @@ async def admin_add_youtube_video(
         channel=yt_channel,
         caption_languages=yt_caption_languages,
         enrichment_status=enrichment_status,
+        # Channel catalog info (None-values when personal-course flow)
+        channel_name=channel.name if channel is not None else None,
+        channel_slug=channel.slug if channel is not None else None,
+        playlist_title=(
+            (created_playlist.title if created_playlist is not None
+             else chosen_section.course.title)
+            if channel is not None else None
+        ),
+        created_channel=created_channel is not None,
+        created_playlist=created_playlist is not None,
     )
 
 

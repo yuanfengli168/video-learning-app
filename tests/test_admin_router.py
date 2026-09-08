@@ -615,17 +615,24 @@ def test_response_includes_all_required_fields(client: TestClient, db_session):
         )
 
     body = response.json()
-    # Day 2B: response now includes 6 enrichment fields. With API key
+    # Day 2B: response includes 6 enrichment fields. With API key
     # disabled (autouse fixture), all 6 are present but empty/null.
+    # 2026-09-08 channel catalog: +5 channel fields (all null/False
+    # in the personal-course flow — this test sends no channel picks).
     assert set(body.keys()) == {
         "video_id", "youtube_id", "title", "visibility", "visibility_name",
         "duration_seconds", "thumbnail_url", "channel",
         "caption_languages", "enrichment_status",
+        "channel_name", "channel_slug", "playlist_title",
+        "created_channel", "created_playlist",
     }
     # video_id is a UUID (36 chars with hyphens)
     assert len(body["video_id"]) == 36
     # With API disabled, enrichment_status is 'skipped'
     assert body["enrichment_status"] == "skipped"
+    # Personal-course flow: no channel info
+    assert body["channel_name"] is None
+    assert body["created_channel"] is False
 
 
 # ─────────────────────────────────────────────────────────────────────────

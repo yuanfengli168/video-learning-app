@@ -66,8 +66,60 @@
                 </select>
             </div>
 
-            <!-- Section picker (Day 2C Topic 2) -->
-            <div>
+            <!-- ══ Channel catalog targeting (2026-09-08) ══
+                 Optional. Two modes:
+                   A) Pick/create a CHANNEL → the video lands in a
+                      channel playlist (public catalog content,
+                      browseable at /channel/{slug}).
+                   B) Leave channel unset → the personal-course flow
+                      below (the pre-channel "Add to Section" picker).
+                 New-channel names are reused by exact match, so
+                 re-typing an existing name won't duplicate it. -->
+            <div class="pt-2 border-t border-gray-200 dark:border-gray-700">
+                <label class="block text-sm font-medium mb-2 mt-2">
+                    Channel <span class="text-gray-400 font-normal">(optional — for the public catalog)</span>
+                </label>
+                <div class="grid grid-cols-2 gap-2">
+                    <select
+                        id="channel_id"
+                        name="channel_id"
+                        class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                        <option value="" selected>— No channel (personal course) —</option>
+                        {% for ch in channels %}
+                        <option value="{{ ch.id }}">{{ ch.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <input
+                        type="text"
+                        id="new_channel_name"
+                        name="new_channel_name"
+                        placeholder="or type a NEW channel name…"
+                        maxlength="255"
+                        class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                </div>
+                <label class="block text-sm font-medium mb-1 mt-4">
+                    New playlist in that channel
+                    <span class="text-gray-400 font-normal">(optional)</span>
+                </label>
+                <input
+                    type="text"
+                    id="new_playlist_title"
+                    name="new_playlist_title"
+                    placeholder="e.g. “GPT-5 Launch Talks” — blank = latest playlist"
+                    maxlength="255"
+                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                <p class="mt-1 text-xs text-gray-400">
+                    Blank playlist = the video goes into the channel’s most recent
+                    playlist. Channels with none get “Main Playlist”.
+                </p>
+            </div>
+
+            <!-- Section picker (Day 2C Topic 2) — used ONLY when no
+                 channel is selected above. -->
+            <div id="personal-section-picker">
                 <label for="section_id" class="block text-sm font-medium mb-1">
                     Add to Section
                 </label>
@@ -126,6 +178,7 @@
             <p class="mt-1 text-xs text-green-700 dark:text-green-300">
                 Video ID: <code id="success-id"></code><br>
                 YouTube ID: <code id="success-ytid"></code><br>
+                <span id="success-channel" class="hidden"></span><br>
                 <a id="success-link" href="#" target="_blank" class="underline">View on watch page →</a>
             </p>
         </div>
@@ -145,6 +198,29 @@
 </div>
 
 <script>
+// Channel-mode toggle (2026-09-08): when a channel is picked/typed,
+// the personal-course Section picker is irrelevant (and confusing) —
+// grey it out with a hint. When no channel, it comes back.
+(function () {
+    const sel = document.getElementById('channel_id');
+    const newName = document.getElementById('new_channel_name');
+    const personal = document.getElementById('personal-section-picker');
+    function refresh() {
+        const channelActive = (sel && sel.value) || (newName && newName.value.trim());
+        if (!personal) return;
+        if (channelActive) {
+            personal.classList.add('opacity-40', 'pointer-events-none');
+            personal.setAttribute('aria-disabled', 'true');
+        } else {
+            personal.classList.remove('opacity-40', 'pointer-events-none');
+            personal.removeAttribute('aria-disabled');
+        }
+    }
+    if (sel) sel.addEventListener('change', refresh);
+    if (newName) newName.addEventListener('input', refresh);
+    refresh();
+})();
+
 // Live preview of extracted YouTube ID as user types
 document.getElementById('url').addEventListener('input', function() {
     const url = this.value;
@@ -179,6 +255,10 @@ document.getElementById('admin-upload-form').addEventListener('submit', async fu
         title: document.getElementById('title').value,
         visibility: parseInt(document.getElementById('visibility').value, 10),
         section_id: document.getElementById('section_id').value || null,
+        // 2026-09-08 channel targeting (all optional):
+        channel_id: document.getElementById('channel_id').value || null,
+        new_channel_name: document.getElementById('new_channel_name').value.trim() || null,
+        new_playlist_title: document.getElementById('new_playlist_title').value.trim() || null,
     };
 
     try {
@@ -225,12 +305,25 @@ document.getElementById('admin-upload-form').addEventListener('submit', async fu
         document.getElementById('success-id').textContent = body.video_id;
         document.getElementById('success-ytid').textContent = body.youtube_id;
         document.getElementById('success-link').href = '/video/' + body.video_id;
+        // Channel info line (2026-09-08): where the video landed.
+        const chLine = document.getElementById('success-channel');
+        if (body.channel_name) {
+            chLine.textContent = (body.created_channel ? '✨ Created channel ' : 'Channel: ')
+                + body.channel_name
+                + (body.created_playlist ? ' ✨ + new playlist “' + body.playlist_title + '”'
+                    : ' · playlist: ' + body.playlist_title);
+            chLine.classList.remove('hidden');
+        } else {
+            chLine.classList.add('hidden');
+        }
         success.classList.remove('hidden');
 
-        // Reset form (but keep visibility choice)
+        // Reset form (keep visibility + channel picks so consecutive
+        // uploads to the same channel are one-less click each)
         document.getElementById('url').value = '';
         document.getElementById('title').value = '';
         document.getElementById('url-preview').textContent = '';
+        document.getElementById('new_playlist_title').value = '';
     } catch (err) {
         status.textContent = '❌ Network error: ' + err.message;
         status.className = 'mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-800 dark:text-red-200';

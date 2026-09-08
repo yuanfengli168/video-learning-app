@@ -264,6 +264,17 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "user_id",
         "ALTER TABLE plugin_runs ADD COLUMN user_id VARCHAR(128)",
     ),
+    # 2026-09-08 — courses.channel_id. The catalog hierarchy becomes
+    # Channel → Course(=playlist) → Section → Video. NULL = personal
+    # course (pre-channel behavior); NOT NULL = channel-owned catalog
+    # playlist. The channels table itself is created by create_all
+    # (new table — no migration needed for it).
+    (
+        "courses",
+        "channel_id",
+        "ALTER TABLE courses ADD COLUMN channel_id VARCHAR(36) "
+        "REFERENCES channels(id) ON DELETE SET NULL",
+    ),
 ]
 
 

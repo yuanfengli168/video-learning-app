@@ -427,6 +427,132 @@ async def video_view(
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Channel catalog (2026-09-08) — YouTube-shaped browse hierarchy:
+#   /catalog                              → channel grid
+#   /channel/{slug}                       → playlist grid
+#   /channel/{slug}/playlist/{course_id}  → video grid
+# Product decisions: channels admin-curated only; name-first tiles
+# (no brand logos); channel-level visibility deferred (per-Video only).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/catalog", response_class=HTMLResponse)
+async def channel_catalog_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(get_current_user_optional),
+) -> HTMLResponse:
+    """Channel grid — the new catalog landing page.
+
+    Channels with zero visible playlists (for this user's role) are
+    omitted entirely, so FREE users never see channel tiles whose
+    content is all PAID_ONLY (a tier-content oracle).
+    """
+    from app.services.channel_catalog import list_channels
+    from app.auth.roles import UserRole
+
+    role = None
+    if user:
+        role = get_user_role_from_db(user.get("uid", ""), db)
+    channels = list_channels(db, role)
+
+    return templates.TemplateResponse(
+        request,
+        "channel_catalog.html",
+        _ctx(request, user, db=db, channels=channels),
+    )
+
+
+@router.get("/channel/{slug}", response_class=HTMLResponse)
+async def channel_page(
+    request: Request,
+    slug: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(get_current_user_optional),
+) -> HTMLResponse:
+    """Playlist grid for one channel (YouTube channel page style)."""
+    from app.services.channel_catalog import (
+        get_channel_by_slug,
+        list_playlists_in_channel,
+    )
+
+    channel = get_channel_by_slug(db, slug)
+    if channel is None:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ctx(request, user, db=db, error="Channel not found"),
+            status_code=404,
+        )
+
+    role = None
+    if user:
+        role = get_user_role_from_db(user.get("uid", ""), db)
+    playlists = list_playlists_in_channel(db, channel, role)
+
+    return templates.TemplateResponse(
+        request,
+        "channel_page.html",
+        _ctx(request, user, db=db, channel=channel, playlists=playlists),
+    )
+
+
+@router.get("/channel/{slug}/playlist/{course_id}", response_class=HTMLResponse)
+async def channel_playlist_page(
+    request: Request,
+    slug: str,
+    course_id: str,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(get_current_user_optional),
+) -> HTMLResponse:
+    """Video grid for one playlist (Course) inside a channel.
+
+    404 when the playlist isn't in THIS channel (course_id from
+    another channel/personal course → not leaked) or when the
+    playlist has zero videos visible to this role.
+    """
+    from app.services.channel_catalog import (
+        get_channel_by_slug,
+        get_playlist_videos,
+    )
+
+    channel = get_channel_by_slug(db, slug)
+    if channel is None:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ctx(request, user, db=db, error="Channel not found"),
+            status_code=404,
+        )
+
+    role = None
+    if user:
+        role = get_user_role_from_db(user.get("uid", ""), db)
+    videos = get_playlist_videos(db, channel, course_id, role)
+    if not videos:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ctx(request, user, db=db, error="Playlist not found"),
+            status_code=404,
+        )
+
+    course = db.get(Course, course_id)
+    return templates.TemplateResponse(
+        request,
+        "channel_playlist.html",
+        _ctx(
+            request,
+            user,
+            db=db,
+            channel=channel,
+            course=course,
+            videos=videos,
+        ),
+    )
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(
     request: Request,
@@ -587,6 +713,13 @@ async def admin_upload_page(
 
     ensure_admin_has_a_section(db, user.get("uid", ""))
 
+    # 2026-09-08: existing channels for the Channel picker (top of the
+    # form). Ordered by creation — stable and predictable.
+    from app.models import Channel as _ChannelModel
+    channels = db.execute(
+        select(_ChannelModel).order_by(_ChannelModel.created_at.asc())
+    ).scalars().all()
+
     return templates.TemplateResponse(
         request,
         "admin_upload.html",
@@ -594,6 +727,7 @@ async def admin_upload_page(
             request,
             user,
             db=db,
+            channels=channels,
             visibility_options=[
                 {"value": 0, "label": "Public — anyone can view"},
                 {"value": 1, "label": "Paid only — paid subscribers"},

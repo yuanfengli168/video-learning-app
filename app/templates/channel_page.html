@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ channel.name }} — {{ app_name }}{% endblock %}
+{% block breadcrumb %}Catalog / {{ channel.name }}{% endblock %}
+
+{% macro duration_badge(seconds) -%}
+    {%- if seconds -%}
+        {%- set s = seconds|int -%}
+        {%- set h = (s // 3600) -%}
+        {%- set m = ((s % 3600) // 60) -%}
+        {%- set sec = (s % 60) -%}
+        {{ '%d:%02d:%02d'|format(h, m, sec) if h else '%d:%02d'|format(m, sec) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <div class="mb-2">
+        <a href="/catalog" class="text-sm text-gray-400 hover:text-indigo-500">← All channels</a>
+    </div>
+    <div class="flex items-center gap-4 mb-8">
+        <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white text-2xl font-bold shadow-inner">
+            {{ channel.name[:1]|upper }}
+        </div>
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">{{ channel.name }}</h1>
+            {% if channel.description %}
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">{{ channel.description }}</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if playlists %}
+    <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Playlists</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        {% for p in playlists %}
+        {# YouTube playlist card: first video's thumbnail as cover,
+           duration badge, video count pill, gradient overlay strip. #}
+        <a href="/channel/{{ channel.slug }}/playlist/{{ p.course_id }}"
+           class="group bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-md transition-all">
+            <div class="relative aspect-video bg-gray-200 dark:bg-gray-700">
+                {% if p.cover_url %}
+                <img src="{{ p.cover_url }}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy"
+                     referrerpolicy="no-referrer-when-downgrade">
+                {% else %}
+                <div class="w-full h-full flex items-center justify-center text-3xl">🎬</div>
+                {% endif %}
+                {# duration badge (bottom-right, YouTube style) #}
+                {% if p.cover_duration %}
+                <span class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-xs font-mono bg-black/80 text-white rounded">
+                    {{ duration_badge(p.cover_duration) }}
+                </span>
+                {% endif %}
+                {# video-count pill (bottom-left) #}
+                <span class="absolute bottom-1.5 left-1.5 px-2 py-0.5 text-xs font-medium bg-black/70 text-white rounded-full backdrop-blur-sm">
+                    ▶ {{ p.video_count }} video{{ 's' if p.video_count != 1 }}
+                </span>
+                {# "Playlist" strip across the bottom (YouTube cue) #}
+                <div class="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-indigo-500 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            </div>
+            <div class="p-4">
+                <div class="font-semibold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors line-clamp-2">
+                    {{ p.title }}
+                </div>
+                <div class="mt-1 text-xs text-gray-400">
+                    Playlist · {{ p.video_count }} video{{ 's' if p.video_count != 1 }}
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-16 text-gray-400">
+        <div class="text-4xl mb-3">🎞️</div>
+        <p class="text-sm">No playlists in this channel yet.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
