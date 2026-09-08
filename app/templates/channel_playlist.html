@@ -29,12 +29,25 @@
 
     {% if videos %}
     {# Same card style as the dashboard catalog grid — consistent
-       YouTube-card look across both browse surfaces. #}
+       YouTube-card look across both browse surfaces.
+       2026-09-08 Option A: episode position badge per card. Computed at
+       RENDER time (loop.index over the ordered query) — never stored —
+       so re-imports and admin re-orders stay correct automatically.
+       Only channel playlists are sequential courses; personal videos
+       render without numbers (loop.index is available everywhere but
+       the badge is meaningful here). #}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
         {% for v in videos %}
         <a href="/video/{{ v.id }}"
            class="group bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-md transition-all">
             <div class="relative aspect-video bg-gray-200 dark:bg-gray-700">
+                {# episode badge — top-left, YouTube playlist style.
+                   Shifted right when a status badge also occupies the
+                   top-left corner. #}
+                <span class="absolute top-1.5 px-2 py-0.5 text-xs font-bold bg-indigo-600/90 text-white rounded-full
+                    {% if v.status != 'ready' %}left-14{% else %}left-1.5{% endif %}">
+                    {{ loop.index }}
+                </span>
                 {% if v.thumbnail_url %}
                 <img src="{{ v.thumbnail_url }}" alt="" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy"
                      referrerpolicy="no-referrer-when-downgrade">
@@ -59,9 +72,10 @@
                 <div class="font-semibold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors line-clamp-2">
                     {{ v.title }}
                 </div>
-                {% if v.channel %}
-                <div class="mt-1 text-xs text-gray-400">{{ v.channel }}</div>
-                {% endif %}
+                <div class="mt-1 text-xs text-gray-400">
+                    {% if v.channel %}{{ v.channel }} · {% endif %}
+                    Episode {{ loop.index }} of {{ videos|length }}
+                </div>
             </div>
         </a>
         {% endfor %}

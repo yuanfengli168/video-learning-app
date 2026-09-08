@@ -26,7 +26,34 @@
      confirmation modal; on confirm it calls
      DELETE /api/videos/{id} and redirects to the course page. -->
 <div class="flex items-start justify-between gap-3 mb-4">
-    <h1 class="text-2xl font-bold break-words min-w-0">{{ video.title }}</h1>
+    <div class="min-w-0">
+        <h1 class="text-2xl font-bold break-words">{{ video.title }}</h1>
+        {# Option A (2026-09-08): episode position + prev/next for
+           channel playlists. episode_info is computed at render time
+           by the route (never stored) — re-imports/re-orders stay
+           correct automatically. Only channel content has this. #}
+        {% if episode_info %}
+        <div class="mt-2 flex items-center gap-3 flex-wrap">
+            <span class="text-xs font-semibold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">
+                Episode {{ episode_info.number }} of {{ episode_info.total }}
+            </span>
+            {% if episode_info.prev %}
+            <a href="/video/{{ episode_info.prev.id }}"
+               class="text-xs text-gray-500 dark:text-gray-400 hover:text-indigo-500 flex items-center gap-1 group">
+                <span class="group-hover:-translate-x-0.5 transition-transform">←</span>
+                <span class="truncate max-w-[16rem]">Ep {{ episode_info.number - 1 }}: {{ episode_info.prev.title }}</span>
+            </a>
+            {% endif %}
+            {% if episode_info.next %}
+            <a href="/video/{{ episode_info.next.id }}"
+               class="text-xs text-gray-500 dark:text-gray-400 hover:text-indigo-500 flex items-center gap-1 group">
+                <span class="truncate max-w-[16rem]">Ep {{ episode_info.number + 1 }}: {{ episode_info.next.title }}</span>
+                <span class="group-hover:translate-x-0.5 transition-transform">→</span>
+            </a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
     <button
         onclick="showDeleteModal()"
         id="delete-video-btn"

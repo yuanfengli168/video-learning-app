@@ -15,7 +15,7 @@ from app.auth.dependencies import get_current_user_optional
 from app.auth.roles import Capability, capabilities_for_role
 from app.config import settings
 from app.database import get_db
-from app.models import Asset, Course, Section, Video
+from app.models import Asset, Channel, Course, Section, Video
 from app.models.video import natural_sort_key, natural_sort_key_str
 from app.services.catalog import visible_videos_for_user
 from app.services.markdown import simple_markdown
@@ -334,6 +334,36 @@ async def video_view(
     section = db.get(Section, video.section_id)
     course = db.get(Course, section.course_id) if section else None
 
+    # ── Option A (2026-09-08): episode position for channel playlists ──
+    # Channel playlists are sequential courses (bulk import preserves
+    # YouTube order via order_index). Compute this video's position +
+    # prev/next siblings at RENDER time — never stored, so re-imports
+    # and admin re-orders stay correct automatically. Personal uploads
+    # (course.channel is None) get no episode UI.
+    episode_info: dict[str, Any] | None = None
+    if course is not None and course.channel_id:
+        channel = db.get(Channel, course.channel_id)
+        if channel is not None:
+            from app.services.channel_catalog import (
+                get_playlist_videos as _gpv,
+            )
+            # The user's own role governs which siblings are visible;
+            # get_current_user_optional already enriched user["role"].
+            role = user.get("role") if user else None
+            try:
+                sibs = _gpv(db, channel, course.id, role)
+            except Exception:
+                sibs = []
+            for idx, sib in enumerate(sibs):
+                if sib.id == video.id:
+                    episode_info = {
+                        "number": idx + 1,
+                        "total": len(sibs),
+                        "prev": sibs[idx - 1] if idx > 0 else None,
+                        "next": sibs[idx + 1] if idx < len(sibs) - 1 else None,
+                    }
+                    break
+
     # Look up the summary asset. Limit to one row (we always upsert in
     # `_run_generate_job`) so this is a single-row read.
     summary_asset = db.execute(
@@ -423,6 +453,7 @@ async def video_view(
             summary_content=summary_content,
             available_plugins=available_plugins,
             plugin_last_runs=last_runs_by_plugin,
+            episode_info=episode_info,
         ),
     )
 
