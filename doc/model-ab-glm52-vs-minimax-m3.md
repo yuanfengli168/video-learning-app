@@ -71,6 +71,38 @@ m3's thinking is actually *shorter* on most videos. The original .env caveat
 ("glm validated, m3 risky because thinking") turns out to be half-true: the
 parser risk is nil for both; the differences are elsewhere.
 
+## Follow-up analysis (2026-09-10): is m3's density hallucination? No — measured.
+
+User question: *"m3 builds denser mindmaps but hit 18/23 topic discipline — are
+the dense nodes hallucinated, or something not in the transcript?"*
+
+Measured against the actual transcripts (node-name word-overlap ≥50% = grounded):
+
+| Check | Result |
+|---|---|
+| **Grounding, all 23 videos** (median) | glm **0.87** · m3 **0.86** — statistically identical |
+| **Grounding, the 5 mismatched videos only** (m3) | **0.93** — the mismatched videos' nodes are MORE grounded than average |
+| **Node count: mismatched vs clean m3 videos** | median 36 vs 38 — **density does NOT correlate with mismatch at all** |
+
+**Conclusion:** m3's dense nodes are **NOT hallucinations** — they're real
+content from the transcripts (grounding equal to glm). And the topic mismatches
+are **not a density problem** (mismatched videos aren't denser). The mismatch
+is a **self-consistency quirk**: m3 writes the mindmap, then writes
+`topic_timestamps`, and occasionally *paraphrases* the node name slightly
+("…Workflow" suffix, capitalization, or references a section concept that
+isn't a literal node). It's the same failure class a human editor makes when
+cross-referencing their own outline.
+
+**Severity in practice:** the app already has the **ancestor-walk fallback**
+(MVP1 feature) — a mismatched topic's click walks up the mindmap tree to the
+nearest ancestor WITH a timestamp, so navigation degrades gracefully (lands
+nearby) rather than breaking. That's why 18/23 is "degraded" not "broken."
+
+This also means the cheap fix (normalize topic↔mindmap matching in the
+renderer, or snap-to-nearest-node post-gen) addresses the ONE real gap, and
+benefits both models (glm's 23/23 today is one prompt-drift away from the
+same quirk).
+
 ## Per-video results
 
 Full machine scorecard: `/tmp/model-ab/RESULTS.md` · Raw + parsed outputs for
