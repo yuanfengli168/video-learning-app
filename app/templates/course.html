@@ -13,7 +13,16 @@
         <h1 class="text-2xl font-bold mb-2">{{ course.title }}</h1>
         <p class="text-gray-500 dark:text-gray-400">{{ course.description or 'No description' }}</p>
         {% if user_capabilities and "manage_own_course" in user_capabilities %}
-        <button onclick="showCreateSection()" class="mt-4 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ Add Section</button>
+        <div class="mt-4 flex gap-2">
+            <button onclick="showCreateSection()" class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ Add Section</button>
+            <!-- Edit course (2026-09-12): the PUT /api/courses/{id}
+                 endpoint existed but no UI called it. -->
+            <button onclick="showEditCourseModal('{{ course.id }}', '{{ course.title|e }}', '{{ (course.description or '')|e }}')"
+                    class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 text-sm rounded-lg hover:border-indigo-500 hover:text-indigo-500"
+                    title="Edit course name and description">
+                ✏️ Edit Course
+            </button>
+        </div>
         {% endif %}
     </div>
 
@@ -45,6 +54,21 @@
                     <button onclick="event.stopPropagation(); sortSection('{{ section.id }}')" id="sort-btn-{{ section.id }}" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500" title="Toggle sort direction">
                         ↑ asc
                     </button>
+                    <!-- Rename section (2026-09-12): sections were
+                         create-once with no edit path; this opens the
+                         same modal pattern as delete. Capability-gated
+                         (manage_own_course) — the API 403s too, but
+                         hiding the button for FREE users is cleaner
+                         UX than a dead control. -->
+                    {% if user_capabilities and "manage_own_course" in user_capabilities %}
+                    <button
+                        onclick="event.stopPropagation(); showRenameSectionModal('{{ section.id }}', '{{ section.title|e }}')"
+                        class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500"
+                        title="Rename this section"
+                    >
+                        ✏️
+                    </button>
+                    {% endif %}
                     <!-- Delete section button (MVP2.0, manualTodo #5
                          extension). Confirmation modal lives at the
                          bottom of this template. -->
@@ -112,6 +136,72 @@
             No sections yet. Add a section to start uploading videos.
         </div>
         {% endfor %}
+    </div>
+</div>
+
+<!-- Rename section modal (2026-09-12) — hidden by default.
+     User report: sections were create-once; the title couldn't be
+     changed. PUT /api/courses/{cid}/sections/{sid} is the backend. -->
+<div id="rename-section-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h2 class="text-lg font-semibold mb-4">✏️ Rename section</h2>
+        <input type="text" id="rename-section-input"
+               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 mb-4"
+               placeholder="Section title">
+        <div class="flex justify-end gap-2">
+            <button
+                onclick="hideRenameSectionModal()"
+                class="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="confirmRenameSection()"
+                id="rename-section-save-btn"
+                class="px-4 py-2 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg"
+            >
+                Save
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Edit course modal (2026-09-12) — hidden by default.
+     User report: course name/description couldn't be edited after
+     creation. The PUT /api/courses/{id} endpoint already existed;
+     this modal is the first UI calling it. -->
+<div id="edit-course-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h2 class="text-lg font-semibold mb-4">✏️ Edit course</h2>
+        <div class="space-y-3 mb-4">
+            <div>
+                <label class="block text-sm font-medium mb-1">Course name</label>
+                <input type="text" id="edit-course-title-input"
+                       class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+                       placeholder="Course title">
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1">Description</label>
+                <textarea id="edit-course-desc-input" rows="3"
+                          class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+                          placeholder="What is this course about?"></textarea>
+            </div>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button
+                onclick="hideEditCourseModal()"
+                class="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="confirmEditCourse()"
+                id="edit-course-save-btn"
+                class="px-4 py-2 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg"
+            >
+                Save
+            </button>
+        </div>
     </div>
 </div>
 
@@ -474,6 +564,126 @@ function hideDeleteSectionModal() {
     const modal = document.getElementById('delete-section-modal');
     if (modal) modal.classList.add('hidden');
 }
+
+// ── Rename section / edit course (2026-09-12) ─────────────────────────
+// User report: course name/description and section names were
+// create-once. Backend: PUT /api/courses/{id} (existed) +
+// PUT /api/courses/{cid}/sections/{sid} (new). Both save flows reload
+// the page on success so SSR + client state stay in sync — simplest
+// correct persistence model (same pattern the create flows use).
+let _pendingRenameSection = null;
+let _pendingEditCourse = null;
+
+function showRenameSectionModal(sectionId, currentTitle) {
+    _pendingRenameSection = { id: sectionId };
+    const input = document.getElementById('rename-section-input');
+    if (input) {
+        input.value = currentTitle;
+        // Enter key saves (input has no form, so wire it explicitly)
+        input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRenameSection(); } };
+        input.focus();
+        input.select();
+    }
+    const modal = document.getElementById('rename-section-modal');
+    if (modal) modal.classList.remove('hidden');
+}
+
+function hideRenameSectionModal() {
+    _pendingRenameSection = null;
+    const modal = document.getElementById('rename-section-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function confirmRenameSection() {
+    if (!_pendingRenameSection) return;
+    const input = document.getElementById('rename-section-input');
+    const title = input ? input.value.trim() : '';
+    if (!title) { alert('Section title cannot be empty'); return; }
+    const saveBtn = document.getElementById('rename-section-save-btn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving...'; }
+    try {
+        const resp = await fetch(
+            `/api/courses/${courseId}/sections/${_pendingRenameSection.id}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: title }),
+            }
+        );
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            alert('Rename failed: ' + (data.detail || resp.statusText));
+            return;
+        }
+        location.reload();  // SSR re-renders with the new title
+    } catch (err) {
+        alert('Rename failed: ' + err.message);
+    } finally {
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+        hideRenameSectionModal();
+    }
+}
+
+function showEditCourseModal(courseId, currentTitle, currentDesc) {
+    _pendingEditCourse = { id: courseId };
+    const titleInput = document.getElementById('edit-course-title-input');
+    const descInput = document.getElementById('edit-course-desc-input');
+    if (titleInput) titleInput.value = currentTitle;
+    if (descInput) descInput.value = currentDesc;
+    if (titleInput) {
+        titleInput.focus();
+        titleInput.select();
+        titleInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmEditCourse(); } };
+    }
+    const modal = document.getElementById('edit-course-modal');
+    if (modal) modal.classList.remove('hidden');
+}
+
+function hideEditCourseModal() {
+    _pendingEditCourse = null;
+    const modal = document.getElementById('edit-course-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function confirmEditCourse() {
+    if (!_pendingEditCourse) return;
+    const titleInput = document.getElementById('edit-course-title-input');
+    const descInput = document.getElementById('edit-course-desc-input');
+    const title = titleInput ? titleInput.value.trim() : '';
+    if (!title) { alert('Course name cannot be empty'); return; }
+    const saveBtn = document.getElementById('edit-course-save-btn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving...'; }
+    try {
+        const resp = await fetch(
+            `/api/courses/${_pendingEditCourse.id}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: title,
+                    description: descInput ? descInput.value : '',
+                }),
+            }
+        );
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            alert('Update failed: ' + (data.detail || resp.statusText));
+            return;
+        }
+        location.reload();  // SSR + breadcrumb + sidebar all refresh
+    } catch (err) {
+        alert('Update failed: ' + err.message);
+    } finally {
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+        hideEditCourseModal();
+    }
+}
+
+// Click outside the modals closes them (same UX as delete-modal).
+document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'rename-section-modal') hideRenameSectionModal();
+    if (e.target && e.target.id === 'edit-course-modal') hideEditCourseModal();
+});
 
 async function confirmDeleteSection() {
     if (!_pendingDeleteSection) return;

@@ -42,6 +42,14 @@ class SectionCreate(BaseModel):
     order_index: int = 0
 
 
+class SectionUpdate(BaseModel):
+    """2026-09-12 (user report): sections had NO rename path — created
+    once and stuck forever. Mirrors CourseUpdate's shape: all-None =
+    no-op, so callers can PATCH a single field safely."""
+    title: str | None = None
+    order_index: int | None = None
+
+
 # ── Course endpoints ──
 
 
@@ -216,6 +224,45 @@ async def delete_course(
             "chat_sessions": total_sessions,
         },
     }
+
+
+@router.put("/{course_id}/sections/{section_id}")
+async def update_section(
+    course_id: str,
+    section_id: str,
+    body: SectionUpdate,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, str]:
+    """Rename / re-order a section (2026-09-12 — user report: sections
+    were create-once, no edit path).
+
+    Same ownership rules as every other section route: the section
+    must exist under THIS course, and the requesting user must own
+    the course. All-None body = no-op (200), mirroring CourseUpdate.
+    """
+    section = db.get(Section, section_id)
+    if not section or section.course_id != course_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Section not found",
+        )
+    course = db.get(Course, course_id)
+    if not course or course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your course")
+
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(
+                status_code=400, detail="Section title cannot be empty"
+            )
+        section.title = title
+    if body.order_index is not None:
+        section.order_index = body.order_index
+    db.commit()
+
+    return {"status": "updated"}
 
 
 @router.delete("/{course_id}/sections/{section_id}")
