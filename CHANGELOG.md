@@ -3,6 +3,30 @@
 All notable changes to the Video Learning App are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0.9] - 2026-09-12 — Course management UX, Discuss tab overhaul & go-live polish (8-commit batch)
+
+✨ **Launch-week polish driven by real usage: courses + sections became editable, the Discuss tab got a ChatGPT-grade input/markdown/session overhaul, and the admin pages gained structure + provider-usage observability.** Commits `587ed58` → `2076a3f`, all on `mvp2-production-patches`.
+
+### ✨ Features
+
+- **`feat(courses)`: rename courses + sections — the missing edit path** (`587ed58`) — PAID users could create courses/sections but never edit them. New `PUT /api/courses/{cid}/sections/{sid}` (title/description, all-None = no-op) + ✏️ Edit Course and per-section rename buttons + modals on the course page. 1403 tests.
+- **`feat(budget)`: requests-used-per-provider table on `/admin/budget`** (`20735d0`) — per-provider (and per-model) LLM request counts parsed from the audit events (`LLM call succeeded via …` / `LLM call failed on …`), 7-day window, ok/failed/total per provider. Complements the Ollama quota cards with what the app actually sent where, across all tier chains.
+- **`feat(discuss)`: 4 UX fixes on the video page Discuss tab** (`2076a3f`) — (a) single-line `<input>` → auto-resizing `<textarea>` (Enter sends, Shift+Enter newline); (b) assistant messages now render markdown (headings, bold/italic, code, lists, tables, links) via a dependency-free DOM-node renderer — never innerHTML on LLM output, links validated to http(s)/root-relative, `[M:SS]` citation buttons preserved; (c) session RESUME: the tab loads the user's most recent video-scope session (`GET /api/chat/sessions?video_id=…&scope=video` filters added) instead of silently starting a new one on every page load; (d) only the Send button greys out while waiting — the textarea stays active for typing.
+- **Course-level asc/desc section sort** (`cbab93d` + `8e44720`) — ↑ asc/↓ desc button beside Edit Course sorts section cards by natural key with per-course localStorage persistence; `8e44720` fixed the default-asc not applying on first open. (History: shipped ↑/↓ arrow-button moves in `dfa4980`, reverted same day per user feedback — the full `move` endpoint was removed cleanly; drag-and-drop deferred to `Todo.md` #10.)
+- **`feat`: admin content-structure analytics** (in `dfa4980`) — "Content structure" table on `/admin/analytics`: per-course sections/videos/ready/error counts, backing data for future feature decisions (e.g. whether a course search bar is warranted).
+
+### 🐛 Bug fixes
+
+- **`fix(admin)`: sidebar nav disappearing on Budget/Events/Backups pages** (`677e95e`) — those three routes called `_ctx()` without a DB session, so `is_admin` never computed and the entire admin nav block collapsed (rendered as FREE). Now every admin page passes `db=db`; pinned by `tests/test_admin_sidebar.py` across all 6 pages.
+
+### 📚 Docs
+
+- `doc/materials-port-plan.md` — staged port plan for the materials feature from `mvp-mobile-pocket-v0.1`, executing week-2 post-launch as the trial-cohort flagship.
+
+### 🧪 Tests
+
+- Full suite **1427 passing** (+95 since 2.1.0.8): rename (9), section-ordering iteration (arrows 10 → reverted → sort 6), structure analytics (1), sidebar completeness (6), provider usage (3), Discuss UX (9) + list-endpoint filters (3).
+
 ## [2.1.0.8] - 2026-09-06/08 — YouTube embed unlock, player hardening & go-live polish
 
 🔒 **A user-reported "the YouTube player is a dead black box" turned into a 4-commit layered-fix saga (CSP → XSS → Permissions-Policy → COEP), followed by playback analytics, a transcript-follow regression fix, a login redesign, and two go-live polish items.** Commits `223b314` → `13fe6d2`, all on `mvp2-production-patches`.

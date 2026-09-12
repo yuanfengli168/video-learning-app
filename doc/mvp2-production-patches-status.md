@@ -2,15 +2,15 @@
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Goal**: Make this Mac Studio (`Yuanfengs-Mac-Studio.local`) a 24/7 production server for video-learning-app.
-> **Last updated**: 2026-09-08
+> **Last updated**: 2026-09-12
 
 ---
 
 ## 🎯 Current state
 
-- **Tests**: 1332 passing, 0 failing, 89% coverage
+- **Tests**: 1427 passing, 0 failing
 - **Branch**: ahead of `main` (pivot to admin-curated YouTube catalog)
-- **Feature status**: Day 1-9 shipped + post-Day-9 hardening/features batches (2026-09-03→06) done + YouTube-embed unlock + playback analytics + go-live polish (2026-09-06→08) done. Day 10 — security hardening — next.
+- **Feature status**: Day 1-9 shipped + post-Day-9 hardening/features batches (2026-09-03→06) + YouTube-embed unlock + playback analytics + go-live polish (2026-09-06→08) + go-live prep + course-management UX batch (2026-09-09→12, see #27) done. Launch target **2026-09-15**.
 - **Server**: gunicorn 4 workers × 2 threads (since Day 6)
 
 ---
@@ -50,6 +50,7 @@
 | 25 | **YouTube embed unlock + go-live polish (done, 2026-09-06→08)**: 4-commit layered fix for the dead YouTube player — CSP allowlist (`223b314`) → chat/materials XSS escaping (`216fcb8`) → Permissions-Policy + Referrer-Policy (`ca191fc`) → COEP exemption for `/video/{id}` (`04edaf5`); login hero redesign (`62b1568`); admin playback analytics + transcript-follow regression fix + contact CTAs (`c20ea96`); crash-proof rAF loop + mtime cache-busting (`e3dae96`); end-of-transcript scroll spacer + login loading skeleton + usage TZ week-window fix (`13fe6d2`). Full detail in `CHANGELOG.md` §[2.1.0.8]. 1332 tests. | done |
 | 26 | **Day 11-13**: Invite 10-20 friends for soft launch, bug bash + load test, polish + docs | per go-live plan |
 | 20 | **Day 14**: LAUNCH | 🎯 |
+| 27 | **Go-live prep + course-management UX batch (done, 2026-09-09→12)**: dashboard Top Viewed / Our Loves / Newest tabs (`11e5b53`); offline model A/B shadow test glm-5.2 vs minimax-m3 (`276bb37` + `8cde153`); cookie Secure flag + trial-cohort grant script (`0e7c826`); GO-LIVE-INSTALL handover refresh (`3538694`); **course/section rename** — ✏️ buttons + `PUT /api/courses/{cid}/sections/{sid}` (`587ed58`); **section ordering iteration** — ↑/↓ arrows (`dfa4980`) then reverted per user feedback into a course-level asc/desc sort button + admin content-structure analytics table (`cbab93d`, `8e44720`); **materials port plan** staged for week-2 post-launch (`doc/materials-port-plan.md`); **admin sidebar fix** — Budget/Events/Backups pages lost the admin nav (missing `db=` in `_ctx`, `677e95e`); **LLM budget per-provider usage table** (`20735d0`); **Discuss tab 4 UX fixes** — auto-resize textarea, markdown rendering (DOM-safe, no CDN), session resume across logout/switch, typing-while-waiting (`2076a3f`). 1427 tests. | done |
 
 ---
 
