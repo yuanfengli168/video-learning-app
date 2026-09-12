@@ -338,6 +338,47 @@ to share.
 
 1. **Duplicate video detection** — Appendix B in `doc/MVP2.0-first-designQuestions.md` has B1–B5. Default: sha256, per-user, auto-skip on bulk / confirm on single, different section = not a dupe, `String(64)` nullable. Affects `app/models/video.py` + `app/routers/videos.py` schema migration.
 
+---
+
+## 10. Drag-and-drop section reordering (deferred 2026-09-12)
+
+**Idea:** Grab a section card and drag it to a new position; the other
+sections slide around it and the order persists.
+
+**History:** Shipped ↑/↓ arrow-button moves on 2026-09-12
+(commit dfa4980, `POST /sections/{sid}/move` + buttons). User didn't
+like the arrows and asked for drag-and-drop instead. The whole feature
+was reverted the same day (endpoint, buttons, JS, tests) and replaced
+with a view-only course-level asc/desc sort button. Drag-and-drop is
+the real long-term replacement — written down here as future work.
+
+**Why valuable:** It's the intuitive mental model for reordering
+("grab it, put it there") and the only way to move a section more
+than one slot at a time without repeated clicks.
+
+**Rough shape (when picked up):**
+- Backend: `PUT /api/courses/{cid}/sections/order` taking a full
+  `section_ids: list[str]` — validates the set matches the course's
+  sections exactly (no adds/drops smuggled in), writes dense
+  `order_index` 0..n-1 in one transaction. This fixes the legacy
+  all-`order_index=0` rows on every save, same normalization the old
+  move endpoint did.
+- Frontend: HTML5 drag events (`draggable`, `dragover` computing the
+  insertion slot, `drop` → optimistic reorder → fetch → reload), or
+  ~an hour saved by using SortableJS as a dependency. Fallback
+  `move up/down` in a section context menu for touch devices (no
+  HTML5 DnD on mobile Safari).
+- Note `order_index` is already in `SectionUpdate` (rename endpoint)
+  but is unused by any UI — a single-section manual position setter
+  could ship independently if a lightweight stopgap is ever wanted.
+
+**Effort:** ~1–2 days including tests (backend ~2h, frontend DnD
+~4–6h, mobile fallback + tests the rest).
+
+**Depends on:** nothing; purely additive. Do it after launch when the
+trial-cohort feedback comes in — the course-level asc/desc sort
+covers the immediate need.
+
 2. **"Retry this video" button scope** — single video button on the video page (Todo #6) — should it show only when `status='error'`, or also when `status='transcribing'/'generating'/'queued'` so the user can manually restart a stuck job? Default: only on `error` (a running job is already retrying via refresh; a stuck job is a #11 issue).
 
 3. **"Retry all failed" button behavior** — when clicked, does it (a) block until all retries finish, (b) kick off as background tasks and show a toast, or (c) pop a confirm dialog with the count? Default: (b) — feels least disruptive and matches the existing bulk-upload UX.
