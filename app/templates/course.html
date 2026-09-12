@@ -63,6 +63,7 @@
     <div class="space-y-3" id="course-sections">
         {% for section in course.sections %}
         {% set failed_count = section.videos | selectattr('status', 'equalto', 'error') | list | length %}
+        {% set queued_count = section.videos | selectattr('status', 'equalto', 'queued') | list | length %}
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden"
              data-section-card
              data-sort-key="{{ section.title | natural_sort_key_str }}">
@@ -73,6 +74,17 @@
                     {% if failed_count > 0 %}
                     <button onclick="event.stopPropagation(); retryAllFailed('{{ course.id }}', '{{ section.id }}', this)" data-retry-all-btn class="text-xs px-2 py-0.5 rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:border-red-500 hover:text-red-700" title="Re-queue the LLM step for every failed video in this section">
                         ↻ Retry {{ failed_count }} failed
+                    </button>
+                    {% endif %}
+                    {# Stuck-queue recovery (2026-09-12): queued videos
+                       whose in-memory pipeline died with a server restart
+                       sit forever — this button re-queues them via the
+                       admin endpoint. Admin-gated: the endpoint checks
+                       CURATE_CATALOG; hiding for non-admins avoids a
+                       dead control. #}
+                    {% if queued_count > 0 and is_admin %}
+                    <button onclick="event.stopPropagation(); requeueStuck(this)" data-requeue-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue stuck videos (status=queued but nothing processing them — usually a server restart ate the in-memory job)">
+                        ⏳ {{ queued_count }} queued — re-queue
                     </button>
                     {% endif %}
                     <button onclick="event.stopPropagation(); sortSection('{{ section.id }}')" id="sort-btn-{{ section.id }}" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500" title="Toggle sort direction">
@@ -628,9 +640,48 @@ async function retryAllFailed(courseId, sectionId, btn) {
     }
 }
 
-// ── Delete section (MVP2.0, manualTodo #5 extension) ───────────────
-// Mirrors the video-delete pattern: show a confirmation modal that
-// lists what will be deleted, then call DELETE on the section.
+// ── Stuck-queue recovery (2026-09-12) ──────────────────────────────────
+// Videos uploaded right before a server restart can sit in
+// status='queued' forever: the transcribe→generate pipeline runs as
+// an in-memory BackgroundTask that died with the restart, but the DB
+// row still says queued (nothing errors, nothing processes). This
+// calls the admin endpoint that re-queues every stuck video app-wide
+// (not just this section — the stagger makes one batch safe). Same
+// feedback pattern as retryAllFailed.
+async function requeueStuck(btn) {
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+        btn.textContent = '⏳ Re-queueing...';
+    }
+    try {
+        const resp = await fetch('/api/admin/videos/requeue-stuck', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || `Re-queued ${data.requeued} video(s)`, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Re-queue failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                btn.textContent = originalLabel;
+            }
+        }
+    } catch (exc) {
+        showToast('Network error: ' + exc, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            btn.textContent = originalLabel;
+        }
+    }
+}
 // On success, reload the page so the section disappears from the
 // list. The 1.2s delay before reload lets the user see the toast.
 //

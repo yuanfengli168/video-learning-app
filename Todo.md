@@ -379,6 +379,44 @@ than one slot at a time without repeated clicks.
 trial-cohort feedback comes in — the course-level asc/desc sort
 covers the immediate need.
 
+---
+
+## 11. Startup auto-recovery for stuck queued videos (deferred 2026-09-12)
+
+**Idea:** On server startup, sweep `status='queued'` (and stale
+`transcribing`/`generating`) video rows and re-queue their pipelines
+automatically.
+
+**History / why:** 2026-09-12 — 8 videos from a 03:29 bulk upload sat
+in `queued` ALL DAY because uploads run their transcribe→generate
+pipeline as an **in-memory FastAPI BackgroundTask**: a server restart
+(deploys happen) kills the task, but the DB row still says queued —
+nothing errors, nothing processes, forever. Shipped same-day as the
+manual recovery: `POST /api/admin/videos/requeue-stuck` + a
+"⏳ N queued — re-queue" admin button on the course page (commit ref
+in the 2.1.0.9 CHANGELOG batch). This item is the automatic version.
+
+**Rough shape (when picked up):**
+- An app-startup hook (FastAPI lifespan or a gunicorn post-fork
+  worker task — needs care with 4 workers: ONE sweep, not four)
+  that queries `videos WHERE status IN ('queued')` older than a
+  grace period (e.g. 5 min — so we don't race genuinely queued
+  jobs), then dispatches the same re-queue helpers the admin
+  endpoint uses (`_requeue_staggered_pipeline` /
+  `_requeue_staggered_youtube` in `app/routers/admin.py`).
+- Stale `transcribing`/`generating` rows (job started, restart ate
+  it mid-run): same sweep, but check `last_*_job` JSON timestamps —
+  only requeue when the job tracker is older than the grace period.
+- The durable fix (persistent job queue in the DB consumed by a
+  worker loop) is the real endgame — that's a bigger MVP3+ item;
+  the startup sweep covers the failure mode until then.
+
+**Effort:** ~half a day including tests + the four-worker
+single-sweep guard.
+
+**Depends on:** the requeue helpers shipped 2026-09-12 (reuse).
+Trigger: first post-launch restart that eats a queue, or anytime.
+
 2. **"Retry this video" button scope** — single video button on the video page (Todo #6) — should it show only when `status='error'`, or also when `status='transcribing'/'generating'/'queued'` so the user can manually restart a stuck job? Default: only on `error` (a running job is already retrying via refresh; a stuck job is a #11 issue).
 
 3. **"Retry all failed" button behavior** — when clicked, does it (a) block until all retries finish, (b) kick off as background tasks and show a toast, or (c) pop a confirm dialog with the count? Default: (b) — feels least disruptive and matches the existing bulk-upload UX.

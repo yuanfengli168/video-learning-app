@@ -2271,7 +2271,20 @@ async function startDiscussSession() {
             // creating a new session. Better a fresh chat than a dead
             // Discuss tab.
         }
-        if (resumed) return;
+        if (resumed) {
+            // Resume path done. 2026-09-12 fix: the early return used
+            // to leave the textarea DISABLED — only the create-new
+            // path re-enabled it — so whenever the tab resumed an
+            // existing session the user couldn't type at all
+            // (user report: "sometimes the input box won't allow me
+            // to type"). Re-enable before returning; the finally
+            // block only restores the send button.
+            if (input) {
+                input.disabled = false;
+                input.focus();
+            }
+            return;
+        }
 
         const resp = await fetch('/api/chat/video-sessions', {
             method: 'POST',

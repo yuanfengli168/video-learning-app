@@ -257,6 +257,13 @@ async def get_chat_session(
         "video_id": session.video_id,
         "scope": session.scope,
         "created_at": session.created_at.isoformat() if session.created_at else None,
+        # 2026-09-12: resolve the video title for the detail header too
+        # (mirrors the list endpoint; None for flashcard/deleted).
+        "video_title": (
+            db.get(Video, session.video_id).title
+            if session.video_id and db.get(Video, session.video_id)
+            else None
+        ),
         "messages": [
             {
                 "role": msg.role,
@@ -294,6 +301,19 @@ async def list_chat_sessions(
         q.order_by(ChatSession.created_at.desc())
     ).scalars().all()
 
+    # 2026-09-12 (chat history metadata): resolve the video titles for
+    # the listed sessions in ONE query (video-scope sessions used to
+    # show a bare "Whole video" label with no way to tell WHICH video
+    # — the user couldn't find yesterday's discussion). Left-join via
+    # dict so missing/deleted videos degrade to None, not a crash.
+    video_ids = [s.video_id for s in sessions if s.video_id]
+    titles: dict[str, str] = {}
+    if video_ids:
+        rows = db.execute(
+            select(Video.id, Video.title).where(Video.id.in_(video_ids))
+        ).fetchall()
+        titles = {r[0]: r[1] for r in rows}
+
     return [
         {
             "id": s.id,
@@ -302,6 +322,9 @@ async def list_chat_sessions(
             "scope": s.scope,
             "created_at": s.created_at.isoformat() if s.created_at else None,
             "message_count": len(s.messages),
+            # Video title when resolvable (video-scope rows; deleted
+            # videos → None → the UI falls back to the old label).
+            "video_title": titles.get(s.video_id) if s.video_id else None,
         }
         for s in sessions
     ]

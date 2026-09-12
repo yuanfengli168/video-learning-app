@@ -1140,3 +1140,127 @@ async def admin_get_llm_budget(
             "admin": app_settings.get_provider_chain(0),  # UserRole.ADMIN
         },
     }
+
+
+# POST /api/admin/videos/requeue-stuck  (2026-09-12 — stuck-queue recovery)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/videos/requeue-stuck")
+async def admin_requeue_stuck_videos(
+    background_tasks: BackgroundTasks,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Re-queue videos stuck in `queued` status (2026-09-12, user report).
+
+    Root cause this fixes: uploads queue their transcribe→generate
+    pipeline as an in-memory FastAPI BackgroundTask. If the server
+    restarts (deploy, crash, Mac reboot) before the pipeline runs,
+    the task is LOST — but the Video row still says `queued`. Nothing
+    ever processes it and nothing errors, so it sits forever. Found
+    live: 8 videos from a 2026-09-12 03:29 bulk upload stuck all day
+    through several restarts.
+
+    Behavior: finds every `status='queued'` video, dispatches the
+    right pipeline per video type (file upload → Whisper auto
+    pipeline; YouTube → caption download + generate), staggered 5s
+    apart so we don't storm Whisper/yt-dlp/LLM providers. Idempotent:
+    videos already `ready`/`error` are untouched.
+
+    The long-term fix (startup auto-recovery sweep) is deferred to
+    post-launch — see Todo.md item #11. This endpoint handles both
+    the current backlog and future restart incidents on demand.
+    """
+    from app.routers.videos import _run_auto_pipeline
+    from app.services.transcription import get_default_model_choice
+    from app.services.youtube_captions_job import _run_caption_download_job
+
+    uid = user.get("uid", "")
+    role = int(user.get("role", 0) or 0)
+
+    stuck = (
+        db.execute(
+            select(Video)
+            .where(Video.status == "queued")
+            .order_by(Video.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
+
+    queued_file = 0
+    queued_youtube = 0
+    delay = 0
+    for video in stuck:
+        if video.youtube_id:
+            background_tasks.add_task(
+                _requeue_staggered_youtube,
+                video.id,
+                delay,
+                generate_user_id=uid,
+                generate_user_role=role,
+            )
+            queued_youtube += 1
+        else:
+            background_tasks.add_task(
+                _requeue_staggered_pipeline,
+                video.id,
+                delay,
+            )
+            queued_file += 1
+        delay += 5
+
+    return {
+        "requeued": len(stuck),
+        "file_uploads": queued_file,
+        "youtube_videos": queued_youtube,
+        "message": (
+            f"Re-queued {len(stuck)} stuck video(s) "
+            f"({queued_file} file, {queued_youtube} YouTube), staggered 5s "
+            f"apart. Watch them turn ready on the course page / "
+            f"/admin/analytics → Content structure."
+        ) if stuck else "No stuck videos — nothing has status 'queued'.",
+    }
+
+
+def _requeue_staggered_pipeline(video_id: str, delay_seconds: int) -> None:
+    """Sleep `delay_seconds` then run the full auto pipeline.
+
+    The stagger matters: re-queueing N stuck videos at once would
+    launch N Whisper loads + N LLM generations simultaneously —
+    enough to trip the per-user rate limiter and Ollama caps. 5s
+    between starts matches admin_generate_missing_materials.
+    """
+    import time as _time
+
+    if delay_seconds > 0:
+        _time.sleep(min(delay_seconds, 300))
+    from app.routers.videos import _run_auto_pipeline
+    from app.services.transcription import get_default_model_choice
+
+    _run_auto_pipeline(video_id, get_default_model_choice())
+
+
+def _requeue_staggered_youtube(
+    video_id: str,
+    delay_seconds: int,
+    *,
+    generate_user_id: str = "",
+    generate_user_role: int = 0,
+) -> None:
+    """Staggered YouTube caption re-queue — same delay pattern, but the
+    caption-download pipeline for youtube_id videos (transcript comes
+    from yt-dlp, then materials generate)."""
+    import time as _time
+
+    if delay_seconds > 0:
+        _time.sleep(min(delay_seconds, 300))
+    from app.services.youtube_captions_job import _run_caption_download_job
+
+    _run_caption_download_job(
+        video_id,
+        generate_materials=True,
+        generate_user_id=generate_user_id,
+        generate_user_role=generate_user_role,
+    )
