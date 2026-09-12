@@ -51,6 +51,26 @@
                         ↻ Retry {{ failed_count }} failed
                     </button>
                     {% endif %}
+                    <!-- Section ordering (2026-09-12, option A): ↑/↓
+                         swaps with the neighbor via
+                         POST /sections/{sid}/move. Hidden at the top/
+                         bottom edge (server also 400s there). -->
+                    {% if user_capabilities and "manage_own_course" in user_capabilities %}
+                    {% if not loop.first %}
+                    <button
+                        onclick="event.stopPropagation(); moveSection('{{ section.id }}', 'up')"
+                        class="text-xs px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500"
+                        title="Move this section up"
+                    >↑</button>
+                    {% endif %}
+                    {% if not loop.last %}
+                    <button
+                        onclick="event.stopPropagation(); moveSection('{{ section.id }}', 'down')"
+                        class="text-xs px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500"
+                        title="Move this section down"
+                    >↓</button>
+                    {% endif %}
+                    {% endif %}
                     <button onclick="event.stopPropagation(); sortSection('{{ section.id }}')" id="sort-btn-{{ section.id }}" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500" title="Toggle sort direction">
                         ↑ asc
                     </button>
@@ -684,6 +704,33 @@ document.addEventListener('click', function (e) {
     if (e.target && e.target.id === 'rename-section-modal') hideRenameSectionModal();
     if (e.target && e.target.id === 'edit-course-modal') hideEditCourseModal();
 });
+
+// ── Section ordering (2026-09-12, option A) ────────────────────────────
+// POST /api/courses/{cid}/sections/{sid}/move {direction} — the server
+// normalizes positions + swaps, then we reload so SSR re-renders the
+// new order (same source-of-truth model as rename/create/delete).
+async function moveSection(sectionId, direction) {
+    try {
+        const resp = await fetch(
+            `/api/courses/${courseId}/sections/${sectionId}/move`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ direction: direction }),
+            }
+        );
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            // Edge 400s are expected if the page render is stale
+            // (someone else reordered first) — a reload fixes both.
+            alert('Move failed: ' + (data.detail || resp.statusText));
+            return;
+        }
+        location.reload();
+    } catch (err) {
+        alert('Move failed: ' + err.message);
+    }
+}
 
 async function confirmDeleteSection() {
     if (!_pendingDeleteSection) return;

@@ -108,6 +108,52 @@
         {% endif %}
     </div>
 
+    {# ── Content structure (2026-09-12): courses × sections × videos ── #}
+    {# Backing data for feature decisions (e.g. "do we need a course
+       search bar?" — answer depends on course depth). #}
+    {% if stats.structure %}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">Content structure</h2>
+        <p class="text-xs text-gray-400 mb-4">Courses, their sections, and video counts — top {{ stats.structure | length }} by video count.</p>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left text-gray-700 dark:text-gray-300">
+                <thead>
+                    <tr class="border-b border-gray-200 dark:border-gray-700">
+                        <th class="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Course</th>
+                        <th class="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Sections</th>
+                        <th class="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Videos</th>
+                        <th class="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Ready</th>
+                        <th class="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Errors</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in stats.structure %}
+                    <tr class="border-b border-gray-100 dark:border-gray-700">
+                        <td class="px-3 py-2">
+                            <a href="/courses/{{ row.course_id }}" class="text-indigo-600 dark:text-indigo-400 hover:underline">{{ row.course_title }}</a>
+                        </td>
+                        <td class="px-3 py-2">{{ row.sections }}</td>
+                        <td class="px-3 py-2">{{ row.videos }}</td>
+                        <td class="px-3 py-2">
+                            {% if row.videos > 0 %}
+                            {{ row.ready }} ({{ ((row.ready / row.videos) * 100) | round(0) }}%)
+                            {% else %}–{% endif %}
+                        </td>
+                        <td class="px-3 py-2">
+                            {% if row.errors > 0 %}
+                            <span class="text-red-600 dark:text-red-400">{{ row.errors }}</span>
+                            {% else %}
+                            <span class="text-gray-400">0</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
     {# ── Daily activity mini-chart (pure CSS bars — no chart lib) ── #}
     {% if stats.daily_activity %}
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-8">

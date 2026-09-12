@@ -49,6 +49,12 @@ class SectionUpdate(BaseModel):
     title: str | None = None
     order_index: int | None = None
 
+class SectionMoveRequest(BaseModel):
+    """2026-09-12 (section ordering, option A): move a section one slot
+    up/down within its course. Direction is 'up' (earlier) or 'down'
+    (later). Neighbor semantics computed server-side so two racing
+    client PUTs can't corrupt the order."""
+    direction: str  # "up" | "down"
 
 # ── Course endpoints ──
 
@@ -263,6 +269,89 @@ async def update_section(
     db.commit()
 
     return {"status": "updated"}
+
+
+@router.post("/{course_id}/sections/{section_id}/move")
+async def move_section(
+    course_id: str,
+    section_id: str,
+    body: SectionMoveRequest,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Move a section one slot up/down (2026-09-12, option A).
+
+    All 14 pre-existing sections sit at order_index=0 (the column was
+    never set by any flow), so this endpoint FIRST normalizes: assigns
+    0..n-1 by current render order (created_at, id tie-break), then
+    swaps the moved section with its neighbor. That normalization is
+    idempotent + safe — it makes the legacy data well-ordered without
+    changing what users currently see (render order for equal
+    order_index was created_at anyway).
+
+    The neighbor computation lives server-side so two racing client
+    calls can't interleave into a corrupt order (each call re-reads
+    the fresh positions inside one transaction).
+
+    400 at the top/bottom edges (nothing to swap with) — the UI hides
+    the button instead, but a stale render shouldn't 500.
+    """
+    if body.direction not in ("up", "down"):
+        raise HTTPException(
+            status_code=400, detail="direction must be 'up' or 'down'"
+        )
+
+    course = db.get(Course, course_id)
+    if not course or course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your course")
+
+    section = db.get(Section, section_id)
+    if not section or section.course_id != course_id:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    # Load all sections in stable render order (matches course.html)
+    siblings = (
+        db.execute(
+            select(Section)
+            .where(Section.course_id == course_id)
+            .order_by(
+                Section.order_index.asc(),
+                Section.created_at.asc(),
+                Section.id.asc(),
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Normalize 0..n-1 (legacy rows may share order_index=0)
+    for i, s in enumerate(siblings):
+        s.order_index = i
+
+    idx = next(
+        (i for i, s in enumerate(siblings) if s.id == section_id), None
+    )
+    if idx is None:
+        raise HTTPException(status_code=404, detail="Section not found")
+    swap_with = idx - 1 if body.direction == "up" else idx + 1
+    if swap_with < 0 or swap_with >= len(siblings):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Section is already at the {'top' if body.direction == 'up' else 'bottom'}",
+        )
+
+    siblings[idx].order_index, siblings[swap_with].order_index = (
+        siblings[swap_with].order_index,
+        siblings[idx].order_index,
+    )
+    db.commit()
+
+    return {
+        "status": "moved",
+        "direction": body.direction,
+        "section_id": section_id,
+        "swapped_with": siblings[swap_with].id,
+    }
 
 
 @router.delete("/{course_id}/sections/{section_id}")

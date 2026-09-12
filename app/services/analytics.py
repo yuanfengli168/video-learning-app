@@ -197,8 +197,46 @@ def get_analytics_overview(db: Session, days: int = 7) -> dict[str, Any]:
     def _n(row, idx) -> int:
         return int(row[idx] or 0)
 
+    # ── Content structure (2026-09-12): sections-per-course,
+    # videos-per-section, materials-readiness. Backing data for
+    # feature decisions (e.g. 'do we need a search bar?' — the answer
+    # depends on course depth) + a day-one content overview.
+    # Excludes nothing by visibility — this is the ADMIN view; the
+    # admin sees everything.
+    structure_rows = db.execute(
+        text(
+            """
+            SELECT
+              c.id  AS course_id,
+              c.title AS course_title,
+              COUNT(DISTINCT s.id) AS section_count,
+              COUNT(v.id) AS video_count,
+              SUM(CASE WHEN v.status = 'ready' THEN 1 ELSE 0 END) AS ready_count,
+              SUM(CASE WHEN v.status = 'error' THEN 1 ELSE 0 END) AS error_count
+            FROM courses c
+            LEFT JOIN sections s ON s.course_id = c.id
+            LEFT JOIN videos v   ON v.section_id = s.id
+            GROUP BY c.id
+            ORDER BY video_count DESC
+            LIMIT 50
+            """
+        )
+    ).fetchall()
+    structure = [
+        {
+            "course_id": r[0],
+            "course_title": r[1] or "(untitled)",
+            "sections": _n(r, 2),
+            "videos": _n(r, 3),
+            "ready": _n(r, 4),
+            "errors": _n(r, 5),
+        }
+        for r in structure_rows
+    ]
+
     return {
         "window_days": days,
+        "structure": structure,
         "logins": _n(counters, 0),
         "unique_visitors": _n(counters, 3),
         "video_plays": _n(player, 0),

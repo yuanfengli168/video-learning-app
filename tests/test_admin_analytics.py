@@ -183,6 +183,88 @@ def test_analytics_days_param_clamped(admin_client: TestClient, db_session):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 6. Content structure table (2026-09-12) — courses × sections × videos
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mk_structure(db_session, *, course_title: str, section_titles: list[str],
+                  statuses: list[str]):
+    """Course + one video per given status list, spread across the
+    sections round-robin. Returns the course id."""
+    from app.models import Course, Section, Video
+
+    course = Course(title=course_title, user_id="test-user-uid",
+                    description="")
+    db_session.add(course)
+    db_session.flush()
+    sections = []
+    for st in section_titles:
+        s = Section(title=st, course_id=course.id, order_index=0)
+        db_session.add(s)
+        sections.append(s)
+    db_session.flush()
+    for i, status in enumerate(statuses):
+        v = Video(
+            title=f"{course_title} v{i}", filename=f"{i}.mp4",
+            file_path=f"/tmp/{i}.mp4", file_size=1, duration=1.0,
+            order_index=0, section_id=sections[i % len(sections)].id,
+            status=status, visibility=0, caption_languages="[]",
+        )
+        db_session.add(v)
+    db_session.commit()
+    return course.id
+
+
+def test_analytics_structure_table_renders(admin_client: TestClient, db_session):
+    """The admin analytics page shows a per-course structure row with
+    section/video/ready/error counts (backing data for future feature
+    decisions like a course search bar)."""
+    _mk_structure(
+        db_session,
+        course_title="Structure Alpha",
+        section_titles=["S1", "S2"],
+        statuses=["ready", "ready", "error", "ready"],
+    )
+    _mk_structure(
+        db_session,
+        course_title="Structure Beta",
+        section_titles=["S1"],
+        statuses=["ready"],
+    )
+    # A course with zero sections — LEFT JOIN must yield 0s, not crash.
+    from app.models import Course
+    db_session.add(Course(title="Empty Course", user_id="test-user-uid",
+                           description=""))
+    db_session.commit()
+
+    with _mock_admin():
+        resp = admin_client.get("/admin/analytics", headers=_auth_headers())
+    assert resp.status_code == 200
+    html = resp.text
+    assert "Content structure" in html
+    assert "Structure Alpha" in html
+    assert "Structure Beta" in html
+    assert "Empty Course" in html  # zero-row renders, no crash
+
+    from app.services.analytics import get_analytics_overview
+    stats = get_analytics_overview(db_session)
+    by_title = {r["course_title"]: r for r in stats["structure"]}
+    alpha = by_title["Structure Alpha"]
+    assert alpha["sections"] == 2
+    assert alpha["videos"] == 4
+    assert alpha["ready"] == 3
+    assert alpha["errors"] == 1
+    beta = by_title["Structure Beta"]
+    assert beta["sections"] == 1
+    assert beta["videos"] == 1
+    assert beta["ready"] == 1
+    empty = by_title["Empty Course"]
+    assert empty["sections"] == 0
+    assert empty["videos"] == 0
+    # Sorted by video count desc → Alpha first
+    assert stats["structure"][0]["course_title"] == "Structure Alpha"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 4. Usage monitor
 # ─────────────────────────────────────────────────────────────────────────────
 
