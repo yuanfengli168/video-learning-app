@@ -417,6 +417,15 @@ single-sweep guard.
 **Depends on:** the requeue helpers shipped 2026-09-12 (reuse).
 Trigger: first post-launch restart that eats a queue, or anytime.
 
+**STATUS UPDATE (2026-09-12 晚): 否决 — 不做自动扫描。** 用户决策：
+"有些人的 failed 可能下个月才要，等他们自己手动弄，把空位留给别人"——
+自动 sweep 替用户做决定还烧槽位/LLM 费用，与产品哲学相悖。**替代方案已
+在别处落地**：retry-stuck 的 stuck 条件扩展为 `queued >10min OR
+generating >30min`（`generating` 孤儿此前处于死区、无按钮可救——见
+doc/launch-risk-audit-2026-09-12.md "审计后决策"）。代价：重启蒸发进行
+中任务后需用户自己点 ↻（runbook 有提示）。本条保留仅作历史记录；若未来
+用户量级让"提醒用户点 ↻"变成支持负担，再重新评估。
+
 2. **"Retry this video" button scope** — single video button on the video page (Todo #6) — should it show only when `status='error'`, or also when `status='transcribing'/'generating'/'queued'` so the user can manually restart a stuck job? Default: only on `error` (a running job is already retrying via refresh; a stuck job is a #11 issue).
 
 3. **"Retry all failed" button behavior** — when clicked, does it (a) block until all retries finish, (b) kick off as background tasks and show a toast, or (c) pop a confirm dialog with the count? Default: (b) — feels least disruptive and matches the existing bulk-upload UX.
