@@ -339,10 +339,18 @@ async def course_view(
             status_code=404,
         )
 
+    # 2026-09-12 (owner stuck-retry): the grace cutoff for the
+    # "↻ Retry N stuck" button — matches the 10-minute rule in the
+    # retry-stuck endpoint so the UI and the API agree on "stuck".
+    # Naive UTC to compare against the DB's naive timestamps.
+    from datetime import datetime, timedelta, timezone as _tz
+
+    now_10m_ago = datetime.now(_tz.utc).replace(tzinfo=None) - timedelta(minutes=10)
+
     return templates.TemplateResponse(
         request,
         "course.html",
-        _ctx(request, user, db=db, course=course),
+        _ctx(request, user, db=db, course=course, now_10m_ago=now_10m_ago),
     )
 
 

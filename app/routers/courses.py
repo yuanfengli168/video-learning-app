@@ -513,3 +513,105 @@ async def retry_failed_section_videos(
         "generate_retried": len(generate_failed),
         "video_ids": retried_ids,
     }
+
+
+@router.post("/{course_id}/sections/{section_id}/retry-stuck")
+async def retry_stuck_section_videos(
+    course_id: str,
+    section_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Re-queue STUCK videos in this section for the course OWNER
+    (2026-09-12 — self-service counterpart to the admin requeue).
+
+    'Stuck' = status='queued' for >10 minutes with no live job —
+    i.e. the in-memory BackgroundTask died with a server restart and
+    nothing will ever process the row (see the same-day admin
+    endpoint /api/admin/videos/requeue-stuck for the blast-radius
+    version). The 10-minute grace window keeps the button OFF during
+    normal upload processing (a fresh bulk upload legitimately sits
+    in 'queued' for a bit — we must not double-fire pipelines at it).
+
+    Scopes to the section + ownership (same guard as retry-failed):
+    only the course owner's own stuck videos, never other users'.
+    Every stuck video re-enters the full auto-pipeline
+    (transcribe → generate), staggered 5s apart so N simultaneous
+    Whisper loads don't trip the per-user rate limiter.
+
+    The frontend gate (the amber "↻ Retry N stuck" button) renders
+    this for the section owner when stuck_count > 0; the button's
+    stuck_count uses the same 10-minute rule server-side here.
+    """
+    section = db.get(Section, section_id)
+    if not section or section.course_id != course_id:
+        raise HTTPException(status_code=404, detail="Section not found")
+
+    course = db.get(Course, course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your course")
+
+    # Stuck = queued, older than the grace window, no live job.
+    # A restart-killed pipeline never flipped transcribe_started_at,
+    # so `last_transcribe_job` still says 'queued' from upload time.
+    from datetime import datetime, timedelta, timezone as _tz
+
+    grace_cutoff = datetime.now(_tz.utc).replace(tzinfo=None) - timedelta(
+        minutes=10
+    )
+    stuck: list[Video] = []
+    for v in section.videos:
+        if v.status != "queued":
+            continue
+        created = v.created_at
+        if created is None:
+            continue
+        if created.tzinfo is not None:
+            created = created.replace(tzinfo=None)
+        if created < grace_cutoff:
+            stuck.append(v)
+
+    if not stuck:
+        return {"retried": 0, "video_ids": [], "message": "No stuck videos in this section."}
+
+    from app.jobs import start_job, serialize_job
+    from app.routers.videos import _run_transcribe_job
+
+    retried_ids: list[str] = []
+    for i, video in enumerate(stuck):
+        job = start_job(
+            video.id, "transcribe",
+            message="Re-queueing stuck processing (owner self-service)...",
+        )
+        video.last_transcribe_job = serialize_job(job)
+        video.status = "transcribing"
+        db.commit()
+        # Stagger 5s apart — same rationale as the admin endpoint: N
+        # Whisper loads at once trips rate limiters.
+        background_tasks.add_task(
+            _staggered_transcribe_job, video.id, i * 5
+        )
+        retried_ids.append(video.id)
+
+    return {
+        "retried": len(retried_ids),
+        "video_ids": retried_ids,
+        "message": (
+            f"Re-queued {len(retried_ids)} stuck video(s) — watch the "
+            f"status badges turn to transcribing/ready over the next "
+            f"few minutes."
+        ),
+    }
+
+
+def _staggered_transcribe_job(video_id: str, delay_seconds: int) -> None:
+    """Sleep `delay_seconds` then run the transcribe job (staggered
+    re-queue for owner self-service)."""
+    if delay_seconds > 0:
+        import time as _time
+
+        _time.sleep(min(delay_seconds, 300))
+    from app.routers.videos import _run_transcribe_job
+
+    _run_transcribe_job(video_id, "base")

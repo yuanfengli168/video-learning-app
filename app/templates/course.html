@@ -64,6 +64,12 @@
         {% for section in course.sections %}
         {% set failed_count = section.videos | selectattr('status', 'equalto', 'error') | list | length %}
         {% set queued_count = section.videos | selectattr('status', 'equalto', 'queued') | list | length %}
+        {# Owner self-service stuck count (2026-09-12): queued AND older
+           than 10 minutes (grace window matches the retry-stuck
+           endpoint) — inside the window it's just normal upload
+           processing, and showing a retry button there would risk
+           double-firing pipelines. #}
+        {% set stuck_count = section.videos | selectattr('status', 'equalto', 'queued') | rejectattr('created_at', 'none') | list | selectattr('created_at', 'lt', now_10m_ago) | list | length %}
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden"
              data-section-card
              data-sort-key="{{ section.title | natural_sort_key_str }}">
@@ -85,6 +91,21 @@
                     {% if queued_count > 0 and is_admin %}
                     <button onclick="event.stopPropagation(); requeueStuck(this)" data-requeue-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue stuck videos (status=queued but nothing processing them — usually a server restart ate the in-memory job)">
                         ⏳ {{ queued_count }} queued — re-queue
+                    </button>
+                    {% endif %}
+                    {# Owner self-service stuck retry (2026-09-12): same
+                       amber treatment as the admin button, but scoped to
+                       THIS section's OWN videos only (the endpoint is
+                       ownership-checked like retry-failed). Stuck =
+                       queued >10min with no job; the grace window keeps
+                       this hidden during normal bulk-upload processing.
+                       NOTE: unlike rename/edit (capability-only gating),
+                       this ALSO requires ownership — a recovery button
+                       on someone else's course that 403s on click is
+                       worse than a dead control, so we hide it outright. #}
+                    {% if stuck_count > 0 and user and course.user_id == user.get("uid", "") and user_capabilities and "manage_own_course" in user_capabilities %}
+                    <button onclick="event.stopPropagation(); retryStuckVideos('{{ course.id }}', '{{ section.id }}', this)" data-retry-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue your stuck videos in this section (queued a long time with nothing processing them — usually a server restart interrupted them)">
+                        ↻ Retry {{ stuck_count }} stuck
                     </button>
                     {% endif %}
                     <button onclick="event.stopPropagation(); sortSection('{{ section.id }}')" id="sort-btn-{{ section.id }}" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500" title="Toggle sort direction">
@@ -682,6 +703,58 @@ async function requeueStuck(btn) {
         }
     }
 }
+
+// ── Owner self-service stuck retry (2026-09-12) ─────────────────────────
+// Same visual treatment as the admin re-queue button, but scoped to
+// THIS section's own videos via the ownership-checked section
+// endpoint (mirrors retryAllFailed's shape). Shown only when the
+// section has queued videos older than the 10-minute grace window —
+// the server re-checks the same condition, so a stale render can
+// at worst get a friendly "no stuck videos" toast.
+async function retryStuckVideos(courseId, sectionId, btn) {
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+        btn.textContent = '⏳ Re-queueing...';
+    }
+    try {
+        const resp = await fetch(
+            `/api/courses/${courseId}/sections/${sectionId}/retry-stuck`,
+            { method: 'POST', headers: {'Content-Type': 'application/json'} }
+        );
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.retried === 0) {
+                showToast(data.message || 'No stuck videos in this section.', 'info');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                    btn.textContent = originalLabel;
+                }
+                return;
+            }
+            showToast(data.message || `Re-queued ${data.retried} stuck video(s)`, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Retry failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                btn.textContent = originalLabel;
+            }
+        }
+    } catch (exc) {
+        showToast('Network error: ' + exc, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            btn.textContent = originalLabel;
+        }
+    }
+}
+
 // On success, reload the page so the section disappears from the
 // list. The 1.2s delay before reload lets the user see the toast.
 //
