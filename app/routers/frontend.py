@@ -820,6 +820,7 @@ async def admin_upload_page(
 @router.get("/admin/budget", response_class=HTMLResponse)
 async def admin_budget_page(
     request: Request,
+    db: Session = Depends(get_db),
     user: dict[str, Any] | None = Depends(_admin_capability_dep),
 ) -> HTMLResponse:
     """Admin observability: LLM quota, provider chains, models.
@@ -837,6 +838,7 @@ async def admin_budget_page(
         _ctx(
             request,
             user,
+            db=db,
             ollama=ollama_usage,
             alert_pct=app_settings.ollama_quota_alert_pct,
             providers={
@@ -903,6 +905,7 @@ async def admin_events_page(
         _ctx(
             request,
             user,
+            db=db,
             events=events,
             sources=sources,
             filters={
@@ -1034,6 +1037,7 @@ async def admin_playback_page(
 @router.get("/admin/backups", response_class=HTMLResponse)
 async def admin_backups_page(
     request: Request,
+    db: Session = Depends(get_db),
     user: dict[str, Any] | None = Depends(_admin_capability_dep),
 ) -> HTMLResponse:
     """Admin dashboard: backup health snapshot."""
@@ -1058,6 +1062,7 @@ async def admin_backups_page(
         _ctx(
             request,
             user,
+            db=db,
             status=status,
             probe_never_ran=probe_never_ran,
             latest_age_minutes=latest_age_minutes,
