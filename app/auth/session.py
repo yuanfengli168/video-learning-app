@@ -16,6 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from app.auth.firebase_admin import verify_token
+from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -48,7 +49,10 @@ async def create_session(body: TokenRequest, response: Response) -> dict[str, st
         max_age=COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=False,  # True in production (HTTPS)
+        # Env-driven (2026-09-12): COOKIE_SECURE=true once HTTPS via
+        # the Cloudflare Tunnel is live. Browsers refuse Secure cookies
+        # over plain http://localhost, so default false for local dev.
+        secure=settings.cookie_secure,
     )
 
     return {

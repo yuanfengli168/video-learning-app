@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     # ── App ──
     app_name: str = "Video Learning App"
     debug: bool = True
+    # 2026-09-12 (go-live prep, public-repo-readiness.md rec #1):
+    # Set the fb_token cookie's Secure flag. TRUE in production (HTTPS
+    # via Cloudflare Tunnel); FALSE keeps local-dev http://localhost
+    # logins working (browsers refuse Secure cookies over plain http).
+    # Flip via .env at ops time — no code change needed per environment.
+    cookie_secure: bool = False
 
     # ── Database ──
     database_url: str = "sqlite:///./video_learning.db"
