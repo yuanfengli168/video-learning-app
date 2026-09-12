@@ -440,6 +440,106 @@ def test_list_sessions_includes_scope(paid_client: TestClient):
     assert video_session["concept"] == "[whole video]"
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Discuss resume (2026-09-12, user request #3): the video page's Discuss
+# tab must be able to find the user's latest video-scope session for the
+# current video so it can LOAD HISTORY instead of always starting fresh.
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_list_sessions_filters_by_video_and_scope(
+    paid_client: TestClient, db_session
+):
+    """GET /sessions?video_id=…&scope=video returns ONLY that video's
+    video-scope sessions, newest first."""
+    from datetime import datetime, timedelta
+    from sqlalchemy import text as sql_text
+
+    video_a = _setup_video(paid_client)
+    with _mock_auth():
+        first = paid_client.post(
+            "/api/chat/video-sessions",
+            json={"video_id": video_a},
+            headers=_auth_headers(),
+        ).json()["session_id"]
+        second = paid_client.post(
+            "/api/chat/video-sessions",
+            json={"video_id": video_a},
+            headers=_auth_headers(),
+        ).json()["session_id"]
+        # One flashcard-scope session on video_a — must NOT match
+        paid_client.post(
+            "/api/chat/sessions",
+            json={"video_id": video_a, "concept": "RAG"},
+            headers=_auth_headers(),
+        )
+
+    # Stagger created_at: SQLite stores second-precision timestamps,
+    # so same-test-second inserts tie and the DESC ordering is
+    # nondeterministic. Explicitly make `first` older (mirrors
+    # production where sessions are minutes+ apart).
+    base = datetime(2026, 9, 12, 12, 0, 0)
+    db_session.execute(
+        sql_text("UPDATE chat_sessions SET created_at = :t WHERE id = :id"),
+        {"t": base.isoformat(), "id": first},
+    )
+    db_session.execute(
+        sql_text("UPDATE chat_sessions SET created_at = :t WHERE id = :id"),
+        {"t": (base + timedelta(minutes=1)).isoformat(), "id": second},
+    )
+    db_session.commit()
+
+    with _mock_auth():
+        response = paid_client.get(
+            f"/api/chat/sessions?video_id={video_a}&scope=video",
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    sessions = response.json()
+    assert len(sessions) == 2, "only video-scope sessions on this video"
+    assert all(s["scope"] == "video" for s in sessions)
+    assert all(s["video_id"] == video_a for s in sessions)
+    # newest first — the resume flow picks sessions[0]
+    assert sessions[0]["id"] == second
+
+
+def test_list_sessions_filter_other_videos_excluded(paid_client: TestClient):
+    """Sessions on a DIFFERENT video must not leak into the filtered list."""
+    video_a = _setup_video(paid_client)
+    video_b = _setup_video(paid_client)
+    with _mock_auth():
+        paid_client.post(
+            "/api/chat/video-sessions",
+            json={"video_id": video_a},
+            headers=_auth_headers(),
+        )
+        paid_client.post(
+            "/api/chat/video-sessions",
+            json={"video_id": video_b},
+            headers=_auth_headers(),
+        )
+        response = paid_client.get(
+            f"/api/chat/sessions?video_id={video_b}&scope=video",
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    sessions = response.json()
+    assert len(sessions) == 1
+    assert sessions[0]["video_id"] == video_b
+
+
+def test_list_sessions_filter_empty(paid_client: TestClient):
+    """No matching sessions → empty list (client falls back to creating
+    a new session), NOT 404 — the resume flow treats [] as 'no history'."""
+    video_id = _setup_video(paid_client)
+    with _mock_auth():
+        response = paid_client.get(
+            f"/api/chat/sessions?video_id={video_id}&scope=video",
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
 def test_get_video_session_includes_scope(paid_client: TestClient):
     """GET /sessions/{id} should also return scope."""
     video_id = _setup_video(paid_client)

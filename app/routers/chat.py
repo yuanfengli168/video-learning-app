@@ -272,12 +272,26 @@ async def get_chat_session(
 async def list_chat_sessions(
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user),
+    video_id: str | None = None,
+    scope: str | None = None,
 ) -> list[dict[str, Any]]:
-    """List all chat sessions for the current user."""
+    """List chat sessions for the current user.
+
+    2026-09-12 (Discuss resume): optional video_id + scope filters.
+    The video page's Discuss tab calls
+    GET /sessions?video_id=…&scope=video to find the user's most
+    recent session for THAT video so it can resume it (load history
+    + continue) instead of silently starting a new one on every page
+    load. No filters = all sessions (the chat-history page's
+    existing behavior, unchanged).
+    """
+    q = select(ChatSession).where(ChatSession.user_id == user.get("uid", ""))
+    if video_id is not None:
+        q = q.where(ChatSession.video_id == video_id)
+    if scope is not None:
+        q = q.where(ChatSession.scope == scope)
     sessions = db.execute(
-        select(ChatSession)
-        .where(ChatSession.user_id == user.get("uid", ""))
-        .order_by(ChatSession.created_at.desc())
+        q.order_by(ChatSession.created_at.desc())
     ).scalars().all()
 
     return [

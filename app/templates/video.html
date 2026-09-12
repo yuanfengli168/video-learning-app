@@ -351,24 +351,25 @@
                         </p>
                     </div>
                     <div class="border-t border-gray-200 dark:border-gray-700 pt-3">
-                        <div class="flex gap-2">
-                            <input
+                        <div class="flex gap-2 items-end">
+                            <textarea
                                 id="discuss-input"
-                                type="text"
+                                rows="1"
                                 placeholder="Ask about the video…"
-                                class="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                class="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none overflow-y-auto max-h-36 disabled:opacity-50"
                                 onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); sendDiscussMessage(); }"
-                            />
+                                oninput="autoResizeDiscussInput(this)"
+                            ></textarea>
                             <button
                                 id="discuss-send-btn"
                                 onclick="sendDiscussMessage()"
-                                class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium"
+                                class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed disabled:text-gray-500 dark:disabled:text-gray-400"
                             >
                                 Send
                             </button>
                         </div>
                         <p class="text-xs text-gray-400 mt-2">
-                            Sessions are saved in <a href="/chat-history" class="text-indigo-500 hover:underline">Chat History</a> with a "Video" badge.
+                            Sessions are saved in <a href="/chat-history" class="text-indigo-500 hover:underline">Chat History</a> with a "Video" badge. Enter to send · Shift+Enter for a new line.
                         </p>
                     </div>
                 </div>
@@ -2230,6 +2231,48 @@ async function startDiscussSession() {
         if (sendBtn) sendBtn.disabled = true;
         if (input) input.disabled = true;
         const token = await getAuthToken();
+
+        // 2026-09-12 (user request #3): RESUME the user's latest video
+        // session instead of always creating a new one. Previously
+        // every page load (logout/login, visiting another video and
+        // back, even a plain refresh) started a fresh session — the
+        // user's old discussion vanished from the tab. Now:
+        //   1. GET /api/chat/sessions?video_id=…&scope=video returns
+        //      the user's existing sessions for THIS video (new query
+        //      params on the existing endpoint — no new route).
+        //   2. If one exists, load its messages and continue there.
+        //   3. Only if none exists do we POST a new session.
+        let resumed = false;
+        try {
+            const listResp = await fetch(
+                `/api/chat/sessions?video_id=${encodeURIComponent(videoId)}&scope=video`,
+                {headers: {'Authorization': 'Bearer ' + token}},
+            );
+            if (listResp.ok) {
+                const sessions = await listResp.json();
+                // List is created_at DESC (list_chat_sessions) — the
+                // first entry is the most recent.
+                const existing = Array.isArray(sessions) && sessions[0];
+                if (existing && existing.id) {
+                    const detailResp = await fetch(
+                        `/api/chat/sessions/${existing.id}`,
+                        {headers: {'Authorization': 'Bearer ' + token}},
+                    );
+                    if (detailResp.ok) {
+                        const detail = await detailResp.json();
+                        discussSessionId = existing.id;
+                        renderDiscussHistory(detail.messages || []);
+                        resumed = true;
+                    }
+                }
+            }
+        } catch (e) {
+            // Resume failed (network hiccup, 500...) — fall through to
+            // creating a new session. Better a fresh chat than a dead
+            // Discuss tab.
+        }
+        if (resumed) return;
+
         const resp = await fetch('/api/chat/video-sessions', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
@@ -2269,6 +2312,26 @@ async function startDiscussSession() {
     }
 }
 
+// Render loaded history messages (resume path) through the same
+// markdown + citation renderer live messages use.
+function renderDiscussHistory(messages) {
+    const messagesDiv = document.getElementById('discuss-messages');
+    if (!messagesDiv) return;
+    if (!messages || messages.length === 0) {
+        messagesDiv.innerHTML = `
+            <div class="bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-lg p-3 text-sm text-indigo-700 dark:text-indigo-300">
+                💡 I can see the full transcript, summary, mindmap, and quiz. Ask me anything about this video.
+            </div>
+        `;
+        return;
+    }
+    messagesDiv.innerHTML = '';
+    for (const m of messages) {
+        appendDiscussMessage(m.role, m.content, null);
+    }
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
 function appendDiscussMessage(role, content, citations) {
     // MVP3.0 Part B (manualTodo [jul14] #6): when the AI message comes
     // with a list of citation markers, render the message text with
@@ -2276,6 +2339,11 @@ function appendDiscussMessage(role, content, citations) {
     // to that time. The bubble's text is built as DOM nodes (text +
     // <button> elements) — never via innerHTML on the AI's response —
     // so this stays XSS-safe even if the LLM emits something weird.
+    //
+    // 2026-09-12 (user request #2): assistant messages now render as
+    // MARKDOWN (the LLM emits headings / **bold** / lists / tables —
+    // previously users saw raw "## **" markers). The renderer is
+    // still DOM-node-based: we never innerHTML the LLM's raw output.
     //
     // Args:
     //   role: 'user' or 'assistant'
@@ -2292,22 +2360,259 @@ function appendDiscussMessage(role, content, citations) {
     wrapper.className = isUser ? 'flex justify-end' : 'flex justify-start';
     const bubble = document.createElement('div');
     bubble.className = isUser
-        ? 'bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[80%] text-sm whitespace-pre-wrap break-words'
-        : 'bg-gray-100 dark:bg-gray-700 rounded-lg px-3 py-2 max-w-[80%] text-sm whitespace-pre-wrap break-words';
-    renderDiscussTextWithCitations(bubble, content, citations);
+        ? 'bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[85%] text-sm whitespace-pre-wrap break-words'
+        : 'bg-gray-100 dark:bg-gray-700 rounded-lg px-3 py-2 max-w-[85%] text-sm break-words discuss-markdown';
+    if (isUser) {
+        bubble.textContent = content;
+    } else {
+        renderDiscussMarkdown(bubble, content, citations);
+    }
     wrapper.appendChild(bubble);
     messagesDiv.appendChild(wrapper);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-// Render `text` into `bubble`, converting every citation marker
-// (from `citations` or detected client-side) into a clickable button
-// that seeks the video to that time. Always uses textContent for
-// non-citation runs to avoid XSS.
+// ── Markdown rendering for Discuss bubbles (2026-09-12, user req #2) ──
+//
+// A tiny, dependency-free subset renderer — enough for what the LLM
+// actually emits: ## headings, **bold**, *italic*, `code`,
+// fenced ``` blocks, - lists, 1. lists, tables, links [t](url).
+// Deliberately NOT innerHTML-ing raw markdown-to-HTML (no marked.js
+// CDN dependency — the app should work offline for the trial cohort,
+// and tailwind/markmap CDNs already hurt enough on that front).
+//
+// Security model (unchanged from the citation renderer): every piece
+// of LLM text goes in via textContent / createTextNode. Element
+// names + class strings are static literals. The ONLY element built
+// from response data is <a href> — and the href is validated to
+// http(s):// or / (no javascript: URIs, no data: URIs).
+
+function _mdInline(parent, text) {
+    // Inline pass: **bold**, *italic*, `code`, [label](url).
+    // Walk with a combined regex so tokens can't overlap weirdly.
+    const re = /(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\))/;
+    let rest = text;
+    let guard = 0;
+    while (rest && guard++ < 500) {
+        const m = rest.match(re);
+        if (!m || m.index === undefined) { parent.appendChild(document.createTextNode(rest)); return; }
+        if (m.index > 0) parent.appendChild(document.createTextNode(rest.slice(0, m.index)));
+        const tok = m[0];
+        if (tok.startsWith('**')) {
+            const b = document.createElement('strong');
+            b.textContent = tok.slice(2, -2);
+            parent.appendChild(b);
+        } else if (tok.startsWith('*')) {
+            const em = document.createElement('em');
+            em.textContent = tok.slice(1, -1);
+            parent.appendChild(em);
+        } else if (tok.startsWith('`')) {
+            const code = document.createElement('code');
+            code.className = 'px-1 py-0.5 rounded bg-gray-200 dark:bg-gray-900 text-[13px] font-mono';
+            code.textContent = tok.slice(1, -1);
+            parent.appendChild(code);
+        } else {
+            // [label](url) — build a SAFE link: http(s) or root-relative
+            // only; anything else renders as literal text.
+            const lm = tok.match(/^\[([^\]]+)\]\(([^)\s]+)\)$/);
+            if (lm) {
+                const url = lm[2];
+                if (/^(https?:\/\/|\/)/i.test(url)) {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.textContent = lm[1];
+                    a.className = 'text-indigo-600 dark:text-indigo-300 underline';
+                    if (url.startsWith('http')) a.target = '_blank', a.rel = 'noopener noreferrer';
+                    parent.appendChild(a);
+                } else {
+                    parent.appendChild(document.createTextNode(tok));
+                }
+            } else {
+                parent.appendChild(document.createTextNode(tok));
+            }
+        }
+        rest = rest.slice(m.index + tok.length);
+    }
+    if (rest) parent.appendChild(document.createTextNode(rest));
+}
+
+function renderDiscussMarkdown(bubble, text, citations) {
+    if (!text) return;
+    // 1) Extract [M:SS] / [H:MM:SS] citation markers FIRST (same
+    //    logic as the old renderer) and blank them out of the text so
+    //    the markdown passes don't mangle them; we re-insert them as
+    //    seek buttons at their positions afterwards.
+    let markers = (citations || []).map(c => ({
+        start: c.offset, end: c.offset + c.display.length,
+        display: c.display, seconds: c.start_seconds,
+    }));
+    if (markers.length === 0) {
+        const re = /\[(\d{1,3}):(\d{2}):(\d{2}(?:\.\d+)?)\]|\[(\d{1,2}):(\d{1,2}(?:\.\d+)?)\]/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            let hours = 0, mm = 0, ss = 0;
+            if (m[1] !== undefined) {
+                hours = parseInt(m[1], 10); mm = parseInt(m[2], 10); ss = parseFloat(m[3]);
+            } else {
+                mm = parseInt(m[4], 10); ss = parseFloat(m[5]);
+            }
+            markers.push({
+                start: m.index, end: m.index + m[0].length,
+                display: m[0], seconds: hours * 3600 + mm * 60 + ss,
+            });
+        }
+    }
+    markers.sort((a, b) => a.start - b.start);
+
+    // Split the text into citation segments: marker buttons are
+    // appended between markdown-rendered segments. To keep offsets
+    // stable we only split on markers that appear OUTSIDE code spans
+    // (markers inside code stay literal — rare, acceptable).
+    const segments = [];   // {type:'text', text} | {type:'marker', marker}
+    let cursor = 0;
+    for (const mk of markers) {
+        if (mk.start > cursor) segments.push({type: 'text', text: text.slice(cursor, mk.start)});
+        segments.push({type: 'marker', marker: mk});
+        cursor = mk.end;
+    }
+    if (cursor < text.length) segments.push({type: 'text', text: text.slice(cursor)});
+
+    for (const seg of segments) {
+        if (seg.type === 'marker') {
+            _appendCitationButton(bubble, seg.marker);
+        } else {
+            _renderMarkdownBlock(bubble, seg.text);
+        }
+    }
+}
+
+function _appendCitationButton(parent, mk) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'inline-flex items-center px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-200 font-mono text-xs hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors align-baseline mx-0.5';
+    btn.textContent = mk.display;
+    btn.title = `Jump to ${mk.display} in the video`;
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        seekTo(mk.seconds);
+        if (typeof highlightTranscriptRange === 'function') {
+            highlightTranscriptRange(mk.seconds, mk.seconds + 5);
+        }
+    });
+    parent.appendChild(btn);
+}
+
+function _renderMarkdownBlock(bubble, text) {
+    // Block pass: fenced code, headings, lists, tables, paragraphs.
+    // Blank-line separated. Line-based state machine.
+    const lines = text.split('\n');
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+        // Fenced code block
+        if (/^```/.test(line.trim())) {
+            const codeEl = document.createElement('pre');
+            codeEl.className = 'my-1 p-2 rounded bg-gray-200 dark:bg-gray-900 overflow-x-auto text-[13px] leading-relaxed';
+            const code = document.createElement('code');
+            codeEl.appendChild(code);
+            i++;
+            while (i < lines.length && !/^```/.test(lines[i].trim())) {
+                code.appendChild(document.createTextNode(lines[i] + '\n'));
+                i++;
+            }
+            i++; // skip closing fence
+            bubble.appendChild(codeEl);
+            continue;
+        }
+        // Heading (## / ### — ### shrinks a step; ####+ small)
+        const h = line.match(/^(#{1,4})\s+(.*)$/);
+        if (h) {
+            const level = Math.min(3, h[1].length) + 2; // ##→h3, ###→h4 (bounded)
+            const el = document.createElement('h' + level);
+            el.className = 'font-semibold mt-2 mb-1 ' + (level <= 3 ? 'text-base' : 'text-sm');
+            _mdInline(el, h[2]);
+            bubble.appendChild(el);
+            i++;
+            continue;
+        }
+        // Table: a header row followed by a |---|---| separator
+        if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length &&
+            /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+            const table = document.createElement('table');
+            table.className = 'my-1 w-full text-xs border-collapse';
+            const parseRow = (rowText) => rowText.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+            const thead = document.createElement('thead');
+            const hr = document.createElement('tr');
+            for (const cell of parseRow(lines[i])) {
+                const th = document.createElement('th');
+                th.className = 'border border-gray-300 dark:border-gray-600 px-2 py-1 text-left';
+                _mdInline(th, cell);
+                hr.appendChild(th);
+            }
+            thead.appendChild(hr);
+            table.appendChild(thead);
+            i += 2; // skip header + separator
+            const tbody = document.createElement('tbody');
+            while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+                const tr = document.createElement('tr');
+                for (const cell of parseRow(lines[i])) {
+                    const td = document.createElement('td');
+                    td.className = 'border border-gray-300 dark:border-gray-600 px-2 py-1';
+                    _mdInline(td, cell);
+                    tr.appendChild(td);
+                }
+                tbody.appendChild(tr);
+                i++;
+            }
+            table.appendChild(tbody);
+            const wrap = document.createElement('div');
+            wrap.className = 'overflow-x-auto';
+            wrap.appendChild(table);
+            bubble.appendChild(wrap);
+            continue;
+        }
+        // Unordered list
+        if (/^\s*[-*]\s+/.test(line)) {
+            const ul = document.createElement('ul');
+            ul.className = 'list-disc pl-5 my-1 space-y-0.5';
+            while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+                const li = document.createElement('li');
+                _mdInline(li, lines[i].replace(/^\s*[-*]\s+/, ''));
+                ul.appendChild(li);
+                i++;
+            }
+            bubble.appendChild(ul);
+            continue;
+        }
+        // Ordered list
+        if (/^\s*\d+\.\s+/.test(line)) {
+            const ol = document.createElement('ol');
+            ol.className = 'list-decimal pl-5 my-1 space-y-0.5';
+            while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+                const li = document.createElement('li');
+                _mdInline(li, lines[i].replace(/^\s*\d+\.\s+/, ''));
+                ol.appendChild(li);
+                i++;
+            }
+            bubble.appendChild(ol);
+            continue;
+        }
+        // Blank line — collapse (paragraph separation handled by mt)
+        if (!line.trim()) { i++; continue; }
+        // Paragraph — consecutive non-blank, non-structural lines
+        const p = document.createElement('p');
+        p.className = 'my-1 leading-relaxed';
+        _mdInline(p, line);
+        bubble.appendChild(p);
+        i++;
+    }
+}
+
+// Keep the legacy single-text renderer for any other call sites that
+// want plain text + citations without markdown structure.
 function renderDiscussTextWithCitations(bubble, text, citations) {
     if (!text) return;
-    // Build a sorted list of citation offsets, preferring the backend's
-    // structured list. Fall back to client-side regex detection.
     let markers = (citations || []).map(c => ({
         start: c.offset,
         end: c.offset + c.display.length,
@@ -2315,9 +2620,6 @@ function renderDiscussTextWithCitations(bubble, text, citations) {
         seconds: c.start_seconds,
     }));
     if (markers.length === 0) {
-        // Client-side fallback — keep in sync with the backend regex
-        // in app/services/chat.py:parse_citations(). Two patterns:
-        // [H:MM:SS] (longer, matched first) and [M:SS].
         const re = /\[(\d{1,3}):(\d{2}):(\d{2}(?:\.\d+)?)\]|\[(\d{1,2}):(\d{1,2}(?:\.\d+)?)\]/g;
         let m;
         while ((m = re.exec(text)) !== null) {
@@ -2339,33 +2641,12 @@ function renderDiscussTextWithCitations(bubble, text, citations) {
         }
         markers.sort((a, b) => a.start - b.start);
     }
-    // Splice text + citation buttons into the bubble.
     let cursor = 0;
     for (const mk of markers) {
         if (mk.start > cursor) {
             bubble.appendChild(document.createTextNode(text.slice(cursor, mk.start)));
         }
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'inline-flex items-center px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-200 font-mono text-xs hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors align-baseline mx-0.5';
-        btn.textContent = mk.display;
-        btn.title = `Jump to ${mk.display} in the video`;
-        btn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            seekTo(mk.seconds);
-            // Highlight the matching transcript lines (with a small
-            // window so the user sees a few seconds of context). The
-            // helper exists from the mindmap-jump feature; reuse it
-            // so the visual treatment is consistent across the app.
-            if (typeof highlightTranscriptRange === 'function') {
-                highlightTranscriptRange(mk.seconds, mk.seconds + 5);
-            }
-            // Switch to the transcript tab? No — keep the user on Discuss
-            // so they can keep reading. They can see the video seek in
-            // the player above.
-        });
-        bubble.appendChild(btn);
+        _appendCitationButton(bubble, mk);
         cursor = mk.end;
     }
     if (cursor < text.length) {
@@ -2395,6 +2676,16 @@ function removeDiscussTyping() {
     if (el) el.remove();
 }
 
+// Auto-resize the Discuss textarea as the user types (2026-09-12,
+// user request #1): grows from 1 row up to ~6 rows (max-h-36 on the
+// element clips beyond that and it scrolls internally), then snaps
+// back to 1 row when the text is cleared (e.g. after sending).
+function autoResizeDiscussInput(el) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 144) + 'px';
+}
+
 async function sendDiscussMessage() {
     const input = document.getElementById('discuss-input');
     const sendBtn = document.getElementById('discuss-send-btn');
@@ -2409,9 +2700,14 @@ async function sendDiscussMessage() {
     // Render the user's message immediately
     appendDiscussMessage('user', content);
     input.value = '';
-    // Disable input + button while waiting for the AI
+    autoResizeDiscussInput(input);
+    // 2026-09-12 (user request #4): only the SEND button is disabled
+    // while waiting — the input stays active so the user can keep
+    // typing their next question. The button greys out via its
+    // disabled: classes; a queued message is NOT auto-sent — the user
+    // clicks Send again when it re-enables (same mental model as
+    // ChatGPT's stop-to-edit, minus the queueing complexity).
     if (sendBtn) sendBtn.disabled = true;
-    if (input) input.disabled = true;
     const typing = appendDiscussTyping();
     try {
         const token = await getAuthToken();
@@ -2439,7 +2735,6 @@ async function sendDiscussMessage() {
         appendDiscussMessage('assistant', `❌ ${e.message}`);
     } finally {
         if (sendBtn) sendBtn.disabled = false;
-        if (input) input.disabled = false;
         if (input) input.focus();
     }
 }

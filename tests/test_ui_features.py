@@ -1136,11 +1136,16 @@ def test_video_page_has_citation_renderer_for_discuss(paid_client: TestClient):
     assert "function renderDiscussTextWithCitations" in response.text
     # We pass the backend's citations list through to the renderer
     assert "data.citations" in response.text
+    # 2026-09-12: assistant bubbles now render via the markdown
+    # renderer (renderDiscussMarkdown), which ALSO carries the
+    # client-side citation fallback; the legacy plain renderer is
+    # retained for non-markdown call sites.
+    assert "function renderDiscussMarkdown" in response.text
     # The fallback regex must be present. We assert on distinctive
     # comments/strings from the renderer source rather than the regex
     # pattern itself (the regex is built with \\d{1,2}, not literal
     # digits, so substring matching against it is fragile).
-    assert "Client-side fallback" in response.text
+    assert "citation markers FIRST" in response.text
     assert "M:SS" in response.text  # comment naming the format
     assert "H:MM:SS" in response.text  # comment naming the long form
     assert "parseFloat" in response.text  # fractional-seconds handling
