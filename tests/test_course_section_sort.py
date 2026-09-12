@@ -124,6 +124,10 @@ def test_sort_js_present_with_persistence(paid_client: TestClient, db_session):
     assert "function sortCourseSections()" in html
     assert "function applyStoredCourseSortOnLoad()" in html
     assert "courseSectionSort:" in html, "per-course localStorage prefix"
+    # On-load application must be UNCONDITIONAL (the asc default sorts
+    # too) — regression pin for the first-open bug where the page
+    # rendered DB order while the button already said "↑ asc".
+    assert "_sortCourseSectionCards(getStoredCourseSort(courseId))" in html
 
 
 # ── Arrow-button revert regression ───────────────────────────────────────

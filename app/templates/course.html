@@ -432,13 +432,13 @@ function sortCourseSections() {
 }
 
 function applyStoredCourseSortOnLoad() {
-    const dir = getStoredCourseSort(courseId);
-    if (dir === 'desc') {
-        _sortCourseSectionCards('desc');
-    } else {
-        const btn = document.getElementById('course-sort-btn');
-        if (btn) btn.textContent = '↑ asc';
-    }
+    // ALWAYS apply the stored direction — including the default asc.
+    // Previously only 'desc' sorted on load; first open rendered DB
+    // order (created_at) while the button already said "↑ asc" — the
+    // label lied (user report 2026-09-12). Sorting both directions
+    // keeps the view and the label truthful. _sortCourseSectionCards
+    // is a no-op below 2 cards and sets the label itself.
+    _sortCourseSectionCards(getStoredCourseSort(courseId));
 }
 // Register after applyStoredSortOnLoad's own wiring so both run on
 // DOM ready (order between them doesn't matter — different DOM
