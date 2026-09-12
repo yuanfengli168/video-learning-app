@@ -362,6 +362,91 @@ def get_all_users_usage(db: Session) -> list[dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# LLM provider usage (2026-09-12)
+#
+# Powers the "requests used per provider" table on /admin/budget.
+# Counts the _audit() rows that llm_providers.py writes:
+#   "LLM call succeeded via {provider}/{model}"  (INFO)
+#   "LLM call failed on {provider}/{model}"       (WARNING)
+# Both live under source='services.llm_providers'. The provider/model
+# names are embedded in the message text, so we parse them out with
+# SQLite string functions — two grouped queries (ok + failed), then a
+# Python-side merge into one row per (provider, model).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def get_llm_provider_usage(db: Session, days: int = 7) -> list[dict[str, Any]]:
+    """Per-provider (and per-model) LLM request counts for the last `days` days.
+
+    Returns rows shaped:
+      {
+        "provider": "groq",
+        "model": "groq/compound-mini",
+        "ok": 12,        # successful completions
+        "failed": 2,     # exceptions (chain fell through to the next)
+        "total": 14,
+      }
+    Ordered by total desc. Only providers actually used appear —
+    unused ones don't (that's the point of the page: see what's
+    actually being consumed).
+    """
+
+    def _split(direction_sql: str, like: str) -> dict[tuple[str, str], int]:
+        return {
+            (r[0], r[1]): int(r[2])
+            for r in db.execute(
+                text(
+                    f"""
+                    SELECT
+                      {direction_sql},
+                      COUNT(*) AS n
+                    FROM events
+                    WHERE source = 'services.llm_providers'
+                      AND message LIKE '{like}'
+                      AND ts >= datetime('now', :days_cutoff)
+                    GROUP BY 1, 2
+                    """
+                ),
+                {"days_cutoff": f"-{days} days"},
+            ).fetchall()
+        }
+
+    # "LLM call succeeded via groq/groq/compound-mini" — the provider
+    # is chars up to the first '/', the model is the remainder.
+    # NOTE: 24 is right AFTER the space following 'via' (the literal
+    # prefix "LLM call succeeded via " is 23 chars).
+    ok_map = _split(
+        "substr(message, 24, instr(substr(message, 24) || '/', '/') - 1),\n"
+        "substr(substr(message, 24), instr(substr(message, 24) || '/', '/') + 1)",
+        "LLM call succeeded via %",
+    )
+    # "LLM call failed on groq/groq/compound-mini" — same split, but
+    # the prefix "LLM call failed on " is 19 chars, provider at 20.
+    failed_map = _split(
+        "substr(message, 20, instr(substr(message, 20) || '/', '/') - 1),\n"
+        "substr(substr(message, 20), instr(substr(message, 20) || '/', '/') + 1)",
+        "LLM call failed on %",
+    )
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for (provider, model), ok in ok_map.items():
+        merged[(provider, model)] = {
+            "provider": provider, "model": model, "ok": ok, "failed": 0,
+        }
+    for (provider, model), failed in failed_map.items():
+        if (provider, model) in merged:
+            merged[(provider, model)]["failed"] = failed
+        else:
+            merged[(provider, model)] = {
+                "provider": provider, "model": model, "ok": 0,
+                "failed": failed,
+            }
+    for entry in merged.values():
+        entry["total"] = entry["ok"] + entry["failed"]
+    return sorted(merged.values(), key=lambda e: -e["total"])
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Playback analytics (2026-09-06)
 #
 # Powers /admin/playback — answers "who played which video, for how long".

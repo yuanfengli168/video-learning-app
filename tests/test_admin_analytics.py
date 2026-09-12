@@ -288,6 +288,76 @@ def test_usage_monitor_lists_users_with_counts(admin_client: TestClient, db_sess
     # The admin (test-user-uid, role=0 per admin_client fixture) shows
     # the ADMIN badge copy and the numeric limits
     assert "admin@example.com" in resp.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. LLM provider usage table on /admin/budget (2026-09-12)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_get_llm_provider_usage_parses_messages(db_session):
+    """get_llm_provider_usage splits provider/model out of the audit
+    messages and merges ok + failed counts per (provider, model)."""
+    from app.services.analytics import get_llm_provider_usage
+
+    for _ in range(3):
+        _seed_event(db_session, source="services.llm_providers",
+                    message="LLM call succeeded via ollama/glm-5.2:cloud")
+    for _ in range(2):
+        _seed_event(db_session, source="services.llm_providers",
+                    message="LLM call succeeded via groq/groq/compound-mini")
+    _seed_event(db_session, source="services.llm_providers",
+                message="LLM call failed on ollama/glm-5.2:cloud")
+    # Noise that must NOT be counted
+    _seed_event(db_session, source="services.llm_providers",
+                message="Ollama near cap, skipping in chain")
+    _seed_event(db_session, source="ui.login",
+                message="LLM call succeeded via openai/gpt-4o-mini")
+    db_session.commit()
+
+    rows = get_llm_provider_usage(db_session, days=7)
+    by_provider = {r["provider"]: r for r in rows}
+    assert len(rows) == 2, "only ollama + groq rows should appear"
+    o = by_provider["ollama"]
+    assert o["model"] == "glm-5.2:cloud"
+    assert o["ok"] == 3
+    assert o["failed"] == 1
+    assert o["total"] == 4
+    g = by_provider["groq"]
+    assert g["model"] == "groq/compound-mini"
+    assert g["ok"] == 2
+    assert g["failed"] == 0
+    # Sorted by total desc → ollama (4) before groq (2)
+    assert rows[0]["provider"] == "ollama"
+
+
+def test_budget_page_renders_provider_usage(admin_client: TestClient, db_session):
+    """/admin/budget shows the per-provider request table with ok/failed
+    counts from the audit log."""
+    for _ in range(2):
+        _seed_event(db_session, source="services.llm_providers",
+                    message="LLM call succeeded via ollama/glm-5.2:cloud")
+    _seed_event(db_session, source="services.llm_providers",
+                message="LLM call failed on ollama/glm-5.2:cloud")
+    db_session.commit()
+
+    with _mock_admin():
+        resp = admin_client.get("/admin/budget", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    html = resp.text
+    assert "Requests used per provider" in html
+    assert "glm-5.2:cloud" in html
+    # The ok/failed numbers render (2 succeeded, 1 failed)
+    assert ">2</td>" in html
+    assert ">1</td>" in html
+
+
+def test_budget_page_empty_usage_hint(admin_client: TestClient, db_session):
+    """No LLM events in window → friendly empty state, not a crash."""
+    with _mock_admin():
+        resp = admin_client.get("/admin/budget", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert "No LLM calls recorded" in resp.text
     assert "50" in resp.text and "100" in resp.text
 
 

@@ -830,8 +830,10 @@ async def admin_budget_page(
     """
     from app.services.llm_quota import ollama_quota
     from app.config import settings as app_settings
+    from app.services.analytics import get_llm_provider_usage
 
     ollama_usage = ollama_quota.current_usage()
+    provider_usage = get_llm_provider_usage(db, days=7)
     return templates.TemplateResponse(
         request,
         "admin_budget.html",
@@ -840,6 +842,7 @@ async def admin_budget_page(
             user,
             db=db,
             ollama=ollama_usage,
+            provider_usage=provider_usage,
             alert_pct=app_settings.ollama_quota_alert_pct,
             providers={
                 "groq": app_settings.llm_model_groq,

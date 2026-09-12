@@ -45,6 +45,43 @@
             triggers auto-fallback to the next provider in the chain.
         </p>
 
+        {# Requests used per provider (2026-09-12) — from the LLM audit
+           events, last 7 days. Complements the Ollama quota counters
+           above (those come from the provider's own quota API) with
+           what WE actually sent where, including failures that fell
+           through to the next provider in the chain. #}
+        <h2 class="text-lg font-semibold mt-8 mb-3">📈 Requests used per provider <span class="text-sm font-normal text-gray-400">(last 7 days)</span></h2>
+        {% if provider_usage %}
+        <table class="w-full text-sm">
+            <thead class="text-left text-gray-500 dark:text-gray-400">
+                <tr>
+                    <th class="py-2">Provider</th>
+                    <th class="py-2">Model</th>
+                    <th class="py-2 text-right">Succeeded</th>
+                    <th class="py-2 text-right">Failed</th>
+                    <th class="py-2 text-right">Total</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                {% for row in provider_usage %}
+                <tr>
+                    <td class="py-2 font-mono">{{ row.provider }}</td>
+                    <td class="py-2 font-mono">{{ row.model }}</td>
+                    <td class="py-2 text-right font-medium text-green-600 dark:text-green-400">{{ row.ok }}</td>
+                    <td class="py-2 text-right {% if row.failed > 0 %}text-red-600 dark:text-red-400 font-medium{% endif %}">{{ row.failed }}</td>
+                    <td class="py-2 text-right font-semibold">{{ row.total }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            Counted from the LLM audit log (events table) — every call
+            the app sent, regardless of which tier's chain made it.
+        </p>
+        {% else %}
+        <p class="text-sm text-gray-400 italic">No LLM calls recorded in the last 7 days.</p>
+        {% endif %}
+
         {# Provider chains (the centerpiece — verify Day 4 wiring) #}
         <h2 class="text-lg font-semibold mt-8 mb-3">🔗 Provider chains per tier</h2>
         <div class="space-y-3">
