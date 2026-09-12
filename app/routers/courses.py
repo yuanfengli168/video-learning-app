@@ -408,8 +408,10 @@ async def retry_failed_section_videos(
       JSON parse error) — needs re-generating.
 
     We re-queue whichever step failed. For transcribe failures, the
-    full auto-pipeline (transcribe → generate) runs again because
-    that's what `_run_transcribe_job` does after a fresh upload.
+    full auto-pipeline (transcribe → generate) runs again — the
+    chained worker `_staggered_transcribe_job` handles both steps
+    (2026-09-12 bugfix: this previously scheduled the bare
+    transcribe worker, which silently skipped generation).
     For generate-only failures, we just call `_run_generate_job`.
 
     Used by the "Retry all failed" button on the course page. Each
@@ -462,13 +464,17 @@ async def retry_failed_section_videos(
     # to know the job is real (otherwise it bails early).
     from app.jobs import start_job, serialize_job
     from app.routers.generation import _run_generate_job
-    from app.routers.videos import _run_transcribe_job
 
     retried_ids: list[str] = []
 
     # 1. Re-run transcribe for videos whose transcribe step failed.
-    #    `_run_transcribe_job` chains into `_run_generate_job`
-    #    automatically (it's the same code path as a fresh upload).
+    #    2026-09-12 bugfix: this used to schedule bare
+    #    `_run_transcribe_job` — which does NOT chain into generate
+    #    (that chaining lives in `_run_auto_pipeline`). Transcribe
+    #    retries therefore produced a transcript but no materials
+    #    (generated_at stayed NULL; the docstring below was wrong
+    #    about this). Now we reuse the shared chained worker, same
+    #    as retry-stuck: transcribe, then generate, in one task.
     for video_id in transcribe_failed:
         job = start_job(
             video_id, "transcribe",
@@ -479,7 +485,7 @@ async def retry_failed_section_videos(
             video.last_transcribe_job = serialize_job(job)
             video.status = "transcribing"
             db.commit()
-        background_tasks.add_task(_run_transcribe_job, video_id, "base")
+        background_tasks.add_task(_staggered_transcribe_job, video_id, 0)
         retried_ids.append(video_id)
 
     # 2. Re-run generate for videos whose generate step failed
@@ -606,12 +612,71 @@ async def retry_stuck_section_videos(
 
 
 def _staggered_transcribe_job(video_id: str, delay_seconds: int) -> None:
-    """Sleep `delay_seconds` then run the transcribe job (staggered
-    re-queue for owner self-service)."""
+    """Sleep `delay_seconds`, transcribe, then CHAIN INTO GENERATE.
+
+    2026-09-12 bugfix (user report: retry button worked but the
+    course page showed bare 'ready' with no T:/G: timing): this
+    originally called only `_run_transcribe_job`, which does NOT
+    chain generation — that chaining lives in `_run_auto_pipeline`.
+    Result: stuck-video retries produced a transcript but no
+    materials (generated_at stayed NULL, so the timing badge never
+    rendered, and Summary/Flashcards/etc were missing).
+
+    The generate step mirrors `_run_auto_pipeline`'s tail: mark the
+    video 'generating' + start the job tracker, then look up the
+    owner uid/role from the section → course chain (the request
+    context is gone in a BackgroundTask) and call
+    `_run_generate_job(video_id, uid, role)`.
+    """
     if delay_seconds > 0:
         import time as _time
 
         _time.sleep(min(delay_seconds, 300))
+    from app.jobs import start_job, serialize_job
     from app.routers.videos import _run_transcribe_job
 
     _run_transcribe_job(video_id, "base")
+
+    # Transcribe failed? _run_transcribe_job set status='error' and
+    # wrote the failure to the job tracker — nothing to chain into.
+    from app.jobs import get_job
+
+    job = get_job(video_id, "transcribe")
+    if not job or job.get("status") != "completed":
+        return
+
+    from app.database import SessionLocal
+    from app.models import User
+
+    db = SessionLocal()
+    try:
+        video = db.get(Video, video_id)
+        if not video:
+            return
+        video.status = "generating"
+        gen_job = start_job(
+            video_id, "generate", total=100,
+            message="Auto-pipeline: starting LLM generation...",
+        )
+        video.last_generate_job = serialize_job(gen_job)
+        db.commit()
+    finally:
+        db.close()
+
+    # Owner uid/role from the DB (same chain as _run_auto_pipeline).
+    owner_uid = ""
+    owner_role = 2
+    db2 = SessionLocal()
+    try:
+        v = db2.get(Video, video_id)
+        if v and v.section and v.section.course and v.section.course.user_id:
+            owner_uid = v.section.course.user_id
+            owner_user = db2.get(User, owner_uid)
+            if owner_user and owner_user.role is not None:
+                owner_role = owner_user.role
+    finally:
+        db2.close()
+
+    from app.routers.generation import _run_generate_job
+
+    _run_generate_job(video_id, owner_uid, owner_role)

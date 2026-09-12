@@ -186,6 +186,128 @@ def test_retry_stuck_scoped_to_section(paid_client: TestClient, db_session):
     job.assert_not_called()
 
 
+# ── The transcribe→generate CHAIN (2026-09-12 bugfix) ─────────────────────
+#
+# User report: retry button worked but the course page showed bare
+# 'ready' with no T:/G: timing — and no materials. Root cause: the
+# retry workers called only _run_transcribe_job, which does NOT chain
+# generation (that lives in _run_auto_pipeline). Both retry paths
+# (retry-stuck AND the pre-existing retry-failed transcribe bucket)
+# now schedule _staggered_transcribe_job, which runs transcribe then
+# generate. These tests pin the chain.
+
+
+def test_staggered_transcribe_job_chains_generate(db_session):
+    """After a successful transcribe, the chain must flip the video to
+    'generating', start the generate job, and call _run_generate_job
+    with the owner's uid + role."""
+    from unittest.mock import patch as _patch
+
+    section = _mk_course_section(db_session)
+    video = _stuck_video(db_session, section.id)
+    # Owner row with a role so the chain's owner lookup resolves it
+    from app.models import User
+
+    db_session.add(User(user_id="user-A", email="a@x.com", role=1))
+    db_session.commit()
+
+    from app.jobs import get_job, start_job
+
+    # Simulate the request-side start_job that the endpoint already ran
+    start_job(video.id, "transcribe", message="queued")
+
+    from app.routers import courses as courses_mod
+
+    with _patch("app.routers.videos._run_transcribe_job") as fake_transcribe, \
+         _patch("app.routers.generation._run_generate_job") as fake_generate:
+        # Make the transcribe "succeed": no-op + mark the in-memory job
+        # completed, mirroring the real worker's finish_job call.
+        def _transcribe_succeeds(vid, model):
+            job = get_job(vid, "transcribe")
+            from app.jobs import finish_job
+
+            finish_job(job, status="completed", message="ok")
+        fake_transcribe.side_effect = _transcribe_succeeds
+
+        courses_mod._staggered_transcribe_job(video.id, 0)
+
+    fake_transcribe.assert_called_once()
+    fake_generate.assert_called_once()
+    # Owner uid + role forwarded (the MVP2.1 silent-TypeError lesson)
+    assert fake_generate.call_args[0][0] == video.id
+    assert fake_generate.call_args[0][1] == "user-A"
+    assert fake_generate.call_args[0][2] == 1
+
+    db_session.expire_all()
+    v = db_session.get(Video, video.id)
+    assert v.status == "generating"
+    assert v.last_generate_job is not None
+
+
+def test_staggered_transcribe_job_no_chain_on_failure(db_session):
+    """If transcribe FAILS, the chain must NOT call generate — the
+    video stays 'error' (the user's retry-failed button handles the
+    next attempt)."""
+    from unittest.mock import patch as _patch
+
+    section = _mk_course_section(db_session)
+    video = _stuck_video(db_session, section.id)
+
+    from app.jobs import get_job, start_job
+
+    start_job(video.id, "transcribe", message="queued")
+
+    from app.routers import courses as courses_mod
+
+    with _patch("app.routers.videos._run_transcribe_job") as fake_transcribe, \
+         _patch("app.routers.generation._run_generate_job") as fake_generate:
+        def _transcribe_fails(vid, model):
+            job = get_job(vid, "transcribe")
+            from app.jobs import finish_job
+
+            finish_job(job, status="failed", error="boom")
+        fake_transcribe.side_effect = _transcribe_fails
+
+        courses_mod._staggered_transcribe_job(video.id, 0)
+
+    fake_transcribe.assert_called_once()
+    fake_generate.assert_not_called()
+
+
+def test_retry_failed_transcribe_bucket_uses_chained_worker(
+    paid_client: TestClient, db_session
+):
+    """The PRE-EXISTING retry-failed endpoint's transcribe bucket had
+    the same missing-chain bug (its docstring wrongly claimed
+    _run_transcribe_job chains generation). It must now schedule the
+    chained worker."""
+    import json as _json
+
+    section = _mk_course_section(db_session)
+    video = _stuck_video(db_session, section.id)
+    # Seed a FAILED transcribe job so the endpoint's transcribe
+    # bucket finds it.
+    failed_job = _json.dumps({
+        "video_id": video.id, "job_type": "transcribe",
+        "status": "failed", "message": "boom",
+    })
+    video.last_transcribe_job = failed_job
+    video.status = "error"
+    db_session.commit()
+
+    with patch("app.routers.courses._staggered_transcribe_job") as chained, \
+         _mock_owner():
+        resp = paid_client.post(
+            f"/api/courses/{section.course_id}/sections/{section.id}/retry-failed"
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["transcribe_retried"] == 1
+    chained.assert_called_once()
+    assert chained.call_args[0][0] == video.id
+
+
 # ── UI rendering ──────────────────────────────────────────────────────────
 
 
