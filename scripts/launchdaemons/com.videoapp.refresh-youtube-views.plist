@@ -25,8 +25,8 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>{{VENV_PYTHON}}</string>
-        <string>{{SCRIPT_PATH}}</string>
+        <string>__PROJECT_DIR__/venv/bin/python</string>
+        <string>__PROJECT_DIR__/scripts/refresh_youtube_views.py</string>
     </array>
 
     <key>StartCalendarInterval</key>
@@ -38,9 +38,9 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>{{RUNTIME_DIR}}/refresh-youtube-views.log</string>
+    <string>__RUNTIME_DIR__/refresh-youtube-views.log</string>
     <key>StandardErrorPath</key>
-    <string>{{RUNTIME_DIR}}/refresh-youtube-views.log</string>
+    <string>__RUNTIME_DIR__/refresh-youtube-views.log</string>
 
     <!-- Retries: if YouTube is down at 00:10, retry at 01:10, 02:10 -->
     <key>KeepAlive</key>

@@ -28,6 +28,9 @@ RUNTIME_DIR="$HOME/Library/Application Support/VideoApp/scripts/backup"
 SYSTEM_PLIST_DIR="/Library/LaunchDaemons"
 
 # Backup-related plists we manage in the system domain.
+# (2026-09-12: added refresh-youtube-views — nightly YouTube view-count
+# snapshot for the dashboard Top Viewed tab; runs 00:10 SGT, after the
+# 00:00 backup-daily and before the 00:30 prune-events.)
 SYSTEM_PLISTS=(
     "com.videoapp.backup-db"
     "com.videoapp.backup-daily"
@@ -35,6 +38,7 @@ SYSTEM_PLISTS=(
     "com.videoapp.backup-verify"
     "com.videoapp.backup-probe"
     "com.videoapp.prune-events"
+    "com.videoapp.refresh-youtube-views"
 )
 
 # Same labels that we previously installed in the user domain — we unload
