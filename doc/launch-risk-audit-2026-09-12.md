@@ -167,8 +167,27 @@ Cloudflare tunnel → Mac Studio，硬件故障 = 全站下线，没有降级页
    转写 5 秒错峰起跑 → 多线程同时 miss 缓存 → 各自加载 3GB 模型副本。
    修法：threading.Lock 包住 check-and-load（10 行）。归入护栏一并落。
 
-5. **P0.4 实弹测试升级**：必须在 **Mac Studio（32GB 生产机）** 上跑，不
-   是开发机；通过标准是"转写进行时 /api/health 每 30s 保持响应"。
+5. **P0.4 实弹测试升级**：必须在 **Mac Studio（32GB 生产机）** 上跑，
+   不是开发机；通过标准是"转写进行时 /api/health 每 30s 保持响应"。
+
+6. **Stuck 形态分类学 + retry-stuck 最终覆盖方案（2026-09-13 用户追问后
+   敲定）**。原扩展方案（queued>10min OR generating>30min）被用户抓到
+   两个漏洞形态，最终方案改为**基于事实数据而非 status 字段**——因为
+   status 会骗人（说 ready 其实没材料；说 transcribing 其实早死了）：
+
+   | # | 形态 | status | 有转录 | 有材料 | 真实例子 | 判定 |
+   |---|---|---|---|---|---|---|
+   | 1 | 排队即卡 | queued | ✗ | ✗ | 昨天上午 8 视频 | A: >10min |
+   | 2 | 转写中死 | transcribing | ✗ | ✗ | 死锁 kill 时 | B: job 时间戳 >30min |
+   | 3 | 生成中死 | generating | ✓ | ✗ | be417367 (progress 90%) | C: job 时间戳 >30min |
+   | 5 | ready 无材料 | ready | ✓ | ✗ | 昨天下午 8 视频 | D: generated_at IS NULL（**永久事实，不需超时**） |
+   | 4 | 正常完成 | ready | ✓ | ✓ | 其余 37 个 | 排除（不误伤） |
+
+   救法统一按"缺什么补什么"：有 transcript Asset → 只补 generate；
+   无 → 走完整链（transcribe→generate）。`error` 状态**故意不救**——
+   那是 retry-failed 的语义领域。条件判定抽成共用 `_stuck_condition()`
+   （UI stuck_count 与端点共用，避免上次"各算各的"不一致教训）。
+   job 时间戳取 `last_*_job` JSON 的 `started_at`（epoch 秒）。
 
 **修订后周末执行顺序**（9/12-14）：
 ① retry-stuck 扩展条件（救 9 视频 + runbook 一句）→ ② 护栏（并发≤2/每用户 1/

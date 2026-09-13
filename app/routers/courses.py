@@ -530,25 +530,27 @@ async def retry_stuck_section_videos(
     user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Re-queue STUCK videos in this section for the course OWNER
-    (2026-09-12 — self-service counterpart to the admin requeue).
+    (2026-09-12 — self-service counterpart to the admin requeue;
+    2026-09-13 — extended to the full 4-form stuck taxonomy).
 
-    'Stuck' = status='queued' for >10 minutes with no live job —
-    i.e. the in-memory BackgroundTask died with a server restart and
-    nothing will ever process the row (see the same-day admin
-    endpoint /api/admin/videos/requeue-stuck for the blast-radius
-    version). The 10-minute grace window keeps the button OFF during
-    normal upload processing (a fresh bulk upload legitimately sits
-    in 'queued' for a bit — we must not double-fire pipelines at it).
+    'Stuck' (see _is_stuck_video for the ONE shared definition):
+      A. queued >10 min — pipeline died at birth (restart ate the
+         BackgroundTask)
+      B. transcribing, job >30 min — worker died mid-transcribe
+      C. generating, job >30 min — LLM call interrupted (be417367
+         form: progress 90%, SIGKILL'd)
+      D. ready but generated_at NULL — PERMANENT incomplete state,
+         no timeout needed (the 2026-09-12 chain-bug victims)
+
+    Repair is need-based: video already has a transcript Asset →
+    only the generate step re-runs (no Whisper re-burn); no
+    transcript → the full chained pipeline (transcribe→generate).
+    Staggered 5s apart either way.
 
     Scopes to the section + ownership (same guard as retry-failed):
     only the course owner's own stuck videos, never other users'.
-    Every stuck video re-enters the full auto-pipeline
-    (transcribe → generate), staggered 5s apart so N simultaneous
-    Whisper loads don't trip the per-user rate limiter.
-
-    The frontend gate (the amber "↻ Retry N stuck" button) renders
-    this for the section owner when stuck_count > 0; the button's
-    stuck_count uses the same 10-minute rule server-side here.
+    'error' videos are deliberately NOT handled here — that's the
+    retry-failed endpoint's domain.
     """
     section = db.get(Section, section_id)
     if not section or section.course_id != course_id:
@@ -558,46 +560,58 @@ async def retry_stuck_section_videos(
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your course")
 
-    # Stuck = queued, older than the grace window, no live job.
-    # A restart-killed pipeline never flipped transcribe_started_at,
-    # so `last_transcribe_job` still says 'queued' from upload time.
-    from datetime import datetime, timedelta, timezone as _tz
-
-    grace_cutoff = datetime.now(_tz.utc).replace(tzinfo=None) - timedelta(
-        minutes=10
-    )
-    stuck: list[Video] = []
-    for v in section.videos:
-        if v.status != "queued":
-            continue
-        created = v.created_at
-        if created is None:
-            continue
-        if created.tzinfo is not None:
-            created = created.replace(tzinfo=None)
-        if created < grace_cutoff:
-            stuck.append(v)
+    # ── Stuck detection (2026-09-13 taxonomy — see
+    #    doc/launch-risk-audit-2026-09-12.md "审计后决策" #6) ──
+    #    Based on FACTS, not the status field (the status field lies:
+    #    'ready' with generated_at=NULL is unfinished; 'transcribing'
+    #    from a dead worker never recovers on its own).
+    stuck = [v for v in section.videos if _is_stuck_video(v)]
 
     if not stuck:
         return {"retried": 0, "video_ids": [], "message": "No stuck videos in this section."}
 
     from app.jobs import start_job, serialize_job
-    from app.routers.videos import _run_transcribe_job
 
     retried_ids: list[str] = []
     for i, video in enumerate(stuck):
-        job = start_job(
-            video.id, "transcribe",
-            message="Re-queueing stuck processing (owner self-service)...",
+        # Repair path depends on what the video already has: a
+        # transcript Asset means only the generate step is missing
+        # (forms C/D — 'generating' timed out, or 'ready' without
+        # materials) — skip the expensive Whisper re-run. No
+        # transcript (forms A/B) → the full chained pipeline.
+        has_transcript = (
+            db.execute(
+                select(Asset.id).where(
+                    Asset.video_id == video.id,
+                    Asset.asset_type == "transcript",
+                )
+            ).first()
+            is not None
         )
-        video.last_transcribe_job = serialize_job(job)
-        video.status = "transcribing"
-        db.commit()
-        # Stagger 5s apart — same rationale as the admin endpoint: N
-        # Whisper loads at once trips rate limiters.
-        background_tasks.add_task(
-            _staggered_transcribe_job, video.id, i * 5
-        )
+        if has_transcript:
+            job = start_job(
+                video.id, "generate",
+                message="Re-queueing stuck generation (owner self-service)...",
+            )
+            video.last_generate_job = serialize_job(job)
+            video.status = "generating"
+            db.commit()
+            background_tasks.add_task(
+                _staggered_generate_retry,
+                video.id, i * 5,
+                user.get("uid", ""), int(user.get("role", 2)),
+            )
+        else:
+            job = start_job(
+                video.id, "transcribe",
+                message="Re-queueing stuck processing (owner self-service)...",
+            )
+            video.last_transcribe_job = serialize_job(job)
+            video.status = "transcribing"
+            db.commit()
+            background_tasks.add_task(
+                _staggered_transcribe_job, video.id, i * 5
+            )
         retried_ids.append(video.id)
 
     return {
@@ -609,6 +623,112 @@ async def retry_stuck_section_videos(
             f"few minutes."
         ),
     }
+
+
+def _is_stuck_video(video: Video) -> bool:
+    """The ONE definition of 'stuck' (2026-09-13). Shared by this
+    endpoint and the course-page stuck_count so UI and API can never
+    disagree (the lesson from the first-stuck-count drift).
+
+    Stuck = unfinished (no generated_at) AND matching one of:
+      A. status='queued' older than 10 min  — pipeline died at birth
+         (server restart ate the BackgroundTask; today's 8 videos)
+      B. status='transcribing', job older than 30 min — worker died
+         mid-transcribe (kill/deadlock); the job JSON's started_at
+         is the truth, transcribe_started_at may be stale
+      C. status='generating', job older than 30 min — LLM call was
+         interrupted (be417367: progress 90%, SIGKILL'd)
+      D. status='ready' with generated_at NULL — PERMANENT fact, no
+         timeout needed: the transcribe worker set 'ready' but the
+         chained generate never ran/finished (the 2026-09-12 chain
+         bug's 8 victims). Nothing will ever self-heal this.
+    'error' is deliberately NOT stuck — that's retry-failed's domain
+    (explicit failure, different semantics). 'ready' WITH generated_at
+    is complete — excluded, no false positives.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+    import json as _json
+
+    if video.generated_at is not None:
+        return False  # finished — never stuck
+
+    now = datetime.now(_tz.utc).replace(tzinfo=None)
+
+    def _job_started_older_than(job_json: str | None, minutes: int) -> bool:
+        if not job_json:
+            return False  # no job record → can't prove staleness; skip
+        try:
+            started = _json.loads(job_json).get("started_at")
+        except (ValueError, TypeError):
+            return False
+        if not started:
+            return False
+        started_dt = datetime.fromtimestamp(float(started), _tz.utc).replace(
+            tzinfo=None
+        )
+        return started_dt < now - timedelta(minutes=minutes)
+
+    if video.status == "queued":
+        created = video.created_at
+        if created is None:
+            return False
+        if created.tzinfo is not None:
+            created = created.replace(tzinfo=None)
+        return created < now - timedelta(minutes=10)
+
+    if video.status == "transcribing":
+        return _job_started_older_than(video.last_transcribe_job, 30)
+
+    if video.status == "generating":
+        return _job_started_older_than(video.last_generate_job, 30)
+
+    if video.status == "ready":
+        # generated_at IS NULL here (checked above) → permanent
+        # incomplete state. No timeout applies.
+        return True
+
+    return False
+
+
+def _staggered_generate_retry(
+    video_id: str,
+    delay_seconds: int,
+    user_id: str,
+    user_role: int,
+) -> None:
+    """Sleep `delay_seconds`, then run ONLY the generate step for a
+    video that already has a transcript (stuck forms C/D). Mirrors
+    _staggered_transcribe_job's stagger rationale."""
+    if delay_seconds > 0:
+        import time as _time
+
+        _time.sleep(min(delay_seconds, 300))
+    from app.jobs import start_job, serialize_job
+    from app.database import SessionLocal
+    from app.models import Video
+
+    db = SessionLocal()
+    try:
+        video = db.get(Video, video_id)
+        if not video:
+            return
+        # The request handler already flipped status + started the
+        # job; re-serialize here in case the worker runs after a
+        # long stagger and the in-memory tracker was lost (fresh
+        # worker process). Same pattern as _staggered_transcribe_job.
+        job = start_job(
+            video_id, "generate",
+            message="Re-queueing stuck generation (owner self-service)...",
+        )
+        video.last_generate_job = serialize_job(job)
+        video.status = "generating"
+        db.commit()
+    finally:
+        db.close()
+
+    from app.routers.generation import _run_generate_job
+
+    _run_generate_job(video_id, user_id, user_role)
 
 
 def _staggered_transcribe_job(video_id: str, delay_seconds: int) -> None:

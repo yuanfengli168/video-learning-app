@@ -70,6 +70,18 @@ def _mock_owner():
     )
 
 
+def _job_json(started_at: float | None = None, status: str = "running") -> str:
+    """Build a last_*_job JSON blob like app.jobs.serialize_job."""
+    import json
+
+    return json.dumps({
+        "video_id": "x", "job_type": "t", "status": status,
+        "progress": 0, "total": 100, "pct": 0.0, "eta_seconds": None,
+        "message": "m", "started_at": started_at,
+        "completed_at": None, "error": None,
+    })
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────
 
 
@@ -120,16 +132,24 @@ def test_retry_stuck_grace_window_excludes_fresh(paid_client: TestClient, db_ses
 
 
 def test_retry_stuck_ignores_other_statuses(paid_client: TestClient, db_session):
-    """ready/error/transcribing rows are never touched."""
+    """error / finished (ready WITH materials) / live-processing
+    videos are never touched by retry-stuck. NOTE (2026-09-13): bare
+    'ready' WITHOUT generated_at is now FORM D — deliberately stuck
+    (see test_form_D_ready_without_materials_is_stuck); only a
+    COMPLETE video (generated_at set) is excluded here."""
+    from datetime import datetime as _dt
+
     section = _mk_course_section(db_session)
-    _mk_video(db_session, section.id, status="ready",
-              created_at=datetime.utcnow() - timedelta(hours=2))
     _mk_video(db_session, section.id, status="error",
               created_at=datetime.utcnow() - timedelta(hours=2))
+    done = _mk_video(db_session, section.id, status="ready",
+                     created_at=datetime.utcnow() - timedelta(hours=2))
+    done.generated_at = _dt.utcnow()
     _mk_video(db_session, section.id, status="transcribing",
-              created_at=datetime.utcnow() - timedelta(hours=2))
+              created_at=datetime.utcnow() - timedelta(hours=2))  # no job JSON → can't prove stale → live
 
     with patch("app.routers.courses._staggered_transcribe_job") as job, \
+         patch("app.routers.courses._staggered_generate_retry") as gen_job, \
          _mock_owner():
         resp = paid_client.post(
             f"/api/courses/{section.course_id}/sections/{section.id}/retry-stuck"
@@ -138,6 +158,7 @@ def test_retry_stuck_ignores_other_statuses(paid_client: TestClient, db_session)
     assert resp.status_code == 200
     assert resp.json()["retried"] == 0
     job.assert_not_called()
+    gen_job.assert_not_called()
 
 
 def test_retry_stuck_ownership_403(paid_client: TestClient, db_session):
@@ -379,3 +400,151 @@ def test_admin_button_and_owner_button_can_coexist(
     html = resp.text
     assert "queued — re-queue" in html, "admin app-wide button"
     assert "Retry 1 stuck" in html, "owner this-section button"
+
+
+# ── The 4-form stuck taxonomy (2026-09-13) ───────────────────────────────
+#
+# doc/launch-risk-audit-2026-09-12.md "审计后决策" #6: stuck detection is
+# FACT-based (status field lies). Forms:
+#   A. queued >10min            B. transcribing job >30min
+#   C. generating job >30min   D. ready + generated_at NULL (permanent)
+# 'error' excluded (retry-failed's domain); ready WITH materials excluded
+# (no false positives). _is_stuck_video is the ONE shared definition.
+
+
+def test_form_A_queued_over_10min_is_stuck(db_session):
+    from app.routers.courses import _is_stuck_video
+
+    section = _mk_course_section(db_session)
+    v = _stuck_video(db_session, section.id)  # queued, 30 min old
+    assert _is_stuck_video(v) is True
+
+
+def test_form_B_transcribing_stale_job_is_stuck(db_session):
+    """A transcribing video whose job started >30 min ago is dead —
+    the worker was killed mid-transcribe (yesterday's deadlock form)."""
+    import time
+
+    from app.routers.courses import _is_stuck_video
+
+    section = _mk_course_section(db_session)
+    v = _mk_video(db_session, section.id, status="transcribing")
+    v.last_transcribe_job = _job_json(started_at=time.time() - 3600)
+    db_session.commit()
+    assert _is_stuck_video(v) is True
+
+    # Fresh job (<30 min) is LIVE processing, not stuck
+    v2 = _mk_video(db_session, section.id, status="transcribing")
+    v2.last_transcribe_job = _job_json(started_at=time.time() - 60)
+    db_session.commit()
+    assert _is_stuck_video(v2) is False
+
+
+def test_form_C_generating_stale_job_is_stuck(db_session):
+    """be417367 form: LLM generate interrupted (progress 90%,
+    SIGKILL'd). Job older than 30 min → stuck; fresh → live."""
+    import time
+
+    from app.routers.courses import _is_stuck_video
+
+    section = _mk_course_section(db_session)
+    v = _mk_video(db_session, section.id, status="generating")
+    v.last_generate_job = _job_json(started_at=time.time() - 3600)
+    db_session.commit()
+    assert _is_stuck_video(v) is True
+
+    v2 = _mk_video(db_session, section.id, status="generating")
+    v2.last_generate_job = _job_json(started_at=time.time() - 60)
+    db_session.commit()
+    assert _is_stuck_video(v2) is False
+
+
+def test_form_D_ready_without_materials_is_stuck(db_session):
+    """PERMANENT stuck form — no timeout applies. The 2026-09-12
+    chain-bug victims: transcribe worker set 'ready', generate never
+    ran (generated_at NULL). Nothing self-heals this."""
+    from app.routers.courses import _is_stuck_video
+
+    section = _mk_course_section(db_session)
+    v = _mk_video(db_session, section.id, status="ready")
+    # even created a second ago — form D has NO grace window
+    v.created_at = datetime.utcnow() - timedelta(seconds=30)
+    db_session.commit()
+    assert _is_stuck_video(v) is True
+
+
+def test_ready_WITH_materials_is_never_stuck(db_session):
+    """No false positives: a completed video (generated_at set) is
+    excluded no matter what its status/job fields look like."""
+    from datetime import datetime as _dt
+
+    from app.routers.courses import _is_stuck_video
+
+    section = _mk_course_section(db_session)
+    v = _mk_video(db_session, section.id, status="ready")
+    v.generated_at = _dt.utcnow()
+    db_session.commit()
+    assert _is_stuck_video(v) is False
+
+
+def test_error_status_is_not_stuck(db_session):
+    """'error' is retry-failed's domain — deliberately excluded from
+    stuck detection (different semantics: explicit failure)."""
+    from app.routers.courses import _is_stuck_video
+
+    section = _mk_course_section(db_session)
+    v = _mk_video(db_session, section.id, status="error",
+                  created_at=datetime.utcnow() - timedelta(hours=5))
+    assert _is_stuck_video(v) is False
+
+
+def test_retry_stuck_repair_path_skips_transcribe_when_transcript_exists(
+    paid_client: TestClient, db_session
+):
+    """Need-based repair: a stuck video that ALREADY has a transcript
+    Asset (forms C/D) re-runs ONLY generate — no Whisper re-burn.
+    Yesterday's 8 victims + be417367 all hit this path."""
+    from app.models import Asset
+
+    section = _mk_course_section(db_session)
+    # Form D victim: ready, no materials, transcript exists
+    v = _mk_video(db_session, section.id, status="ready")
+    v.generated_at = None
+    db_session.add(Asset(
+        video_id=v.id, asset_type="transcript", content="{}",
+    ))
+    db_session.commit()
+
+    with patch("app.routers.courses._staggered_generate_retry") as gen_retry, \
+         patch("app.routers.courses._staggered_transcribe_job") as transcribe_job, \
+         _mock_owner():
+        resp = paid_client.post(
+            f"/api/courses/{section.course_id}/sections/{section.id}/retry-stuck"
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["retried"] == 1
+    gen_retry.assert_called_once()
+    transcribe_job.assert_not_called(), "transcript exists — Whisper must NOT re-run"
+    # Owner uid+role forwarded to the generate worker
+    assert gen_retry.call_args[0][2] == "user-A"
+
+
+def test_retry_stuck_full_chain_when_no_transcript(
+    paid_client: TestClient, db_session
+):
+    """No transcript Asset (forms A/B) → the full chained pipeline
+    (transcribe → generate)."""
+    section = _mk_course_section(db_session)
+    v = _stuck_video(db_session, section.id)  # form A, no transcript asset
+
+    with patch("app.routers.courses._staggered_transcribe_job") as transcribe_job, \
+         _mock_owner():
+        resp = paid_client.post(
+            f"/api/courses/{section.course_id}/sections/{section.id}/retry-stuck"
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["retried"] == 1
+    transcribe_job.assert_called_once()

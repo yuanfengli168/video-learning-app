@@ -347,10 +347,36 @@ async def course_view(
 
     now_10m_ago = datetime.now(_tz.utc).replace(tzinfo=None) - timedelta(minutes=10)
 
+    # 2026-09-13: stuck detection moved server-side into the shared
+    # helper (the full 4-form taxonomy — queued>10m, transcribing
+    # job>30m, generating job>30m, ready-without-materials). The
+    # Jinja template re-implemented ONLY the old queued form and had
+    # drifted from the endpoint's definition; now both sides call
+    # _is_stuck_video so they can never disagree. Per-section counts
+    # for the button labels.
+    from app.routers.courses import _is_stuck_video
+
+    section_stuck_counts: dict[str, int] = {}
+    section_has_stuck_any = False
+    if course and course.sections:
+        for section in course.sections:
+            n = sum(1 for v in section.videos if _is_stuck_video(v))
+            section_stuck_counts[section.id] = n
+            if n > 0:
+                section_has_stuck_any = True
+
     return templates.TemplateResponse(
         request,
         "course.html",
-        _ctx(request, user, db=db, course=course, now_10m_ago=now_10m_ago),
+        _ctx(
+            request,
+            user,
+            db=db,
+            course=course,
+            now_10m_ago=now_10m_ago,
+            section_stuck_counts=section_stuck_counts,
+            section_has_stuck_any=section_has_stuck_any,
+        ),
     )
 
 

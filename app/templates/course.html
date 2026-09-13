@@ -64,12 +64,12 @@
         {% for section in course.sections %}
         {% set failed_count = section.videos | selectattr('status', 'equalto', 'error') | list | length %}
         {% set queued_count = section.videos | selectattr('status', 'equalto', 'queued') | list | length %}
-        {# Owner self-service stuck count (2026-09-12): queued AND older
-           than 10 minutes (grace window matches the retry-stuck
-           endpoint) — inside the window it's just normal upload
-           processing, and showing a retry button there would risk
-           double-firing pipelines. #}
-        {% set stuck_count = section.videos | selectattr('status', 'equalto', 'queued') | rejectattr('created_at', 'none') | list | selectattr('created_at', 'lt', now_10m_ago) | list | length %}
+        {# 2026-09-13: stuck_count now comes from the server (computed via
+           the shared _is_stuck_video — the full 4-form taxonomy:
+           queued>10min / transcribing job>30min / generating job>30min /
+           ready-without-materials). The old Jinja one-liner only knew
+           the queued form and had drifted from the endpoint. #}
+        {% set stuck_count = section_stuck_counts.get(section.id, 0) %}
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden"
              data-section-card
              data-sort-key="{{ section.title | natural_sort_key_str }}">
@@ -104,7 +104,7 @@
                        on someone else's course that 403s on click is
                        worse than a dead control, so we hide it outright. #}
                     {% if stuck_count > 0 and user and course.user_id == user.get("uid", "") and user_capabilities and "manage_own_course" in user_capabilities %}
-                    <button onclick="event.stopPropagation(); retryStuckVideos('{{ course.id }}', '{{ section.id }}', this)" data-retry-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue your stuck videos in this section (queued a long time with nothing processing them — usually a server restart interrupted them)">
+                    <button onclick="event.stopPropagation(); retryStuckVideos('{{ course.id }}', '{{ section.id }}', this)" data-retry-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue your stuck videos in this section (queued a long time, or processing interrupted by a server restart / crash — e.g. 'ready' but no materials). Click to re-run what's missing.">
                         ↻ Retry {{ stuck_count }} stuck
                     </button>
                     {% endif %}
