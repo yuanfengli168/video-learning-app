@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
@@ -49,6 +49,74 @@ if not (
         pool_timeout=30,
     )
 engine = create_engine(settings.database_url, **engine_kwargs)
+
+
+# ── WAL journal mode + busy_timeout (2026-09-16, launch hardening #1) ──
+#
+# Why: the DB ran in journal_mode=delete until now — every write takes a
+# DATABASE-WIDE exclusive lock that also blocks READERS. With the
+# telemetry beacon writing an events row on every click, 100-user scale
+# means hundreds of such locks/minute, each stalling every page render
+# behind it (audit doc P0.2/decision #12: the write hot-spot is the
+# amplifier of the 9/12 outage class).
+#
+# WAL changes the contract: writers never block readers, readers never
+# block the writer, one writer at a time (fine at this scale — the
+# mini-queue will write a handful of rows a minute). Read throughput
+# stops being hostage to telemetry writes.
+#
+# busy_timeout=5000: WAL still serializes WRITES — under a write burst
+# a second writer waits up to 5s for the lock instead of failing
+# instantly with "database is locked" (the error the upload flow could
+# hit when a transcribe progress write collides with a page write).
+#
+# Scope: file-backed SQLite only. journal_mode is per-database (it
+# persists in the file once set — a one-time switch, later connections
+# just re-confirm it); busy_timeout is per-connection so it must be set
+# on EVERY pooled connection — hence the connect event below, not a
+# one-shot call.
+def _set_sqlite_pragmas(dbapi_connection, connection_record):  # noqa: ANN001
+    cursor = dbapi_connection.cursor()
+    try:
+        # journal_mode=WAL — persistent in the DB file, cheap to re-assert.
+        cursor.execute("PRAGMA journal_mode=WAL")
+        # busy_timeout (ms) — per-connection, must be re-set on every
+        # connection the pool hands out.
+        cursor.execute("PRAGMA busy_timeout=5000")
+        # synchronous=NORMAL — the WAL-recommended durability level:
+        # fsync on checkpoint instead of every commit. Safe for our data
+        # (worst case: lose the last commit on a power cut; the 6-hour
+        # DB backup cadence is the real durability anchor) while
+        # cutting per-write fsync latency ~5-10x.
+        cursor.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cursor.close()
+
+
+def _is_file_backed_sqlite(url: str) -> bool:
+    """True for SQLite URLs that point at a FILE (not memory).
+
+    The original guard (`":memory:" not in url`) misses bare
+    `sqlite://` — which IS a memory DB (conftest builds its test
+    engine with exactly that URL). WAL is a file-level property and
+    the pragmas are pointless (journal_mode=WAL is a no-op on
+    :memory:, synchronous/fsync never touches disk) — so register the
+    listener only when there's an actual database path.
+    """
+    if not url.startswith("sqlite"):
+        return False
+    # sqlite:///path/to.db  → path is everything after the triple slash.
+    # sqlite://            → memory (no path). sqlite:///:memory: → memory.
+    after_scheme = url.split("sqlite://", 1)[1]
+    # Strip an optional host part (sqlite://host/path) — ours are hostless.
+    path = after_scheme.lstrip("/")
+    # ':memory:' is the documented in-memory marker; an empty path is
+    # the OTHER in-memory form (bare sqlite:// — conftest's shape).
+    return bool(path) and path != ":memory:"
+
+
+if _is_file_backed_sqlite(settings.database_url):
+    event.listens_for(engine, "connect")(_set_sqlite_pragmas)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
