@@ -188,11 +188,93 @@ Cloudflare tunnel → Mac Studio，硬件故障 = 全站下线，没有降级页
    那是 retry-failed 的语义领域。条件判定抽成共用 `_stuck_condition()`
    （UI stuck_count 与端点共用，避免上次"各算各的"不一致教训）。
    job 时间戳取 `last_*_job` JSON 的 `started_at`（epoch 秒）。
+   **已于 2026-09-13 落地（commit 19107cc），live 验证精确抓到 9 孤儿。**
 
-**修订后周末执行顺序**（9/12-14）：
-① retry-stuck 扩展条件（救 9 视频 + runbook 一句）→ ② 护栏（并发≤2/每用户 1/
-批量≤5）+ WAL + gunicorn 按 32GB 实机改 + `_model_cache` 锁 → ③ Mac Studio
-实弹测试（需用户在场）→ ④ FREE 配额 10/天（config 一行 + 注释账目更新）。
+7. **护栏方案演进：拒绝式 → 迷你队列（2026-09-16 讨论敲定）**。
+   用户对原方案（槽满即 409 拒绝）提出四个关切：(1) 不要硬编码；
+   (2) 没队列时能支持几个付费用户？(3) 有没有更动态/聪明的做法
+   （如查 RAM）？(4) **付费用户应尽量少看到拒绝，排队也要告知等多久**。
+   第 4 点改变了整个设计方向：
+
+   - **拒绝式护栏废弃**。RAM 检测作为主闸门被否（昨天事故全程内存
+     95% free——杀全站的是线程饥饿+锁竞争，不是内存；RAM 检测会给
+     绿灯然后照样死锁；且有 TOCTOU 竞态）。**确定性是特性**：最坏
+     情况可预算可测试。
+   - **采用"迷你队列"**：上传永远成功（零拒绝）；视频 DB 行本来就是
+     队列（status='queued'），缺的只是消费循环——每 2-5s 扫 FIFO，
+     "全局槽空 + 该用户无进行中"才原子认领（UPDATE...WHERE claimed
+     IS NULL，4 worker 竞争安全）。**这正是用户上周方案 2 的公平
+     规则**：谁的先到谁上，同用户有在跑的跳过他——保证每人第一个
+     视频尽早开跑，没有人被晾几小时。
+   - **ETA 数据现成**：队列位置 × 实测平均转写时长 ÷ 槽数（课程页
+     T:xx 历史就是数据源），UI 显示"前方 N 位 · 预计 ~X 分钟"。
+   - **结构红利**：form A（排队即卡）孤儿从"事故"变"自动恢复"——
+     行永远在 DB，重启后循环自动续跑。form-A 孤儿不再需要 ↻ 按钮
+     （注意：>10min 即卡死的判定要跟着改，否则会误伤正在排队的行）。
+   - **动态化的"聪明版"**：加权槽（不数个数，数内存预算：turbo 占
+     大头，base/small 是便宜选项，预算按默认 turbo 标定 ~5GB）+
+     RAM 地板副闸门（认领前查 free RAM <8GB 暂停认领，防 OOM，
+     作第二道保险而非主闸门）。
+   - **10 用户 × 5 视频推演**（已向用户详述并认可）：上传秒成功零
+     拒绝 → FIFO 轮流入场（每 ~1-2 分钟放一个新用户）→ ~50-60 分钟
+     全部 ready（MLX turbo 吞吐）→ 全程网站在线 + 每人看得见队列
+     位置。对比昨天：同样负载 = 全站瘫痪 4 小时。
+   - **默认模型修正**：默认是 local-large-turbo（mlx whisper-large-
+     v3-turbo，Apple Silicon 自动选，DB 证实 24 视频全用它）——
+     不是 small。数字全部按 turbo 重算（~3GB 模型常驻、缓存锁后
+     全局一份共享）。MLX 走 GPU 指令，**槽位对 MLX 的意义比 CPU
+     whisper 更大**（GPU 争用），2 槽上限的实测校准留给 Mac
+     Studio 实弹测试。
+   - **用户补充（2026-09-16，待调研核实）**：MLX 转写可能固定使用
+     ~4 个 GPU core（Mac Studio M2 Max 共 10 GPU core），这可能是
+     "只能 2 并发"的底层原因。→ 见决策 8 的深度调研结果。
+   - **代价（已知情）**：工作量 半天→~1 天（调度循环+原子认领+ETA+
+     测试）；in-process 风险被 2 槽框住但未根除（独立转写进程仍是
+     Phase 2 终点）。
+
+8. **MLX GPU 并发上限深度调研（2026-09-16，回应用户"4 GPU core"假设）**：
+   结论——**2 并发不是 GPU core 数量决定的**，核心事实与机制：
+
+   - **MLX 不绑定 GPU core**（源码级证据，mlx 0.32.2）：MLX 的计算
+     encoder 用 Metal `MTL::DispatchTypeConcurrent` 派发 kernel
+     （`mlx/backend/metal/device.cpp`）——Metal 调度器自动把线程组
+     分散到**全部** GPU core，单个转写任务的一次 matmul 就能吃满
+     整个 GPU。MLX 没有任何"每个任务预留 N 个 core"的 API。
+     `mlx_whisper/audio.py` 里唯一的 `-threads 0` 是 **ffmpeg 音频
+     解码的 CPU 线程数**（0=自动），与 GPU 无关。
+   - **并发转写的真实机制是 GPU 时间片轮转，不是分核**：MLX 的
+     command encoder 是 **thread_local**（`get_command_encoders()`
+     返回线程局部表）——gunicorn 里两个转写线程各自建 Metal
+     command queue，GPU 驱动在两个队列间**交错执行 kernel**。
+     两个并发转写各自变慢、总吞吐接近单任务饱和值，而不是
+     "4 core + 4 core = 各跑一半"。
+   - **"观察到只用 4 个 core"的可能解释**：Activity Monitor 的
+     GPU 核心占用显示是采样近似；whisper 的许多 kernel 是
+     memory-bandwidth-bound（编码器小算子），瓶颈在带宽不在算力，
+     监控上呈现"部分核在忙"。这不代表有核被预留。
+   - **真正的并发约束（2 槽的工程依据）**：(a) GPU 时间片轮转到
+     饱和后，并发数不再增加吞吐只增加延迟；(b) unified memory
+     预算（模型权重 + 音频解码缓冲）；(c) GPU 还要服务窗口系统/
+     视频播放。**"2"是内存预算+爆炸半径的工程判断，不是硬件
+     常数**——正确数字只能实测：Mac Studio 上跑 1/2/3 并发的
+     聚合吞吐对比（videos/小时），3 并发若打不过 2 并发就定 2。
+   - ⚠️ **机器规格疑点（2026-09-16，待用户在 Mac Studio 上核实）**：
+     用户描述"Mac Studio M2 Max / 32GB / 10-core GPU"——这三个数
+     互相矛盾：**M2 Max 的 GPU 是 30/38 core**；10-core GPU 是
+     **M2 base**（Mac Studio 2023 无 M2 base 版，但 M2 Max 的
+     10-core CPU 也对不上，M2 Max CPU 是 12 核）。可能机器实为
+     M2 Max（30-core GPU）而 core 数记错，也可能整台机器型号
+     记错。核实命令：`system_profiler SPDisplaysDataType -json` +
+     `sysctl hw.memsize hw.model`。这是 9/12 机器事实事故
+     （64GB 假设）的同类问题——容量参数全部取决于这个答案，
+     **列为 Mac Studio 实弹测试的第 0 步**。
+
+**修订后周末执行顺序**（9/16 更新，原 9/12-14 周末计划顺延）：
+① ✅ retry-stuck 扩展（9/13 落地，19107cc）→ ② WAL + `_model_cache` 锁 +
+gunicorn 32GB 实机化（半天）→ ③ **迷你队列**（加权槽+每用户1+FIFO
+跳过+ETA+原子认领，~1 天，取代原"拒绝式护栏"）→ ④ Mac Studio 实弹
+测试（含 2 vs 3 并发 GPU 校准，需用户在场）→ ⑤ FREE 配额 10/天 →
+⑥ go-live。
 
 ---
 
