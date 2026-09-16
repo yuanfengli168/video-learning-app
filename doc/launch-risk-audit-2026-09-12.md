@@ -258,16 +258,16 @@ Cloudflare tunnel → Mac Studio，硬件故障 = 全站下线，没有降级页
      视频播放。**"2"是内存预算+爆炸半径的工程判断，不是硬件
      常数**——正确数字只能实测：Mac Studio 上跑 1/2/3 并发的
      聚合吞吐对比（videos/小时），3 并发若打不过 2 并发就定 2。
-   - ⚠️ **机器规格疑点（2026-09-16，待用户在 Mac Studio 上核实）**：
-     用户描述"Mac Studio M2 Max / 32GB / 10-core GPU"——这三个数
-     互相矛盾：**M2 Max 的 GPU 是 30/38 core**；10-core GPU 是
-     **M2 base**（Mac Studio 2023 无 M2 base 版，但 M2 Max 的
-     10-core CPU 也对不上，M2 Max CPU 是 12 核）。可能机器实为
-     M2 Max（30-core GPU）而 core 数记错，也可能整台机器型号
-     记错。核实命令：`system_profiler SPDisplaysDataType -json` +
-     `sysctl hw.memsize hw.model`。这是 9/12 机器事实事故
-     （64GB 假设）的同类问题——容量参数全部取决于这个答案，
-     **列为 Mac Studio 实弹测试的第 0 步**。
+   ⚠️ **机器规格疑点（2026-09-16，已解除）**：用户描述"10-core GPU"
+     与 M2 Max 不符，实测核实（2026-09-16）：
+     `Mac14,13`（Mac Studio 2023）· **M2 Max · 30-core GPU · 32GB
+     RAM**——三个数自洽，10-core 是记忆错误，机器型号无误。
+     容量参数最终锚点：**32GB / 30 GPU cores**。
+     生产机预算账（最终版）：系统驻留 4-10GB + gunicorn 4 workers
+     ~1.2GB + MLX turbo 模型常驻 ~3GB（缓存锁后全局一份）+ 音频
+     解码缓冲 1-2GB × 槽位 + 留 6GB+ 突发缓冲 → **2 槽位（turbo
+     默认）是 32GB 下的合理起点**，1/2/3 并发实测后可上调。
+     gunicorn.conf.py 的 64GB 注释仍待实机修正（今日工作清单）。
 
 **修订后周末执行顺序**（9/16 更新，原 9/12-14 周末计划顺延）：
 ① ✅ retry-stuck 扩展（9/13 落地，19107cc）→ ② WAL + `_model_cache` 锁 +
