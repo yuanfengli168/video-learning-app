@@ -25,12 +25,31 @@ Backend notes:
 import json
 import platform
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
 # Model cache to avoid reloading (faster-whisper side; mlx-whisper
-# manages its own cache internally)
+# manages its own cache internally via ModelHolder).
 _model_cache: dict[str, Any] = {}
+
+# 2026-09-16 (launch hardening #2, the 9/12 incident fuel): the
+# check-then-load pattern below is a race — on the 9/12 outage, 8
+# staggered transcribes each saw "not in cache" and each loaded its
+# own model copy (memory + CPU multiplied by N). The lock guards the
+# faster-whisper cache dict, which IS shared across threads in the
+# gunicorn worker.
+#
+# NOTE ON THE MLX SIDE (why it is deliberately NOT locked here):
+# MLX transcriptions run in a SUBPROCESS (scripts/mlx_transcribe_
+# worker.py, the 2026-09-05 fork-safety fix). A fresh process means
+# mlx_whisper's ModelHolder class cache starts empty every time —
+# per-transcription model loading is a property of that
+# architecture, not an in-process race, and no lock here can reach
+# across the process boundary. The concurrency control for MLX
+# model-loading cost is the mini-queue's 2-slot cap (fewer
+# simultaneous transcriptions = fewer simultaneous loads).
+_model_cache_lock = threading.Lock()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -650,8 +669,19 @@ def get_model(model_name: str = "base"):
     if model_name not in _model_cache:
         from faster_whisper import WhisperModel
 
-        # device="cpu" for broad compatibility; compute_type="int8" for speed
-        _model_cache[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
+        # 2026-09-16: locked check-and-load (launch hardening #2).
+        # Previously two threads could both see "not in cache" and
+        # each construct the model (~1-3GB each) — the 9/12 incident's
+        # memory multiplier. The lock is held only during
+        # construction; concurrent TRANSCRIBE calls on the returned
+        # model run outside it.
+        with _model_cache_lock:
+            if model_name not in _model_cache:
+                # device="cpu" for broad compatibility;
+                # compute_type="int8" for speed
+                _model_cache[model_name] = WhisperModel(
+                    model_name, device="cpu", compute_type="int8"
+                )
 
     return _model_cache[model_name]
 
