@@ -38,6 +38,14 @@ async def lifespan(app: FastAPI):
     # (they'd just sit in the queue forever).
     from app.workers.plugin_pool import plugin_pool
     plugin_pool.start()
+    # 2026-09-16 (launch hardening #4): start the transcription
+    # mini-queue scheduler in EVERY worker process. The atomic DB
+    # claim in app/services/transcribe_queue.py makes 4 competing
+    # schedulers safe (only one can flip each 'queued' row).
+    # Without this, uploads would write queued rows that nothing
+    # ever consumes — the pre-9/12 behavior.
+    from app.services.transcribe_queue import start_scheduler
+    start_scheduler()
     yield
     # MVP2.1.0.1 — graceful shutdown. Waits up to 30s
     # for in-flight plugin jobs to finish before the

@@ -164,7 +164,7 @@ async def upload_video(
             detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024**3)} GB",
         )
 
-    # Create video record and queue auto-pipeline
+    # Create video record — the row IS the queue entry
     # Sanitize filename for display — strip path components, control chars,
     # and cap length. The on-disk file already uses a UUID name, so this
     # only affects the title (UI) and filename (DB row) fields.
@@ -186,8 +186,10 @@ async def upload_video(
         whisper_model=get_default_model_choice(),
     )
     # Start the transcribe job tracker so the UI can poll /status
-    # immediately after the upload completes, before the background
-    # task has a chance to update it.
+    # immediately after the upload completes, before the scheduler
+    # has claimed the row (2026-09-16: the mini-queue now owns the
+    # dispatch — no more in-memory BackgroundTask that dies with
+    # restarts; the scheduler claims this row within ~3s).
     transcribe_job = start_job(
         video_id,
         "transcribe",
@@ -198,7 +200,11 @@ async def upload_video(
     db.add(video)
     db.commit()
 
-    background_tasks.add_task(_run_auto_pipeline, video_id, get_default_model_choice())
+    # NO background_tasks.add_task here — the mini-queue scheduler
+    # (app/services/transcribe_queue.py, started in main.py lifespan)
+    # claims 'queued' rows under the 2-slot cap with per-user
+    # fairness. This is the 9/12 fix: N uploads can no longer start
+    # N Whisper pipelines; restarts no longer evaporate work.
 
     return {"video_id": video_id, "status": "queued", "auto_process": True}
 
@@ -316,7 +322,9 @@ async def upload_bulk_videos(
         db.add(video)
         db.commit()
 
-        background_tasks.add_task(_run_auto_pipeline, video_id, get_default_model_choice())
+        # 2026-09-16: NO add_task — the mini-queue scheduler owns
+        # dispatch for bulk uploads too (same rationale as the
+        # single-upload endpoint above).
 
         results.append({
             "filename": filename,
@@ -742,9 +750,27 @@ async def get_video_status(
     transcribe_job = get_job(video_id, "transcribe")
     generate_job = get_job(video_id, "generate")
 
+    # 2026-09-16 (mini-queue): while the video sits in the queue, give
+    # the UI its position + ETA so the user sees 'queued, ~3 ahead,
+    # ~5 min' instead of a frozen 0% bar. Position is an honest FIFO
+    # estimate — the two-pass fairness can start a later video first
+    # if its owner is idle; the ETA uses the measured average
+    # transcribe duration (see transcribe_queue.queue_position).
+    queue_info = None
+    if video.status == "queued" and not video.youtube_id:
+        from app.services.transcribe_queue import queue_position
+
+        try:
+            queue_info = queue_position(db, video_id)
+        except Exception:
+            # Queue math must never break the status poll — worst case
+            # the UI shows the plain 'queued' state it always showed.
+            queue_info = None
+
     return {
         "video_id": video_id,
         "video_status": video.status,
+        "queue": queue_info,
         "transcribe_job": transcribe_job,
         "generate_job": generate_job,
         "eta_text": {

@@ -278,11 +278,43 @@ def no_auto_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
             ...
 
     to override this fixture for their scope.
+
+    2026-09-16 (mini-queue): ALSO freeze the transcription mini-queue
+    scheduler for every test. The real scheduler (started by the app
+    lifespan in main.py) polls the DB every 3s and claims 'queued'
+    rows — under TestClient the lifespan fires, so without this guard
+    any test that creates a queued video could have a REAL transcribe
+    pipeline spawned mid-test by a background thread (Whisper import,
+    GPU touch, nondeterministic status flips). We neutralize BOTH the
+    scheduler loop's pass function and its dispatch target:
+      - _scheduler_pass  → claims nothing, so no rows ever flip
+      - _staggered_transcribe_job stays the REAL function for the
+        dedicated queue tests — they mock it explicitly to assert
+        dispatch (see tests/test_transcribe_queue.py).
+    Thread-safety of the stub: a scheduler thread started by a
+    previous lifespan run SURVIVES between tests (module-level
+    daemon). The loop re-resolves _scheduler_pass as a module global
+    every tick, so this monkeypatch neutralizes even a live thread —
+    including between tests where monkeypatch teardown momentarily
+    restores the real function (a single pass then sees per-test
+    engines with no videos table; the real pass catches ALL
+    exceptions and logs — that's why _scheduler_pass must be
+    exception-proof, not just the loop).
     """
     monkeypatch.setattr(
         "app.routers.videos._run_auto_pipeline",
         lambda video_id, model_name="base": None,
     )
+    monkeypatch.setattr(
+        "app.services.transcribe_queue._scheduler_pass",
+        lambda db: 0,
+    )
+    # Prevent NEW scheduler threads from starting mid-suite (the
+    # dedicated queue tests never need the thread — they call the
+    # captured real pass directly).
+    import app.services.transcribe_queue as _tq
+
+    monkeypatch.setattr(_tq, "_scheduler_started", True)
 
 @pytest.fixture(autouse=True)
 def clear_whisper_model_cache() -> None:
