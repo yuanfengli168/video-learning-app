@@ -6,23 +6,45 @@ Loaded by `gunicorn -c gunicorn.conf.py app.main:app`.
 Why each setting is here (and the alternatives considered):
 
 workers = 4
-  Mac Studio has 10 CPU cores / 64 GB RAM. Each worker holds ~300 MB.
-  4 workers is comfortable (1.2 GB total) and gives us enough
-  headroom for Ollama (which uses the GPU/ANE), LiteLLM in-flight
-  requests, and SQLite writes. 4 workers × 2 threads = 8 concurrent
-  requests at once — plenty for soft-launch scale (10-20 users).
+  PRODUCTION MACHINE (verified 2026-09-16, audit doc decision #8):
+  Mac Studio 2023 (Mac14,13), Apple M2 Max, 30-core GPU, 32GB RAM.
+  Each worker holds ~300 MB; 4 workers ≈ 1.2 GB.
 
-  Why not more? More workers = more memory + more LLM-call concurrency,
-  which we don't need. Day 4's free-tier budget (Groq 250 req/day)
-  is the real constraint, not CPU.
+  NOTE: this comment block previously described a "Mac Studio 10 CPU
+  cores / 64 GB RAM" — a machine that never existed (the 9/12 audit
+  ran on the dev MacBook Pro M1 Max 64GB and confused the two). All
+  figures below are re-derived for the real 32GB box.
 
-threads = 2
-  2 threads per worker. Our LLM calls (Groq) block for 1-2s waiting
-  for the API. With 2 threads per worker, the event loop can switch
-  between requests in the same worker while one is waiting for the
-  LLM. We don't go higher because (a) more threads = more context
-  switching overhead, and (b) the per-day rate limit is the real
-  constraint, not per-request concurrency.
+  32GB budget (audit decision #12): macOS resident 4-10 GB + gunicorn
+  1.2 GB + MLX turbo model ~3 GB (loaded inside the SUBPROCESS worker;
+  the cache-lock keeps ONE copy for the in-process faster-whisper
+  side) + audio decode buffers ~0.5-1 GB × 2 slots (mini-queue cap) +
+  6 GB reserve. 4 workers fit comfortably with room for the
+  mini-queue's 2 transcribe slots.
+
+  Why 4 and not more: SQLite prefers few WRITERS (one at a time under
+  WAL since commit eec1f36) — more processes = more write contenders,
+  zero read benefit (WAL readers don't block). The concurrency win
+  comes from threads (below), not processes.
+
+threads = 8
+  8 threads per worker = 32 concurrent request slots total (was 2
+  threads = 8 slots before this commit).
+
+  Why the raise: the 9/12 outage analysis showed the 8-slot wall is
+  the site-wide hang amplifier — a handful of long-held requests
+  (LLM chat 5-30s, local-video FileResponse streaming, a slow upload)
+  fills 8 slots and every subsequent request, including /api/health,
+  queues forever. 32 slots raise the bar 4x for ~8 MB stack per
+  thread (~64 MB per worker — nothing on 32GB).
+
+  Why not 16+: threads don't fix the real per-request hogs (async LLM
+  calls + nginx file-offload are the Phase-2 fixes); 32 slots covers
+  the launch cohort (50-80 FREE browsing the zero-cost YouTube
+  catalog + 10-15 PAID) with headroom. Threads also cost context
+  switches on the 2-slot transcription box — 8 keeps the whisper
+  threads a minority of runnable threads, which matters more than
+  raw slot count when the GPU worker is saturating cores.
 
 worker_class = "uvicorn.workers.UvicornWorker"
   Use uvicorn's ASGI worker (async). Gunicorn's default sync worker
@@ -101,7 +123,11 @@ backlog = 2048  # default 2048; explicit so operators see the value
 
 # ── Worker model ─────────────────────────────────────────────────────────
 workers = 4
-threads = 2
+# 2026-09-16: 2 → 8 threads per worker (32 request slots total, was 8).
+# See the docstring above (audit decisions #8/#12): the 8-slot wall was
+# the 9/12 site-wide hang amplifier; 8 threads/worker costs ~64MB stacks
+# per worker — trivial on the verified 32GB box.
+threads = 8
 worker_class = "uvicorn.workers.UvicornWorker"
 
 # ── Timeouts ─────────────────────────────────────────────────────────────

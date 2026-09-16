@@ -167,14 +167,24 @@ class TestWorkerModel:
         )
 
     def test_threads_not_too_high(self, conf):
-        """threads > 4 per worker = diminishing returns.
+        """2026-09-16 update: threads 2 → 8 ratified by audit decisions
+        #8/#12 — the old <=4 cap reflected the pre-9/12 reasoning
+        ("bottleneck is async I/O, >4 wastes RAM") which missed that
+        LONG-HOLDING requests (LLM chat 5-30s, local-video
+        FileResponse streaming, slow uploads) occupy thread slots for
+        their whole duration and the 8-slot wall was the site-wide
+        hang amplifier of the 9/12 outage.
 
-        Python's GIL serializes CPU-bound work, and our async work
-        (LLM awaits) is the bottleneck, not threads. > 4 = wasted RAM.
+        New ceiling: 8 per worker. Above that the GIL + context
+        switching on the transcription box (whisper threads saturate
+        cores) starts costing more than the slots buy — the next real
+        fix for request hogs is async LLM calls + nginx file-offload
+        (Phase 2), not more threads.
         """
-        assert conf.threads <= 4, (
-            f"threads={conf.threads} — GIL serializes CPU work; our "
-            "bottleneck is async I/O, not threads. > 4 wastes RAM."
+        assert 4 <= conf.threads <= 8, (
+            f"threads={conf.threads} — ratified budget is 4..8 per "
+            "worker (audit decisions #8/#12); going lower rebuilds the "
+            "8-slot hang wall, going higher is GIL/context-switch waste"
         )
 
     def test_preload_app_is_set(self, conf):
