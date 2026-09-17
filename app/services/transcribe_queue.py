@@ -341,3 +341,130 @@ def queue_depth(db: Session) -> dict[str, Any]:
         "slots": SLOTS,
         "free": max(0, SLOTS - running),
     }
+
+
+# ── Upload caps (audit decision #9, 2026-09-16 ratified) ──────────────────
+#
+# Two gates, deliberately complementary:
+#   DAILY   15 new uploads/day/user   — bounds the ADMISSION RATE
+#            (quota semantics: counts rows created today; public
+#            queue delays do NOT eat it — cross-day no-rollover)
+#   IN-FLIGHT  6 unfinished videos     — bounds the STOCKPILE (the
+#            anti-abuse anchor: someone maxing 15/day for days can't
+#            keep a permanent mountain of pending work on the box)
+#
+# Both checked BEFORE accepting an upload; the response's 429 detail
+# carries the specific cap so the UI can show an actionable message.
+
+UPLOAD_DAILY_LIMIT = 15
+UPLOAD_IN_FLIGHT_LIMIT = 6
+
+# Parameterized join prefix (owner uid bound via :uid — NEVER string-
+# interpolated; uid comes from the verified session token but the
+# convention here is parameterized everywhere).
+_OWNED_JOIN = (
+    "SELECT COUNT(*) FROM videos v"
+    " JOIN sections s ON v.section_id = s.id"
+    " JOIN courses c ON s.course_id = c.id"
+    " WHERE c.user_id = :uid"
+)
+
+
+def upload_caps_check(db: Session, owner_uid: str) -> dict[str, Any]:
+    """Check the two upload caps for a user. Returns a dict:
+      {"allowed": True} or {"allowed": False, "reason": str,
+                            "cap": "daily"|"in_flight"}
+
+    The daily cap counts rows created since local-midnight UTC
+    (decision #9: created_at semantics, no cross-day rollover — a
+    queue delay must not eat the user's quota). The in-flight cap
+    counts unfinished work of ANY age.
+    """
+    if not owner_uid:
+        return {"allowed": True}
+
+    # Today's upload count (created_at >= today 00:00 UTC — matches
+    # events.ts naive-UTC convention).
+    today_start = _now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_count = int(db.execute(
+        text(f"{_OWNED_JOIN} AND v.created_at >= :today"),
+        {"uid": owner_uid, "today": today_start},
+    ).scalar() or 0)
+    if today_count >= UPLOAD_DAILY_LIMIT:
+        return {
+            "allowed": False,
+            "cap": "daily",
+            "reason": (
+                f"Daily upload limit reached ({UPLOAD_DAILY_LIMIT} videos). "
+                "It resets at midnight UTC — your videos in progress are "
+                "unaffected."
+            ),
+            "used_today": today_count,
+            "limit": UPLOAD_DAILY_LIMIT,
+        }
+
+    # Unfinished stockpile (queued/transcribing/generating all count —
+    # decision #9's 6-in-flight anchor).
+    in_flight = int(db.execute(
+        text(f"{_OWNED_JOIN} AND v.status IN ('queued','transcribing','generating')"),
+        {"uid": owner_uid},
+    ).scalar() or 0)
+    if in_flight >= UPLOAD_IN_FLIGHT_LIMIT:
+        return {
+            "allowed": False,
+            "cap": "in_flight",
+            "reason": (
+                f"You have {in_flight} videos still processing. Wait for "
+                f"some to finish (or delete queued ones you no longer want) "
+                f"before uploading more (limit: {UPLOAD_IN_FLIGHT_LIMIT} at once)."
+            ),
+            "in_flight": in_flight,
+            "limit": UPLOAD_IN_FLIGHT_LIMIT,
+        }
+
+    return {
+        "allowed": True,
+        "used_today": today_count,
+        "limit": UPLOAD_DAILY_LIMIT,
+        "in_flight": in_flight,
+    }
+
+
+def congestion_notice(db: Session) -> dict[str, Any] | None:
+    """The soft-guidance tier (decision #9): based on PUBLIC queue
+    congestion, never on the user's own usage. Returns None when the
+    queue is quiet (<30min expected wait), else a notice the UI shows
+    next to the upload button:
+
+      ~30min-2h: 'today is busy — upload the ones you want first'
+    Beta deliberately excludes the >2h red tier (decision #9).
+
+    The wait estimate: queue_depth().waiting × measured-average ÷
+    slots — the same honest arithmetic as the per-video ETA.
+    """
+    depth = queue_depth(db)
+    if depth["waiting"] <= 0:
+        return None
+    avg = db.execute(
+        text(
+            "SELECT AVG("
+            "  (strftime('%s', transcribed_at) - "
+            "   strftime('%s', transcribe_started_at)))"
+            " FROM videos WHERE status IN ('ready', 'generating')"
+            "   AND transcribe_started_at IS NOT NULL"
+            "   AND transcribed_at IS NOT NULL"
+            "   AND transcribed_at > datetime('now', '-30 days')"
+        )
+    ).scalar()
+    avg_seconds = float(avg) if avg else 90.0
+    wait_seconds = depth["waiting"] * avg_seconds / SLOTS
+    if wait_seconds < 30 * 60:
+        return None  # quiet — no notice
+    return {
+        "level": "busy",
+        "wait_minutes": round(wait_seconds / 60),
+        "message": (
+            "⏳ 今天处理压力较大，你的视频预计 ~X 小时后完成。"
+            "可以先传，也可以挑最想看的先传。"
+        ).replace("X 小时", f"{round(wait_seconds/3600, 1)} 小时"),
+    }

@@ -134,6 +134,20 @@ async def upload_video(
             detail=f"File type '{ext}' not allowed. Allowed: {ALLOWED_EXTENSIONS}",
         )
 
+    # 2026-09-17 (launch hardening #5, audit decision #9): the two
+    # upload caps BEFORE any disk write — 15/day (created_at-based,
+    # no cross-day rollover) + 6 unfinished in-flight. 429 with the
+    # cap-specific reason so the UI can show an actionable message.
+    from app.services.transcribe_queue import (
+        UPLOAD_DAILY_LIMIT,
+        congestion_notice,
+        upload_caps_check,
+    )
+
+    caps = upload_caps_check(db, user.get("uid", ""))
+    if not caps["allowed"]:
+        raise HTTPException(status_code=429, detail=caps["reason"])
+
     # Generate unique filename
     video_id = str(uuid.uuid4())
     saved_filename = f"{video_id}{ext}"
@@ -206,7 +220,17 @@ async def upload_video(
     # fairness. This is the 9/12 fix: N uploads can no longer start
     # N Whisper pipelines; restarts no longer evaporate work.
 
-    return {"video_id": video_id, "status": "queued", "auto_process": True}
+    return {
+        "video_id": video_id,
+        "status": "queued",
+        "auto_process": True,
+        # 2026-09-17 (decision #9): the congestion notice (public
+        # queue state, never the user's own usage) + remaining caps —
+        # the UI shows the notice next to the upload button and uses
+        # caps_left to warn proactively.
+        "congestion": congestion_notice(db),
+        "caps_left_today": UPLOAD_DAILY_LIMIT - (caps.get("used_today", 0) + 1),
+    }
 
 
 @router.post("/upload-bulk/{section_id}")
@@ -243,9 +267,27 @@ async def upload_bulk_videos(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
+    # 2026-09-17 (audit decision #9): bulk uploads share the SAME two
+    # caps as single uploads — 15/day + 6 in-flight. Unlike the single
+    # upload (one 429), the bulk path reports PER-FILE outcomes so a
+    # 15-file batch landing on a half-full day still delivers what
+    # fits — each file is evaluated against the PROJECTED totals
+    # (existing + accepted-so-far in this batch). No batch-level
+    # rejection: a wholly-capped batch returns every file skipped
+    # with its cap reason (the UI's per-file error display).
+    from app.services.transcribe_queue import upload_caps_check
+
+    caps = upload_caps_check(db, user.get("uid", ""))
+
     results: list[dict[str, Any]] = []
     queued = 0
     skipped = 0
+
+    # Projected caps for the batch (existing + this batch's accepted
+    # files must respect both limits — evaluated per file so partial
+    # batches still deliver what fits).
+    in_flight_base = int(caps.get("in_flight", 0))
+    today_base = int(caps.get("used_today", 0))
 
     for upload_file in files:
         filename = upload_file.filename or ""
@@ -256,6 +298,29 @@ async def upload_bulk_videos(
                 "filename": filename,
                 "status": "skipped",
                 "error": f"File type '{ext}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+            })
+            skipped += 1
+            continue
+
+        # Projected caps (decision #9): existing + accepted-so-far
+        # must stay within BOTH limits — a 15-file batch landing on a
+        # half-full day gets partially accepted, each remaining file
+        # reported as skipped with the exact cap reason.
+        if today_base + queued + 1 > 15:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": "Daily upload limit reached (15/day). The rest of "
+                         "this batch can be uploaded after midnight UTC.",
+            })
+            skipped += 1
+            continue
+        if in_flight_base + queued + 1 > 6:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": "Too many videos still processing (6 at once). "
+                         "Re-upload the rest once some finish.",
             })
             skipped += 1
             continue
