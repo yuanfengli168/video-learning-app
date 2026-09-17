@@ -50,7 +50,7 @@ prove (GPU stack, external-volume mmap, launchd chain). Run BOTH:
 
 ```
 cd ~/Desktop/Githubs/video-learning-app && git pull
-venv/bin/python -m pytest -q        # expect 1475 passing
+venv/bin/python -m pytest -q        # expect 1509 passing
 ```
 
 The suite is machine-agnostic (the conftest mocks transcription
@@ -89,6 +89,46 @@ listener only fires for file-backed SQLite.
 | `eec1f36` | SQLite → WAL + busy_timeout 5s + synchronous=NORMAL | Zero-migration: first connection after restart flips the mode. WAL files appear next to the DB. Reads stop stalling behind telemetry writes |
 | `f605486` | model-cache threading.Lock (faster-whisper side) | None visible; MLX side intentionally untouched (subprocess architecture) |
 | `821c8e4` | gunicorn threads 2 → 8 (32 slots); capacity docstring rewritten for the verified 32GB | Slightly higher per-worker memory (~64MB stacks × 4 workers) — well within budget |
+| `0f1cb30` | **Transcription mini-queue**: uploads no longer dispatch BackgroundTasks — `queued` DB rows are claimed by a per-worker scheduler thread (2 slots, two-pass per-user fairness, atomic claim, 5s stagger). Queue position + ETA in the /status poll | Uploads take up to ~3s to START transcribing (was instant). Restarts no longer lose work. **No user action needed if uploads seem briefly idle — the scheduler polls every 3s** |
+| `240b048` | **Upload caps**: 15/day/user (created_at-based, no cross-day rollover) + 6 unfinished in-flight; congestion soft notice on the 202 response | 429s with actionable messages; a fully-capped user sees "resets at midnight UTC". Bulk returns per-file outcomes (partial acceptance), never a batch-level rejection |
+| `ed4f004` | **Queued-video ✕ cancel** on the course page + **Upload activity card** on /admin/analytics (mean/median/max/top-5 + live queue gauge) | ✕ only on queued rows (deleting transcribing is disabled by design). The admin card is the launch-week cockpit — check queue depth there daily |
+
+### Live-fire checklist v2 (2026-09-17 — includes the queue/caps batch)
+
+Run Layer 1 + 2 as before, then:
+
+```
+# Layer 3: the mini-queue (new behavior — verify on the Studio)
+
+# 3a. Upload ONE small test video via the browser as a PAID user.
+#     Expected: 202 instant, video page shows
+#     'queued · 第 1 位' style position (or claimed within ~3s and
+#     the transcribe progress bar starts). If it sits at 0% forever
+#     with no queue info → the scheduler thread didn't start; check
+#     the server log for 'mini-queue scheduler started' (expect 4,
+#     one per worker).
+
+# 3b. While it transcribes: watch the COURSE page — the row badge
+#     flips queued → transcribing → (generating) → ready · T:.. G:..
+#     and the ✕ disappears once transcribing starts.
+
+# 3c. Queue a SECOND video while the first runs → confirm the
+#     status poll shows a queue position/ETA, and after the first
+#     completes the second starts within one scheduler tick (~3s).
+
+# 3d. Upload 3 tiny files in one bulk batch → all 3 queue; per-file
+#     results OK. Then check /admin/analytics → the Upload activity
+#     card shows your test uploads + the queue gauge (waiting/running).
+
+# 3e. With a queued row on the course page, click ✕ → confirm dialog
+#     → row disappears, DELETE removed file+row (check the section
+#     video count drops).
+```
+
+**Launch-day watch items (new):** the Upload activity card is the
+daily cockpit — queue `waiting` should drain within an hour of any
+burst; `mean ≈ median` means load is uniform; a red max/user/day
+>10 means investigate that user.
 
 ---
 
