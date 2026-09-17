@@ -447,6 +447,115 @@ def get_llm_provider_usage(db: Session, days: int = 7) -> list[dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Upload activity (2026-09-17 — decision #11)
+#
+# The admin's upload-abuse/health probe. Key design: mean vs median
+# displayed SIDE BY SIDE — the gap is the signal (mean 5 / median 2
+# = one 40-video user dragging the average; mean≈median = uniform
+# load). Plus max/user/day (the abuse probe), top-5 uploaders, and
+# the live queue gauge (queue_depth from the mini-queue).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def get_upload_activity(db: Session, days: int = 7) -> dict[str, Any]:
+    """Upload activity card for /admin/analytics (decision #11).
+
+    Shape:
+      {
+        "uploaders": n,            # distinct users who uploaded
+        "total": n,                # uploads in window
+        "per_day": [{day, uploads, uploaders}],
+        "mean_per_user_day": f,    # mean uploads/user/day
+        "median_per_user_day": f,  # median (the gap vs mean = skew)
+        "max_user_day": {user_id, email, day, uploads},
+        "top_uploaders": [{user_id, email, uploads}],  # top 5
+        "queue": {waiting, running, slots, free},      # live gauge
+      }
+    """
+    from app.services.transcribe_queue import queue_depth
+
+    cutoff = f"-{days} days"
+
+    per_user_day = db.execute(
+        text(
+            """
+            SELECT c.user_id AS uid, u.email AS email,
+                   date(v.created_at) AS day,
+                   COUNT(*) AS uploads
+            FROM videos v
+            JOIN sections s ON v.section_id = s.id
+            JOIN courses c ON s.course_id = c.id
+            LEFT JOIN users u ON u.user_id = c.user_id
+            WHERE v.created_at >= datetime('now', :cutoff)
+            GROUP BY uid, day
+            ORDER BY uploads DESC
+            """
+        ),
+        {"cutoff": cutoff},
+    ).fetchall()
+
+    per_day = db.execute(
+        text(
+            """
+            SELECT date(created_at) AS day, COUNT(*) AS uploads,
+                   COUNT(DISTINCT owner) AS uploaders
+            FROM (
+                SELECT v.created_at, c.user_id AS owner
+                FROM videos v
+                JOIN sections s ON v.section_id = s.id
+                JOIN courses c ON s.course_id = c.id
+                WHERE v.created_at >= datetime('now', :cutoff)
+            )
+            GROUP BY day ORDER BY day ASC
+            """
+        ),
+        {"cutoff": cutoff},
+    ).fetchall()
+
+    counts = [int(r[3]) for r in per_user_day]
+    uploaders = len({r[0] for r in per_user_day})
+    total = sum(counts)
+
+    # Median (per user-day upload counts).
+    if counts:
+        s = sorted(counts)
+        mid = len(s) // 2
+        median = float(s[mid]) if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+    else:
+        median = 0.0
+    mean = (total / len(counts)) if counts else 0.0
+
+    # Max + top-5 (both from per_user_day, already sorted desc).
+    max_row = per_user_day[0] if per_user_day else None
+    top5 = [
+        {"user_id": r[0], "email": r[1] or "(unknown)", "uploads": int(r[3])}
+        for r in per_user_day[:5]
+    ]
+
+    return {
+        "uploaders": uploaders,
+        "total": total,
+        "per_day": [
+            {"day": r[0], "uploads": int(r[1]), "uploaders": int(r[2])}
+            for r in per_day
+        ],
+        "mean_per_user_day": round(mean, 2),
+        "median_per_user_day": round(median, 2),
+        "max_user_day": (
+            {
+                "user_id": max_row[0],
+                "email": max_row[1] or "(unknown)",
+                "day": max_row[2],
+                "uploads": int(max_row[3]),
+            }
+            if max_row else None
+        ),
+        "top_uploaders": top5,
+        "queue": queue_depth(db),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Playback analytics (2026-09-06)
 #
 # Powers /admin/playback — answers "who played which video, for how long".

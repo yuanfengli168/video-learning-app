@@ -111,6 +111,72 @@
     {# ── Content structure (2026-09-12): courses × sections × videos ── #}
     {# Backing data for feature decisions (e.g. "do we need a course
        search bar?" — answer depends on course depth). #}
+    {% if upload_activity %}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">📤 Upload activity</h2>
+        <p class="text-xs text-gray-400 mb-4">
+            {{ upload_activity.uploaders }} uploader{{ upload_activity.uploaders == 1 and '' or 's' }} ·
+            {{ upload_activity.total }} upload{{ upload_activity.total == 1 and '' or 's' }} in window
+        </p>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                <div class="text-xs text-gray-500">Mean / user / day</div>
+                <div class="text-2xl font-bold">{{ upload_activity.mean_per_user_day }}</div>
+            </div>
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                <div class="text-xs text-gray-500">Median / user / day</div>
+                <div class="text-2xl font-bold">{{ upload_activity.median_per_user_day }}</div>
+            </div>
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                <div class="text-xs text-gray-500">Max / user / day</div>
+                {% if upload_activity.max_user_day %}
+                <div class="text-2xl font-bold {% if upload_activity.max_user_day.uploads > 10 %}text-red-600 dark:text-red-400{% endif %}">
+                    {{ upload_activity.max_user_day.uploads }}
+                </div>
+                <div class="text-[11px] text-gray-400 truncate">{{ upload_activity.max_user_day.email }}</div>
+                {% else %}<div class="text-2xl font-bold">–</div>{% endif %}
+            </div>
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                <div class="text-xs text-gray-500">Queue now</div>
+                <div class="text-2xl font-bold">{{ upload_activity.queue.waiting }}</div>
+                <div class="text-[11px] text-gray-400">
+                    waiting · {{ upload_activity.queue.running }}/{{ upload_activity.queue.slots }} running
+                </div>
+            </div>
+        </div>
+        {# mean vs median comment line: the gap is the skew signal #}
+        <p class="text-xs text-gray-400 mb-3">
+            {% set gap = upload_activity.mean_per_user_day - upload_activity.median_per_user_day %}
+            {% if gap > 2 %}
+            ⚠️ Mean 远高于 Median —— 有重度用户在拖高平均（看下方 top-5 是谁）。
+            {% else %}
+            Mean ≈ Median —— 上传负载均匀。
+            {% endif %}
+        </p>
+        {% if upload_activity.top_uploaders %}
+        <table class="w-full text-sm text-left text-gray-700 dark:text-gray-300">
+            <thead>
+                <tr class="border-b border-gray-200 dark:border-gray-700">
+                    <th class="px-3 py-2 font-medium text-gray-500">Top uploaders</th>
+                    <th class="px-3 py-2 font-medium text-gray-500 text-right">Uploads</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in upload_activity.top_uploaders %}
+                <tr class="border-b border-gray-100 dark:border-gray-700">
+                    <td class="px-3 py-2">{{ u.email }}</td>
+                    <td class="px-3 py-2 text-right">{{ u.uploads }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ── Content structure (2026-09-12): courses × sections × videos ── #}
+    {# Backing data for feature decisions (e.g. "do we need a course
+       search bar?" — answer depends on course depth). #}
     {% if stats.structure %}
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-8">
         <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">Content structure</h2>

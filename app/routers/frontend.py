@@ -978,15 +978,19 @@ async def admin_analytics_page(
     and most-active users over the last `days` days (default 7).
     See app/services/analytics.py::get_analytics_overview.
     """
-    from app.services.analytics import get_analytics_overview
+    from app.services.analytics import get_analytics_overview, get_upload_activity
 
     # Bounded window — no unbounded scans.
     days = max(1, min(days, 90))
     stats = get_analytics_overview(db, days=days)
+    # 2026-09-17 (decision #11): the upload-activity card (mean vs
+    # median skew probe + max/user/day + top-5 + the live queue
+    # gauge) — same window as the rest of the page.
+    upload_activity = get_upload_activity(db, days=days)
     return templates.TemplateResponse(
         request,
         "admin_analytics.html",
-        _ctx(request, user, db=db, stats=stats),
+        _ctx(request, user, db=db, stats=stats, upload_activity=upload_activity),
     )
 
 

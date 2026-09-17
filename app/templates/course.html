@@ -141,22 +141,39 @@
             <div id="section-{{ section.id }}" class="hidden border-t border-gray-200 dark:border-gray-700">
                 <div class="p-4 space-y-2" data-video-list>
                     {% for video in section.videos %}
-                    <a href="/video/{{ video.id }}"
-                       data-sort-key="{{ video.title | natural_sort_key_str }}"
-                       data-title="{{ video.title | lower }}"
-                       class="video-row flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                        <span class="flex items-center space-x-2">
-                            <span>🎬</span>
-                            <span>{{ video.title }}</span>
-                        </span>
-                        <span class="text-xs px-2 py-1 rounded
-                            {% if video.status == 'ready' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
-                            {% elif video.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                            {% elif video.status in ('transcribing', 'generating', 'queued') %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
-                            {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
-                            {{ video.status }}{% if video.status == 'ready' and video.generated_at %}{% if video.transcribe_started_at and video.transcribed_at %} · T:{{ (video.transcribed_at - video.transcribe_started_at).total_seconds() | format_duration }}, G:{{ (video.generated_at - video.transcribed_at).total_seconds() | format_duration }}{% elif video.created_at %} · {{ (video.generated_at - video.created_at).total_seconds() | format_duration }}{% endif %}{% endif %}
-                        </span>
-                    </a>
+                    <div class="video-row flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <a href="/video/{{ video.id }}"
+                           data-sort-key="{{ video.title | natural_sort_key_str }}"
+                           data-title="{{ video.title | lower }}"
+                           class="flex-1 flex items-center justify-between min-w-0 hover:no-underline">
+                            <span class="flex items-center space-x-2 min-w-0">
+                                <span>🎬</span>
+                                <span class="truncate">{{ video.title }}</span>
+                            </span>
+                            <span class="text-xs px-2 py-1 rounded
+                                {% if video.status == 'ready' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
+                                {% elif video.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                                {% elif video.status in ('transcribing', 'generating', 'queued') %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
+                                {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
+                                {{ video.status }}{% if video.status == 'ready' and video.generated_at %}{% if video.transcribe_started_at and video.transcribed_at %} · T:{{ (video.transcribed_at - video.transcribe_started_at).total_seconds() | format_duration }}, G:{{ (video.generated_at - video.transcribed_at).total_seconds() | format_duration }}{% elif video.created_at %} · {{ (video.generated_at - video.created_at).total_seconds() | format_duration }}{% endif %}{% endif %}
+                            </span>
+                        </a>
+                        {# Queued-cancel (2026-09-17, decision #9): a
+                           queued video hasn't started transcribing —
+                           deleting it wastes NOTHING (no GPU spent yet)
+                           and frees the queue + the in-flight cap.
+                           Once transcribing, NO cancel (GPU already
+                           burning; killing a thread mid-Metal is
+                           dangerous — let it finish). Uses the
+                           existing DELETE endpoint (row + file). #}
+                        {% if video.status == 'queued' and video.youtube_id is none %}
+                        <button
+                            onclick="cancelQueuedVideo('{{ video.id }}', '{{ video.title|e }}', this)"
+                            class="ml-2 flex-shrink-0 text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-400 hover:border-red-400 hover:text-red-500"
+                            title="取消排队（还没开始转写，删掉不浪费任何处理）"
+                        >✕</button>
+                        {% endif %}
+                    </div>
                     {% else %}
                     <p class="text-sm text-gray-400 py-2">No videos in this section</p>
                     {% endfor %}
@@ -752,6 +769,44 @@ async function retryStuckVideos(courseId, sectionId, btn) {
             btn.classList.remove('opacity-60', 'cursor-not-allowed');
             btn.textContent = originalLabel;
         }
+    }
+}
+
+// ── Queued-video cancel (2026-09-17, decision #9) ─────────────────────
+// A queued video hasn't started transcribing — deleting it wastes
+// nothing (no GPU spent) and frees the queue + the 6-in-flight cap.
+// Reuses the existing DELETE endpoint (row + on-disk file). A
+// confirm dialog names the video — this is a destructive action on
+// user content, same pattern as the video-page delete.
+async function cancelQueuedVideo(videoId, title, btn) {
+    if (!confirm(`删除排队中的视频 "${title}"？\n它还没开始转写——现在删除不浪费任何处理资源，也会释放你的上传额度。`)) {
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳';
+    }
+    try {
+        const resp = await fetch(`/api/videos/${videoId}`, { method: 'DELETE' });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            showToast('删除失败: ' + (err.detail || resp.statusText), 'error');
+            if (btn) { btn.disabled = false; btn.textContent = '✕'; }
+            return;
+        }
+        const data = await resp.json();
+        const parts = [];
+        const d = data.deleted || {};
+        if (d.files > 0) parts.push(`${d.files} 个文件`);
+        if (d.videos) parts.push('1 个视频');
+        showToast(`已取消排队${parts.length ? '（删除 ' + parts.join(' + ') + '）' : ''}`, 'success');
+        // Remove the row without a full reload (the queue position of
+        // siblings shifts server-side on the next poll).
+        const row = btn.closest('.video-row');
+        if (row) row.remove();
+    } catch (e) {
+        showToast('网络错误: ' + e.message, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '✕'; }
     }
 }
 
