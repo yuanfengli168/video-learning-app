@@ -22,9 +22,19 @@ TOKEN_A = "fake-token-for-alice"
 TOKEN_B = "fake-token-for-bob"
 
 
-def test_switch_accounts_via_new_session_cookie(client: TestClient):
+def test_switch_accounts_via_new_session_cookie(client: TestClient, monkeypatch):
     """After login/logout/login with a different account, /api/auth/me
-    should return the NEW user, not the old one."""
+    should return the NEW user, not the old one.
+
+    2026-09-18 fix: pin cookie_secure=False. With the prod .env's
+    COOKIE_SECURE=true, the TestClient cookie jar stores the Secure
+    cookie but never sends it over its default http://testserver —
+    /me came back 401 on the Studio. The account-switching logic this
+    test pins is orthogonal to the Secure flag.
+    """
+    from app.config import settings
+    monkeypatch.setattr(settings, "cookie_secure", False)
+
     # MVP2.0.6: conftest client fixture sets a default valid
     # cookie. Clear it so the test starts from a clean state.
     client.cookies.clear()

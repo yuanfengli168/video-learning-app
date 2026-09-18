@@ -81,8 +81,52 @@ def test_auth_with_cookie(client: TestClient):
     assert response.json()["uid"] == "test-user-uid"
 
 
-def test_auth_cookie_takes_priority_over_header(client: TestClient):
-    """Cookie should be checked before Authorization header."""
+# ── Cookie Secure flag (2026-09-12, go-live prep) ───────────────────────────
+# COOKIE_SECURE is env-driven: false for localhost http, true behind the
+# HTTPS tunnel in production. These tests pin BOTH behaviors. Both
+# monkeypatch the settings SINGLETON — they must not read the machine's
+# real .env (the prod Studio sets COOKIE_SECURE=true, which broke
+# test_cookie_secure_false_by_default 2026-09-18 until isolated).
+
+def test_cookie_secure_false_when_disabled(client: TestClient, monkeypatch):
+    """COOKIE_SECURE=false → the Set-Cookie header must NOT carry Secure —
+    browsers refuse Secure cookies over plain http://localhost, which
+    would break every local login."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "cookie_secure", False)
+    with patch("app.auth.session.verify_token", return_value=FAKE_USER):
+        resp = client.post("/api/auth/session", json={"id_token": FAKE_TOKEN})
+    assert resp.status_code == 200
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "secure" not in set_cookie.lower()
+
+
+def test_cookie_secure_true_when_env_set(client: TestClient, monkeypatch):
+    """COOKIE_SECURE=true → the Set-Cookie header carries Secure."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "cookie_secure", True)
+    with patch("app.auth.session.verify_token", return_value=FAKE_USER):
+        resp = client.post("/api/auth/session", json={"id_token": FAKE_TOKEN})
+    assert resp.status_code == 200
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "secure" in set_cookie.lower()
+
+
+def test_auth_cookie_takes_priority_over_header(client: TestClient, monkeypatch):
+    """Cookie should be checked before Authorization header.
+
+    2026-09-18 fix: with COOKIE_SECURE=true (prod config), the TestClient's
+    cookie jar stores the Secure cookie but will only SEND it over HTTPS.
+    The TestClient's default base_url is http://testserver — the cookie
+    is never attached, so the 'cookie wins over header' path silently
+    never ran (surfaced on the Studio). Two options: switch the client
+    to https base_url, or pin cookie_secure=False for this test since
+    the priority logic is orthogonal to the Secure flag. We pin False
+    (same as local dev behavior the feature was written for).
+    """
+    from app.config import settings
+    monkeypatch.setattr(settings, "cookie_secure", False)
+
     from app.auth.session import COOKIE_NAME
 
     # Set a valid cookie
@@ -98,30 +142,3 @@ def test_auth_cookie_takes_priority_over_header(client: TestClient):
         # The cookie token should be used (not the header token)
         mock_verify.assert_called_once_with(FAKE_TOKEN)
     assert response.status_code == 200
-
-# ── Cookie Secure flag (2026-09-12, go-live prep) ───────────────────────────
-# COOKIE_SECURE is env-driven: false for localhost http, true behind the
-# HTTPS tunnel in production. These tests pin BOTH behaviors.
-
-def test_cookie_secure_false_by_default(client: TestClient):
-    """Default (local dev): the Set-Cookie header must NOT carry Secure —
-    browsers refuse Secure cookies over plain http://localhost, which
-    would break every local login."""
-    with patch("app.auth.session.verify_token", return_value=FAKE_USER):
-        resp = client.post("/api/auth/session", json={"id_token": FAKE_TOKEN})
-    assert resp.status_code == 200
-    set_cookie = resp.headers.get("set-cookie", "")
-    assert "secure" not in set_cookie.lower()
-
-
-def test_cookie_secure_true_when_env_set(client: TestClient, monkeypatch):
-    """COOKIE_SECURE=true → the Set-Cookie header carries Secure."""
-    from app.config import settings
-    from app.auth.session import settings as session_settings_module  # noqa: F401
-
-    monkeypatch.setattr(settings, "cookie_secure", True)
-    with patch("app.auth.session.verify_token", return_value=FAKE_USER):
-        resp = client.post("/api/auth/session", json={"id_token": FAKE_TOKEN})
-    assert resp.status_code == 200
-    set_cookie = resp.headers.get("set-cookie", "")
-    assert "secure" in set_cookie.lower()

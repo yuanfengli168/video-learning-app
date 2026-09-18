@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,6 +54,34 @@ ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
 # 10 GB peaks at ~10 GB RAM during the upload. Tested with a synthetic
 # 10 GB upload in test_videos.py::test_upload_accepts_10_gb_file.
 MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB
+
+# 2026-09-18 (tunnel launch): Cloudflare's FREE plan caps request
+# bodies at 100 MB — anything bigger is rejected at the EDGE before
+# reaching this server, surfacing as an opaque "server error" in the
+# UI (hit with a real 700 MB upload through www.capysmart.com). So the
+# effective cap depends on the request PATH:
+#   - direct (localhost / LAN):      10 GB (admin's big-file workflow)
+#   - through the Cloudflare tunnel:  100 MB (platform limit, not ours)
+# Cloudflare stamps every tunneled request with a Cf-Connecting-Ip
+# header, which is the honest signal that the request traversed the
+# edge. See tests/test_videos.py::test_upload_cap_*_cloudflare*.
+TUNNEL_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB — Cloudflare free plan
+TUNNEL_SIZE_HINT = (
+    "Cloudflare (the free tunnel plan) caps uploads at 100 MB, so this "
+    "can't go through the public site. Upload the file directly from the "
+    "server machine (http://localhost:8000) or split/compress it."
+)
+
+
+def _effective_max_file_size(request: Request) -> int:
+    """Per-request upload cap: 100 MB via the Cloudflare tunnel, 10 GB direct.
+
+    Cloudflare sets Cf-Connecting-Ip on every request it proxies; a
+    direct localhost/LAN request has no such header.
+    """
+    if request.headers.get("cf-connecting-ip") is not None:
+        return TUNNEL_MAX_FILE_SIZE
+    return MAX_FILE_SIZE
 
 
 @router.get("/models")
@@ -102,6 +130,7 @@ async def list_whisper_models() -> dict[str, Any]:
 
 @router.post("/upload/{section_id}", status_code=202)
 async def upload_video(
+    request: Request,
     section_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -171,8 +200,13 @@ async def upload_video(
             status_code=400,
             detail="File is empty (0 bytes). The upload may have been cancelled or the source file is broken.",
         )
-    if file_size > MAX_FILE_SIZE:
+    if file_size > _effective_max_file_size(request):
         os.remove(file_path)
+        if request.headers.get("cf-connecting-ip") is not None:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large ({file_size / (1024**2):.0f} MB). {TUNNEL_SIZE_HINT}",
+            )
         raise HTTPException(
             status_code=413,
             detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024**3)} GB",
@@ -235,6 +269,7 @@ async def upload_video(
 
 @router.post("/upload-bulk/{section_id}")
 async def upload_bulk_videos(
+    request: Request,
     section_id: str,
     files: list[UploadFile],
     background_tasks: BackgroundTasks,
@@ -354,14 +389,21 @@ async def upload_bulk_videos(
             })
             skipped += 1
             continue
-        if file_size > MAX_FILE_SIZE:
+        if file_size > _effective_max_file_size(request):
             os.remove(file_path)
-            gb = file_size / (1024 ** 3)
-            results.append({
-                "filename": filename,
-                "status": "skipped",
-                "error": f"File too large ({gb:.1f} GB). Max: {MAX_FILE_SIZE // (1024 ** 3)} GB",
-            })
+            if request.headers.get("cf-connecting-ip") is not None:
+                results.append({
+                    "filename": filename,
+                    "status": "skipped",
+                    "error": f"File too large ({file_size / (1024**2):.0f} MB). {TUNNEL_SIZE_HINT}",
+                })
+            else:
+                gb = file_size / (1024 ** 3)
+                results.append({
+                    "filename": filename,
+                    "status": "skipped",
+                    "error": f"File too large ({gb:.1f} GB). Max: {MAX_FILE_SIZE // (1024 ** 3)} GB",
+                })
             skipped += 1
             continue
 
