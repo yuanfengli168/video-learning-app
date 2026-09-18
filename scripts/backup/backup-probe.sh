@@ -40,19 +40,37 @@ else
 fi
 LOG="$HOME/Library/Logs/video-app-backup.log"
 
-# The TCC-clean venv path. macOS TCC blocks root-launched bash from reading
-# pyvenv.cfg under ~/Desktop/, so we use a symlinked python from a TCC-clean
-# location. The TCC-clean path is ~/Library/Application Support/VideoApp/venv/
-# which is set up by install-backup-launchdaemon.sh. Falls back to the
-# in-repo venv for dev machines where TCC isn't an issue.
-TCC_CLEAN_VENV="$HOME/Library/Application Support/VideoApp/venv"
-if [[ -x "$TCC_CLEAN_VENV/bin/python" ]]; then
-    PYTHON_BIN="$TCC_CLEAN_VENV/bin/python"
+# Which python runs the probe?
+#
+# /usr/bin/python3 — the system python, ALWAYS preferred under launchd.
+# Why: TCC Full Disk Access is granted per-binary, and GO-LIVE-INSTALL.md
+# Step 3 has the admin grant FDA to /usr/bin/python3, /bin/bash and
+# /usr/bin/sqlite3. The Homebrew/venv python is a DIFFERENT binary with
+# NO FDA grant, so root-launched it gets "Operation not permitted" on
+# /Volumes/Storage-Backup-HDD (verified 2026-09-17: bash saw 45 backup
+# files, venv python saw PermissionError).
+#
+# backup_monitor.py is stdlib-only (json/os/plistlib/subprocess/dataclasses)
+# so it doesn't need the app venv at all — /usr/bin/python3 (3.9) is enough.
+#
+# The venv fallback is only for dev machines where the script is run
+# manually from a terminal (Terminal.app has its own FDA/session TCC).
+if [[ -x /usr/bin/python3 ]]; then
+    PYTHON_BIN="/usr/bin/python3"
 else
     PYTHON_BIN="$PROJECT_ROOT/venv/bin/python"
 fi
 
-log() { echo "[$(date '+%F %T')] [probe] $*" | tee -a "$LOG"; }
+# Log to stdout AND $LOG. The log append must never kill the probe
+# (set -euo pipefail + an unwritable log file would otherwise abort
+# before collect_status runs — 2026-09-18 Studio incident class).
+# Write stdout exactly once; try the file append separately so a
+# failure there can't double-print or abort.
+log() {
+    local line="[$(date '+%F %T')] [probe] $*"
+    echo "$line"
+    { echo "$line" >> "$LOG"; } 2>/dev/null || true
+}
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
     log "ERROR: python not found at $PYTHON_BIN"
@@ -71,7 +89,7 @@ fi
 # open() all silently fail or return EPERM.
 #
 # install-backup-launchdaemon.sh keeps this copy in sync with the repo.
-PROBE_SCRIPT="${PROBE_RUNTIME_DIR:-/Users/jackyli/Library/Application Support/VideoApp/scripts/backup/probe}/backup_monitor.py"
+PROBE_SCRIPT="${PROBE_RUNTIME_DIR:-$HOME/Library/Application Support/VideoApp/scripts/backup/probe}/backup_monitor.py"
 log "DEBUG: PROJECT_ROOT=$PROJECT_ROOT, python_bin=$PYTHON_BIN, PROBE_SCRIPT=$PROBE_SCRIPT"
 if [[ ! -f "$PROBE_SCRIPT" ]]; then
     log "ERROR: probe script missing at $PROBE_SCRIPT"

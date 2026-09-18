@@ -204,9 +204,10 @@ System Settings → Privacy & Security → Full Disk Access → click **+** → 
 |---|---|
 | `/usr/bin/sqlite3` | backup jobs use it to .backup the live DB |
 | `/bin/bash` | shell that runs the backup scripts under launchd |
-| `/usr/bin/python3` | the probe script runs Python under launchd |
+| `/usr/bin/python3` | the probe + prune jobs run Python under launchd (both stdlib-only) |
+| `<repo>/venv/bin/python` | the app server (gunicorn) + refresh-youtube-views run the **venv** python under launchd. FDA is per-binary: the venv python is a DIFFERENT binary from /usr/bin/python3 — without its own grant, gunicorn gets "Operation not permitted" reading `/Volumes/Storage-Fast-NVMe/video_learning.db` (verified 2026-09-17 on the Studio: same code, root terminal OK, launchd blocked). In the Go to Folder dialog enter the full path, e.g. `~/Code-Prod/video-learning-app/venv/bin/python` (Cmd+Shift+G expands `~`). The venv python is a symlink to Homebrew's `python3.14`; macOS resolves and grants the underlying binary, so this one grant covers every venv invocation. |
 
-Without these three, **all backup jobs silently fail with exit code 126** (TCC blocks sqlite3 from `/Volumes/Storage-Fast-NVMe/`). This is the single most common reason backups stop working on a new host. Verify after granting:
+Without these four, **all backup jobs silently fail with exit code 126** (TCC blocks sqlite3 from `/Volumes/Storage-Fast-NVMe/`), and worse, the backup **probe** reports `healthy=false` forever because it can't stat the RAID. This is the single most common reason backups stop working on a new host. Verify after granting:
 
 ```bash
 sudo launchctl kickstart -k system/com.videoapp.backup-db

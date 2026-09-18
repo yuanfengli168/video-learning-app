@@ -233,7 +233,16 @@ class PluginPool:
         """
         from datetime import datetime, timedelta, timezone
 
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+        # created_at is stored as NAIVE UTC (SQLite func.now() server
+        # default — see the Video model note "Stored as naive UTC").
+        # Use naive UTC for the cutoff and the age computation so the
+        # subtraction never mixes aware and naive datetimes (TypeError:
+        # can't subtract offset-naive and offset-aware datetimes —
+        # seen on the Studio 2026-09-18: the sweep crashed on every
+        # worker boot, so orphaned plugin runs were never cleaned up).
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=60
+        )
         db = SessionLocal()
         try:
             stuck = (
@@ -245,18 +254,20 @@ class PluginPool:
                 .all()
             )
             for row in stuck:
+                prior_status = row.status
                 row.status = "failed"
                 row.ok = 0
                 row.message = (
-                    f"Run was abandoned (status was {row.status!r} when "
+                    f"Run was abandoned (status was {prior_status!r} when "
                     f"the server restarted). Re-run the plugin to retry."
                 )
                 logger.warning(
                     "PluginPool startup sweep: marking orphaned run %s "
                     "(status was %s, age=%s) as failed",
                     row.id,
-                    row.status,
-                    datetime.now(timezone.utc) - row.created_at,
+                    prior_status,
+                    datetime.now(timezone.utc).replace(tzinfo=None)
+                    - row.created_at,
                 )
             if stuck:
                 db.commit()

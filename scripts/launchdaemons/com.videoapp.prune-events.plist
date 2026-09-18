@@ -23,7 +23,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jackyli/Desktop/Githubs/video-learning-app/venv/bin/python</string>
+        <!-- /usr/bin/python3 (NOT the venv): prune_events.py is
+             stdlib-only and TCC FDA is granted to this binary
+             (GO-LIVE-INSTALL.md Step 3). The venv python has no
+             FDA grant → "Operation not permitted" on the RAID. -->
+        <string>/usr/bin/python3</string>
         <string>__RUNTIME_DIR__/prune_events.py</string>
         <string>--apply</string>
     </array>
@@ -48,7 +52,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
-        <string>/Users/jackyli</string>
+        <string>__HOME_DIR__</string>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>

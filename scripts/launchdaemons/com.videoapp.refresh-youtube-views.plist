@@ -29,6 +29,17 @@
         <string>__PROJECT_DIR__/scripts/refresh_youtube_views.py</string>
     </array>
 
+    <!-- CWD must be the project root: app/config.py loads .env via a
+         RELATIVE path (env_file=".env"), resolved against the process
+         CWD. Under launchd the default CWD is / — a read-only system
+         volume — so DATABASE_URL silently falls back to
+         sqlite:///./video_learning.db and SQLAlchemy fails with
+         "unable to open database file" (verified 2026-09-18 on the
+         Studio). Setting WorkingDirectory here makes .env resolve the
+         same way it does under gunicorn (whose plist sets this too). -->
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>

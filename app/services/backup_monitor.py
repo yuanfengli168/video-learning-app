@@ -44,7 +44,8 @@ from pathlib import Path
 from typing import Any
 
 # The four backup jobs we monitor. Their labels match the plists
-# in /Users/jackyli/Library/LaunchAgents/com.videoapp.backup-*.plist.
+# in /Library/LaunchDaemons/com.videoapp.backup-*.plist (system
+# domain, installed by scripts/install-backup-launchdaemon.sh).
 BACKUP_LABELS = (
     "com.videoapp.backup-db",
     "com.videoapp.backup-daily",

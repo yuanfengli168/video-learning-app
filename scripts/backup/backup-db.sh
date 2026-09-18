@@ -17,7 +17,16 @@ DB="/Volumes/Storage-Fast-NVMe/video_learning.db"
 LOG="$HOME/Library/Logs/video-app-backup.log"
 RETENTION_DB=28  # 7 days × 4 per day = 28 hot backups kept
 
-log() { echo "[$(date '+%F %T')] [db] $*" | tee -a "$LOG"; }
+# Log to stdout AND $LOG. CRITICAL: the log append must never kill
+# the backup (set -euo pipefail + a root-owned log file once aborted
+# the whole script before sqlite3 ran — 2026-09-18 Studio incident).
+# Write stdout exactly once; try the file append separately so a
+# failure there can't double-print or abort.
+log() {
+    local line="[$(date '+%F %T')] [db] $*"
+    echo "$line"
+    { echo "$line" >> "$LOG"; } 2>/dev/null || true
+}
 
 if [ ! -d "/Volumes/Storage-Backup-HDD" ]; then
     log "ERROR: Storage-Backup-HDD not mounted"

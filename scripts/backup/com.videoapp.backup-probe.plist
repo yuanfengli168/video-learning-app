@@ -21,7 +21,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/jackyli/Desktop/Githubs/video-learning-app/scripts/backup/backup-probe.sh</string>
+        <string>__RUNTIME_DIR__/backup-probe.sh</string>
     </array>
 
     <!-- Every 5 minutes. Cheap probe (single launchctl print per
@@ -30,10 +30,10 @@
     <integer>300</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/jackyli/Library/Logs/video-app-backup.log</string>
+    <string>__LOG_DIR__/video-app-backup.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jackyli/Library/Logs/video-app-backup.log</string>
+    <string>__LOG_DIR__/video-app-backup.log</string>
 
     <!-- Run once immediately on launchctl load, then every 5 min. -->
     <key>RunAtLoad</key>

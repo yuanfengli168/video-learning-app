@@ -17,7 +17,16 @@ RETENTION_DAILY=30  # keep last 30 daily snapshots
 
 mkdir -p "$(dirname "$LOG")"
 
-log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
+# Log to stdout AND $LOG. CRITICAL: the log append must never kill
+# the backup (set -euo pipefail + an unwritable log file would
+# otherwise abort before rsync ran — 2026-09-18 Studio incident).
+# Write stdout exactly once; try the file append separately so a
+# failure there can't double-print or abort.
+log() {
+    local line="[$(date '+%F %T')] $*"
+    echo "$line"
+    { echo "$line" >> "$LOG"; } 2>/dev/null || true
+}
 
 # ── Pre-flight ────────────────────────────────────────────────────────────
 if [ ! -d "/Volumes/Storage-Backup-HDD" ]; then

@@ -9,7 +9,13 @@ def test_default_settings(monkeypatch):
     # Clear env vars that conftest may have set
     for key in ["DEBUG", "DATABASE_URL", "UPLOAD_DIR", "STORAGE_DIR"]:
         monkeypatch.delenv(key, raising=False)
-    s = Settings()
+    # Isolate from any real .env in the working directory. Without
+    # this, Settings() reads the developer's/ops's .env — e.g. the
+    # prod Studio's DEBUG=false — and the "defaults" being asserted
+    # are actually environment values (2026-09-18: this test failed
+    # the moment prod's .env set DEBUG=false, though nothing in code
+    # changed). _env_file=None makes pydantic-settings skip the file.
+    s = Settings(_env_file=None)
     assert s.app_name == "Video Learning App"
     assert s.debug is True
     assert s.database_url.startswith("sqlite")

@@ -1132,7 +1132,11 @@ async def admin_backups_run(
     import subprocess
     from pathlib import Path
 
-    script = Path("/Users/jackyli/Desktop/Githubs/video-learning-app/scripts/backup/backup-db.sh")
+    # scripts/backup/backup-db.sh relative to this router file
+    # (app/routers/frontend.py → ../../scripts/backup/backup-db.sh).
+    # NOT hardcoded: the repo path differs between hosts (dev MacBook
+    # vs prod Studio).
+    script = Path(__file__).resolve().parents[2] / "scripts" / "backup" / "backup-db.sh"
     if not script.exists():
         return templates.TemplateResponse(
             request,
