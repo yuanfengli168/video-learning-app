@@ -1,7 +1,7 @@
 """Sidebar Community (Discord) link — visibility rules.
 
 2026-09-18 rebrand batch: the public community invite is stored in
-.env (DISCORD_INVITE_URL) and rendered by base.html as a 💬 Community
+.env (COMMUNITY_INVITE_URL) and rendered by base.html as a 💬 Community
 sidebar link — but ONLY for signed-in users, never for anonymous
 visitors (a registered user is anyone with a Firebase account:
 FREE, PAID, or ADMIN).
