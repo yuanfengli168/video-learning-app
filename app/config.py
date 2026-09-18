@@ -12,7 +12,20 @@ class Settings(BaseSettings):
     )
 
     # ── App ──
-    app_name: str = "Video Learning App"
+    # 2026-09-18 rebrand: capysmart.com purchased; "Video Learning App"
+    # stays as the subtitle/tagline ("Turn any lecture into a study
+    # kit"). The name never travels without the tagline — see the
+    # landing page hero and login hero for the pairing.
+    app_name: str = "CapySmart"
+    # Subtitle shown alongside/under the brand where a plain string
+    # can't carry both. Empty string = hidden (e.g. compact headers).
+    app_subtitle: str = "Video Learning App"
+    # Public community link (Discord). Empty string = the sidebar link
+    # is hidden entirely. Store the invite URL here (not in templates)
+    # so rotating the invite (or switching to a vanity URL like
+    # discord.gg/capysmart later) is a one-line .env change + restart,
+    # never a code deployment.
+    community_invite_url: str = ""
     debug: bool = True
     # 2026-09-12 (go-live prep, public-repo-readiness.md rec #1):
     # Set the fb_token cookie's Secure flag. TRUE in production (HTTPS

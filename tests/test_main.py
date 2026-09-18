@@ -16,7 +16,7 @@ def test_app_title():
     """App should have the correct title."""
     from app.main import app
 
-    assert app.title == "Video Learning App"
+    assert app.title == "CapySmart"
 
 
 def test_unknown_route_returns_404(client: TestClient):

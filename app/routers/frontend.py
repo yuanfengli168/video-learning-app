@@ -184,6 +184,8 @@ def _ctx(
     """
     ctx: dict[str, Any] = {
         "app_name": settings.app_name,
+        "app_subtitle": settings.app_subtitle,
+        "community_invite_url": settings.community_invite_url,
         "user": user,
         "firebase_config": {
             "apiKey": settings.firebase_api_key,

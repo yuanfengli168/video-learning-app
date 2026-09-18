@@ -47,7 +47,15 @@
     <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transform -translate-x-full md:translate-x-0 transition-transform duration-200 ease-in-out flex flex-col">
         <!-- Logo -->
         <div class="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-            <a href="/" class="text-xl font-bold text-indigo-600 dark:text-indigo-400">📚 {{ app_name }}</a>
+        <!-- Logo — brand + subtitle pairing (2026-09-18 rebrand):
+             the name never travels without the subtitle, even in the
+             compact sidebar. -->
+        <a href="/" class="block leading-tight">
+            <span class="text-xl font-bold text-indigo-600 dark:text-indigo-400">📚 {{ app_name }}</span>
+            {% if app_subtitle %}
+            <span class="block text-[10px] text-gray-400 dark:text-gray-500">{{ app_subtitle }}</span>
+            {% endif %}
+        </a>
             <button id="sidebar-toggle-btn" onclick="toggleSidebar()" aria-label="Toggle sidebar" title="Toggle sidebar" class="md:hidden text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
                 <!-- Hamburger icon (☰) — shown when sidebar is CLOSED -->
                 <svg id="sidebar-icon-hamburger" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -119,6 +127,18 @@
                 <a href="/pricing" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
                     <span class="mr-3">💎</span> Plans &amp; Contact
                 </a>
+                {# 2026-09-18 — public community link (Discord). Shown to
+                   every signed-in user, FREE and PAID alike: the community
+                   is the product's ambient support surface at soft
+                   launch. URL comes from .env (community_invite_url) so
+                   rotating the invite or switching to a vanity URL
+                   (discord.gg/capysmart) is a one-line change, never a
+                   code deploy. Empty string hides the link entirely. #}
+                {% if user and community_invite_url %}
+                <a href="{{ community_invite_url }}" target="_blank" rel="noopener noreferrer" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                    <span class="mr-3">💬</span> Community
+                </a>
+                {% endif %}
             </div>
             {% if is_admin %}
             <div class="pt-2 space-y-1">
@@ -193,7 +213,7 @@
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
                 </button>
                 {% block breadcrumb %}
-                    <span class="text-sm text-gray-400">{{ app_name }}</span>
+                    <span class="text-sm text-gray-400">{{ app_name }}{% if app_subtitle %} <span class="text-gray-300 dark:text-gray-600">·</span> {{ app_subtitle }}{% endif %}</span>
                 {% endblock %}
             </div>
         </header>

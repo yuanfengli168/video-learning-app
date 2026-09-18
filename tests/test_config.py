@@ -16,7 +16,8 @@ def test_default_settings(monkeypatch):
     # the moment prod's .env set DEBUG=false, though nothing in code
     # changed). _env_file=None makes pydantic-settings skip the file.
     s = Settings(_env_file=None)
-    assert s.app_name == "Video Learning App"
+    assert s.app_name == "CapySmart"
+    assert s.app_subtitle == "Video Learning App"
     assert s.debug is True
     assert s.database_url.startswith("sqlite")
     assert s.ollama_base_url == "http://localhost:11434"
