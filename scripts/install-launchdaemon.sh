@@ -98,8 +98,12 @@ sudo tee "$PLIST_PATH" > /dev/null <<EOF
     <!-- Restart throttle (avoid pegging CPU if it crashes in a loop) -->
     <key>ThrottleInterval</key>    <integer>10</integer>
 
-    <!-- Run in the GUI session so the user can hit localhost:8000 -->
-    <key>LimitLoadToSessionType</key> <string>Aqua</string>
+    <!-- NOTE: NO LimitLoadToSessionType here! That key is for
+         LaunchAGENTS (user domain). In a system-domain LaunchDaemon
+         it makes launchctl refuse to load the job entirely with
+         "Bootstrap failed: 5: Input/output error" — found the hard
+         way on the Studio 2026-09-18. System daemons always run in
+         the system session; localhost is reachable regardless. -->
     <key>ProcessType</key>            <string>Background</string>
 
     <!-- Env: explicit PATH so /opt/homebrew/bin is found -->
