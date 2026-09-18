@@ -340,25 +340,34 @@ Expected outcome:
 ## Step 7 — Verify
 
 ```bash
-curl -s http://localhost:8000/api/ready | python3 -m json.tool
+bash scripts/doctor.sh
 ```
 
-Expected:
+`doctor.sh` (added 2026-09-18, after the Studio deploy) checks everything this
+doc walks through, in one read-only command: sleep state, 3 volumes, venv +
+`.env` + secrets perms, DB reachable + WAL, Ollama + model, gunicorn +
+`/api/ready`, all 7 launchd jobs, probe health + backups on the RAID, and —
+the silent killer — **TCC/FDA by symptom** (can `/usr/bin/python3`, the venv
+python, and `sqlite3` actually read `/Volumes/Storage-Backup-HDD`). It encodes
+every failure mode found during the 2026-09-17/18 deployment. Run it after any
+install, upgrade, macOS update, or reboot; expect exit 0.
 
-```json
-{
-  "status": "ready",
-  "db": { "status": "ok" },
-  "integrity_ok": true,
-  "ollama_ok": true,
-  "events_table_ok": true,
-  "backup": {
-    "probe_present": true,
-    "is_healthy": true,
-    "newest_age_hours": 0.1,
-    "is_stale": false
-  }
-}
+The legacy per-step verification (kept for reference):
+
+```bash
+curl -s http://localhost:8000/api/ready | python3 -m json.tool
+#    ↑ backup.is_healthy should be true
+#    ↑ newest_age_hours should be < 26
+```
+
+**Post-install one-time fixup** (2026-09-18 lesson): after the first launchd
+run, `~/Library/Logs/video-app-backup.log` is root-owned (the jobs run as
+root). The admin Backups page button runs as your user — with the hardened
+`log()` (commit 7b938f5) the backup succeeds regardless, but chown it so both
+contexts share one log:
+
+```bash
+sudo chown "$(whoami)":staff ~/Library/Logs/video-app-backup.log
 ```
 
 If `backup.is_healthy: false`: see Step 3 (FDA missing) or wait 5 min for the probe to refresh.
