@@ -272,6 +272,41 @@ class YouTubeAPIClient:
             caption_tracks=captions,
         )
 
+    def get_video_basic_metadata(self, video_id_or_url: str) -> VideoMetadata:
+        """Lightweight metadata fetch — videos.list ONLY (1 quota unit).
+
+        Skips captions.list (50 units!) — used by the upload form's
+        live title preview, which fires as the admin types. The full
+        get_video_metadata() runs once at submit time for caption
+        languages. Same parsing/error semantics as the full call, so
+        the UI fallback behavior is identical.
+        """
+        video_id = extract_youtube_id(video_id_or_url)
+        if not video_id:
+            raise YouTubeAPIError(f"Could not extract video ID from {video_id_or_url!r}")
+
+        snippet = self._videos_list(video_id)
+        if not snippet:
+            raise YouTubeVideoNotFound(f"Video {video_id!r} not found (or is private)")
+
+        view_count: int | None = None
+        raw_views = snippet.get("viewCount")
+        if raw_views is not None:
+            try:
+                view_count = int(raw_views)
+            except (TypeError, ValueError):
+                view_count = None
+
+        return VideoMetadata(
+            youtube_id=video_id,
+            title=snippet.get("title", ""),
+            channel=snippet.get("channelTitle", ""),
+            thumbnail_url=pick_best_thumbnail(snippet.get("thumbnails", {})),
+            duration_seconds=parse_iso8601_duration(snippet.get("duration", "")),
+            view_count=view_count,
+            caption_tracks=[],
+        )
+
     def get_view_counts(self, video_ids: list[str]) -> dict[str, int]:
         """Batched view-count fetch — videos.list supports up to 50 ids
         per call (1 quota unit). Returns {youtube_id: view_count} for

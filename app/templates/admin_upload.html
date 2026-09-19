@@ -386,22 +386,92 @@
     refresh();
 })();
 
-// Live preview of extracted YouTube ID as user types
-document.getElementById('url').addEventListener('input', function() {
-    const url = this.value;
-    const preview = document.getElementById('url-preview');
-    const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
-    if (m) {
-        preview.textContent = '→ Video ID: ' + m[1];
-        preview.className = 'mt-1 text-xs text-green-600 dark:text-green-400';
-    } else if (url.length > 0) {
-        preview.textContent = '⚠️ Could not detect a YouTube video ID';
-        preview.className = 'mt-1 text-xs text-amber-600 dark:text-amber-400';
-    } else {
-        preview.textContent = '';
-        preview.className = 'mt-1 text-xs text-gray-400';
+// Live preview of extracted YouTube ID + title autofill (2026-09-19).
+// When a valid ID is detected, debounce-fetch /api/admin/videos/youtube/
+// preview and prefill the title IF the admin hasn't typed one. Manual
+// typing always wins — the preview only fills an empty field.
+(function () {
+    const urlInput = document.getElementById('url');
+    const titleInput = document.getElementById('title');
+    if (!urlInput || !titleInput) return;
+
+    let lastFetchedId = null;   // avoid refetching the same ID
+    let fetchSeq = 0;           // drop stale responses (admin typed on)
+
+    function extractId(url) {
+        const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
+        if (m) return m[1];
+        if (/^[A-Za-z0-9_-]{11}$/.test(url)) return url;  // bare ID
+        return null;
     }
-});
+
+    async function fetchPreview(id) {
+        const seq = ++fetchSeq;
+        try {
+            const resp = await fetch(
+                '/api/admin/videos/youtube/preview?url=' + encodeURIComponent(
+                    'https://www.youtube.com/watch?v=' + id
+                ),
+                { credentials: 'include' }
+            );
+            if (!resp.ok) return;  // 400/401/403 — preview is best-effort
+            const data = await resp.json();
+            if (seq !== fetchSeq) return;  // a newer keystroke superseded this
+
+            if (data.already_in_catalog) {
+                const preview = document.getElementById('url-preview');
+                preview.textContent = '⚠️ Already in the catalog: “' + (data.existing_title || 'untitled') +
+                    '” (video ' + data.existing_video_id + ')';
+                preview.className = 'mt-1 text-xs text-amber-600 dark:text-amber-400';
+            } else if (data.status === 'ok' && data.title) {
+                if (!titleInput.value.trim()) {
+                    titleInput.value = data.title;
+                    titleInput.dataset.autofilled = '1';
+                    const preview = document.getElementById('url-preview');
+                    preview.textContent = '→ Video ID: ' + data.youtube_id +
+                        ' · title detected from YouTube';
+                    preview.className = 'mt-1 text-xs text-green-600 dark:text-green-400';
+                }
+            } else if (data.status === 'not_found') {
+                const preview = document.getElementById('url-preview');
+                preview.textContent = '⚠️ YouTube says this video is deleted or private';
+                preview.className = 'mt-1 text-xs text-red-600 dark:text-red-400';
+            }
+            // 'no_api_key' / 'failed' → silent: form works exactly like before
+        } catch (e) {
+            // Network hiccup — silent, preview is non-essential
+        }
+    }
+
+    urlInput.addEventListener('input', function () {
+        const url = this.value;
+        const preview = document.getElementById('url-preview');
+        const id = extractId(url);
+        if (id) {
+            preview.textContent = '→ Video ID: ' + id;
+            preview.className = 'mt-1 text-xs text-green-600 dark:text-green-400';
+            if (id !== lastFetchedId) {
+                lastFetchedId = id;
+                clearTimeout(this._t);
+                this._t = setTimeout(() => fetchPreview(id), 600);
+            }
+        } else if (url.length > 0) {
+            preview.textContent = '⚠️ Could not detect a YouTube video ID';
+            preview.className = 'mt-1 text-xs text-amber-600 dark:text-amber-400';
+            lastFetchedId = null;
+        } else {
+            preview.textContent = '';
+            preview.className = 'mt-1 text-xs text-gray-400';
+            lastFetchedId = null;
+        }
+    });
+
+    // Typing in the title field = manual override; stop tracking autofill
+    // so a later URL paste doesn't clobber the admin's typed title.
+    titleInput.addEventListener('input', function () {
+        delete this.dataset.autofilled;
+    });
+})();
 
 // Form submission via fetch (JSON, not multipart)
 document.getElementById('admin-upload-form').addEventListener('submit', async function(e) {
@@ -491,6 +561,7 @@ document.getElementById('admin-upload-form').addEventListener('submit', async fu
         // uploads to the same channel are one-less click each)
         document.getElementById('url').value = '';
         document.getElementById('title').value = '';
+        delete document.getElementById('title').dataset.autofilled;
         document.getElementById('url-preview').textContent = '';
         document.getElementById('new_playlist_title').value = '';
     } catch (err) {

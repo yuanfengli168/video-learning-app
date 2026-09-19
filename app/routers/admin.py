@@ -528,6 +528,118 @@ async def admin_add_youtube_video(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# GET /api/admin/videos/youtube/preview  (2026-09-19 — title autofill)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class YouTubePreviewResponse(BaseModel):
+    """Lightweight read-only preview for the upload form.
+
+    Fired as the admin types a URL (debounced client-side). Nothing is
+    inserted — the POST endpoint remains the only write path.
+    """
+
+    youtube_id: str
+    already_in_catalog: bool = False
+    existing_video_id: str | None = None
+    existing_title: str | None = None
+    title: str | None = None
+    channel: str | None = None
+    duration_seconds: int | None = None
+    thumbnail_url: str | None = None
+    status: str
+    """One of: 'ok' (metadata fetched), 'no_api_key' (key unset —
+    admin must type the title), 'failed' (API error — best-effort,
+    admin types the title), 'not_found' (video deleted/private)."""
+
+
+@router.get("/videos/youtube/preview", response_model=YouTubePreviewResponse)
+async def admin_preview_youtube_video(
+    url: str,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> YouTubePreviewResponse:
+    """Preview YouTube metadata for a URL WITHOUT inserting anything.
+
+    Powers the admin upload form's title autofill (2026-09-19): the
+    admin pastes a URL, this returns the real title (and channel/
+    duration/thumbnail) which the form prefills — still overridable
+    by typing. The POST endpoint re-fetches metadata at submit time
+    and prefers the YouTube title over the admin-typed one, so the
+    preview is purely a UX nicety, never a source of truth.
+
+    Duplicate short-circuit: if the youtube_id is already cataloged,
+    we return the DB title and skip the YouTube API call entirely
+    (saves quota; the POST would 409 anyway).
+
+    Cost: 1 YouTube API quota unit per call (videos.list only —
+    captions.list costs 50 and is NOT called here). Client-side the
+    call is debounced ~600ms, so typing a URL costs 1-2 units.
+    """
+    # Extract + validate the ID first (same rules as the POST path).
+    youtube_id = extract_youtube_id(url)
+    if not youtube_id or not is_valid_youtube_id(youtube_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Could not extract a valid YouTube video ID from URL: {url!r}"
+            ),
+        )
+
+    # Duplicate check against the catalog BEFORE any API call —
+    # zero quota when the admin re-pastes a known URL.
+    existing = db.execute(
+        select(Video.id, Video.title).where(Video.youtube_id == youtube_id)
+    ).first()
+    if existing:
+        return YouTubePreviewResponse(
+            youtube_id=youtube_id,
+            already_in_catalog=True,
+            existing_video_id=existing.id,
+            existing_title=existing.title,
+            status="ok",
+        )
+
+    # Best-effort metadata fetch. Every failure mode is a 200 with a
+    # status field — the form degrades to "type the title yourself",
+    # exactly the pre-2026-09-19 behavior. This endpoint must never
+    # be the reason an add fails.
+    from app.services.youtube_api import (
+        YouTubeAPIKeyMissing,
+        YouTubeAPIClient,
+        YouTubeVideoNotFound,
+    )
+
+    try:
+        yt_client = YouTubeAPIClient()  # uses settings.youtube_api_key
+    except YouTubeAPIKeyMissing:
+        return YouTubePreviewResponse(youtube_id=youtube_id, status="no_api_key")
+
+    try:
+        # videos.list only — 1 quota unit, no captions.list (50 units)
+        meta = yt_client.get_video_basic_metadata(youtube_id)
+    except YouTubeVideoNotFound:
+        # Surface distinctly: the admin is about to waste a submit on
+        # a URL that will 400 with "not found" anyway.
+        return YouTubePreviewResponse(youtube_id=youtube_id, status="not_found")
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"YouTube API preview failed for {youtube_id}: {exc}"
+        )
+        return YouTubePreviewResponse(youtube_id=youtube_id, status="failed")
+
+    return YouTubePreviewResponse(
+        youtube_id=youtube_id,
+        title=meta.title or None,
+        channel=meta.channel or None,
+        duration_seconds=meta.duration_seconds or None,
+        thumbnail_url=meta.thumbnail_url or None,
+        status="ok",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # GET /api/admin/channels/{id}/playlists  (2026-09-08 — upload form picker)
 # ─────────────────────────────────────────────────────────────────────────
 
