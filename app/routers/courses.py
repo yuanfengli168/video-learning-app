@@ -755,6 +755,31 @@ def _staggered_transcribe_job(video_id: str, delay_seconds: int) -> None:
     from app.jobs import start_job, serialize_job
     from app.routers.videos import _run_transcribe_job
 
+    # 2026-09-19 bugfix (orphan-recovery incident): the job tracker is
+    # a PER-PROCESS dict, but the queue scheduler runs in ALL 4 gunicorn
+    # workers — whichever wins the atomic claim dispatches this thread.
+    # When the claiming worker is NOT the one that handled the upload,
+    # get_job() inside _run_transcribe_job returned None and the worker
+    # silently early-returned: the row stayed 'transcribing' forever
+    # with nothing running (live casualty: 6ba2a9ee, stuck 20h on 9/18).
+    # Registering here (replacing any stale entry harmlessly) makes
+    # the claim dispatch self-sufficient in any process.
+    from app.database import SessionLocal
+    from app.models import Video
+
+    _db = SessionLocal()
+    try:
+        _v = _db.get(Video, video_id)
+        if _v is not None:
+            _job = start_job(
+                video_id, "transcribe", total=100,
+                message="Queue claimed — loading Whisper...",
+            )
+            _v.last_transcribe_job = serialize_job(_job)
+            _db.commit()
+    finally:
+        _db.close()
+
     _run_transcribe_job(video_id, "base")
 
     # Transcribe failed? _run_transcribe_job set status='error' and

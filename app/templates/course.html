@@ -64,6 +64,11 @@
         {% for section in course.sections %}
         {% set failed_count = section.videos | selectattr('status', 'equalto', 'error') | list | length %}
         {% set queued_count = section.videos | selectattr('status', 'equalto', 'queued') | list | length %}
+        {# 2026-09-19: orphan_count — rows stuck in transcribing/pending
+           older than 15 min (a worker restart ate the in-memory job).
+           Computed server-side (same rule as the recover-orphans
+           endpoint) so badge and endpoint can never disagree. #}
+        {% set orphan_count = section_orphan_counts.get(section.id, 0) %}
         {# 2026-09-13: stuck_count now comes from the server (computed via
            the shared _is_stuck_video — the full 4-form taxonomy:
            queued>10min / transcribing job>30min / generating job>30min /
@@ -91,6 +96,17 @@
                     {% if queued_count > 0 and is_admin %}
                     <button onclick="event.stopPropagation(); requeueStuck(this)" data-requeue-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue stuck videos (status=queued but nothing processing them — usually a server restart ate the in-memory job)">
                         ⏳ {{ queued_count }} queued — re-queue
+                    </button>
+                    {% endif %}
+                    {# Orphan recovery (2026-09-19): rows stuck in
+                       transcribing/pending whose in-memory job died with
+                       a worker restart — they also hold the 2-slot
+                       transcribe queue hostage. The endpoint re-checks
+                       the 15-min age server-side, so a stale render can
+                       at worst get a friendly 'nothing stuck' toast. #}
+                    {% if orphan_count > 0 and is_admin %}
+                    <button onclick="event.stopPropagation(); recoverOrphans(this)" data-recover-orphans-btn class="text-xs px-2 py-0.5 rounded border border-purple-300 dark:border-purple-700 text-purple-600 dark:text-purple-400 hover:border-purple-500 hover:text-purple-700" title="Recover orphaned videos (stuck in transcribing/pending after a server restart — frees the processing queue and re-dispatches them)">
+                        🩹 {{ orphan_count }} orphaned — recover
                     </button>
                     {% endif %}
                     {# Owner self-service stuck retry (2026-09-12): same
@@ -728,6 +744,46 @@ async function requeueStuck(btn) {
 // section has queued videos older than the 10-minute grace window —
 // the server re-checks the same condition, so a stale render can
 // at worst get a friendly "no stuck videos" toast.
+
+// ── Admin orphan recovery (2026-09-19) ───────────────────────────────
+// Rows stuck in transcribing/pending after a worker restart ate
+// their in-memory BackgroundTask. The endpoint marks them error
+// (frees the 2-slot queue) and re-dispatches the right pipeline per
+// video type. One click = the whole incident runbook.
+async function recoverOrphans(btn) {
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+        btn.textContent = '🩹 Recovering...';
+    }
+    try {
+        const resp = await fetch('/api/admin/videos/recover-orphans', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || `Recovered ${data.recovered} video(s)`, 'success');
+            setTimeout(() => location.reload(), 4000);
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Recovery failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                btn.textContent = originalLabel;
+            }
+        }
+    } catch (exc) {
+        showToast('Network error: ' + exc, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            btn.textContent = originalLabel;
+        }
+    }
+}
 async function retryStuckVideos(courseId, sectionId, btn) {
     const originalLabel = btn ? btn.textContent : '';
     if (btn) {

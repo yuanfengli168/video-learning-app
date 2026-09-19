@@ -1343,11 +1343,39 @@ def _requeue_staggered_pipeline(video_id: str, delay_seconds: int) -> None:
     launch N Whisper loads + N LLM generations simultaneously —
     enough to trip the per-user rate limiter and Ollama caps. 5s
     between starts matches admin_generate_missing_materials.
+
+    2026-09-19 bugfix (found during the orphan-recovery incident):
+    this previously called _run_auto_pipeline directly — but
+    _run_transcribe_job EARLY-RETURNS when the in-memory job tracker
+    has no (video_id, 'transcribe') entry, and nothing rehydrates
+    jobs from the DB. A restart clears the tracker, so every
+    requeue-stuck click after a restart silently no-op'ed the
+    transcribe step (the row just sat at whatever status it had).
+    Register the job first, exactly like the upload path does.
     """
     import time as _time
 
     if delay_seconds > 0:
         _time.sleep(min(delay_seconds, 300))
+    from app.jobs import serialize_job, start_job
+    from app.database import SessionLocal
+    from app.models import Video
+
+    db = SessionLocal()
+    try:
+        video = db.get(Video, video_id)
+        if video is None:
+            return
+        job = start_job(
+            video_id, "transcribe", total=100,
+            message="Re-queued (recovery) — starting...",
+        )
+        video.status = "transcribing"
+        video.last_transcribe_job = serialize_job(job)
+        db.commit()
+    finally:
+        db.close()
+
     from app.routers.videos import _run_auto_pipeline
     from app.services.transcription import get_default_model_choice
 
@@ -1376,3 +1404,153 @@ def _requeue_staggered_youtube(
         generate_user_id=generate_user_id,
         generate_user_role=generate_user_role,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /api/admin/videos/recover-orphans  (2026-09-19 — orphan recovery)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/videos/recover-orphans")
+async def admin_recover_orphaned_videos(
+    background_tasks: BackgroundTasks,
+    user: dict[str, Any] = Depends(require_capability(Capability.CURATE_CATALOG)),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Recover orphaned in-flight videos (2026-09-19 incident class).
+
+    What this fixes: a worker restart (deploy / kickstart / crash /
+    max_requests recycle) evaporates in-memory BackgroundTasks. Rows
+    stuck in 'transcribing'/'pending' forever hold the 2-slot
+    transcribe queue hostage (the queue counts them as in-flight) —
+    so NEW uploads also stop processing. This is the UI version of
+    today's manual fix: fix_stuck_transcribe.py + re-dispatch.
+
+    Steps:
+      1. Find rows in 'transcribing' older than 15 min (no live job
+         can run that long without a worker restart), plus 'pending'
+         YouTube rows older than 15 min (a pending row that old was
+         orphaned by the same restart — bulk imports stagger 10s, so
+         15 min is a very generous grace).
+      2. Mark them 'error' with a clear recovery reason (frees the
+         queue slots immediately).
+      3. Re-dispatch the right pipeline per video type with the
+         battle-tested stagger: file → auto pipeline (transcribe +
+         generate chain), YouTube → caption job. 30s spacing between
+         YouTube caption fetches — back-to-back fetches trip YouTube's
+         per-IP subtitle throttling (live-verified 2026-09-19: 5/6
+         fetches timed out unspaced; the one success came after a
+         natural gap).
+
+    Idempotent: 'ready' videos are never touched. Safe to click
+    repeatedly; a second click finds nothing stuck.
+
+    Capability: CURATE_CATALOG (admin only).
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+
+    STUCK_MINUTES = 15
+    YT_SPACING_SECONDS = 30
+
+    cutoff = datetime.now(_tz.utc).replace(tzinfo=None) - timedelta(
+        minutes=STUCK_MINUTES
+    )
+
+    # Stuck 'transcribing' rows: started long ago, still not done.
+    stuck_transcribing = (
+        db.execute(
+            select(Video)
+            .where(
+                Video.status == "transcribing",
+                Video.transcribe_started_at < cutoff,
+            )
+            .order_by(Video.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
+    # Orphaned 'pending' YouTube rows: old enough that the original
+    # staggered BackgroundTask is gone (a real one starts within
+    # seconds of creation).
+    orphaned_pending = (
+        db.execute(
+            select(Video)
+            .where(
+                Video.status == "pending",
+                Video.youtube_id.is_not(None),
+                Video.created_at < cutoff,
+            )
+            .order_by(Video.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
+
+    to_recover = list(stuck_transcribing) + list(orphaned_pending)
+    if not to_recover:
+        return {
+            "recovered": 0,
+            "message": (
+                f"No orphaned videos — nothing stuck in transcribing/pending "
+                f"for over {STUCK_MINUTES} minutes."
+            ),
+        }
+
+    uid = user.get("uid", "")
+    role = int(user.get("role", 0) or 0)
+
+    # Step 2: mark error to free the queue slots NOW
+    for video in to_recover:
+        video.status = "error"
+        video.whisper_fallback_reason = (
+            "Recovered by admin: orphaned by a worker restart "
+            "(in-memory job lost). Re-dispatching now."
+        )
+    db.commit()
+
+    # Step 3: re-dispatch with stagger. File uploads go through the
+    # SAME stagger helpers the requeue-stuck endpoint uses; YouTube
+    # rows use the caption stagger with wider spacing (throttle-safe).
+    queued_file = 0
+    queued_youtube = 0
+    yt_delay = 0
+    file_delay = 0
+    for video in to_recover:
+        if video.youtube_id:
+            background_tasks.add_task(
+                _requeue_staggered_youtube,
+                video.id,
+                yt_delay,
+                generate_user_id=uid,
+                generate_user_role=role,
+            )
+            yt_delay += YT_SPACING_SECONDS
+            queued_youtube += 1
+        else:
+            background_tasks.add_task(
+                _requeue_staggered_pipeline,
+                video.id,
+                file_delay,
+            )
+            file_delay += 5
+            queued_file += 1
+
+    import logging
+    logging.getLogger(__name__).info(
+        "recover-orphans: marked %d videos error and re-dispatched "
+        "(%d file, %d youtube)",
+        len(to_recover), queued_file, queued_youtube,
+    )
+
+    return {
+        "recovered": len(to_recover),
+        "file_uploads": queued_file,
+        "youtube_videos": queued_youtube,
+        "message": (
+            f"Recovered {len(to_recover)} orphaned video(s) "
+            f"({queued_file} file, {queued_youtube} YouTube). Slots freed "
+            f"and pipelines re-dispatched — YouTube ones spaced "
+            f"{YT_SPACING_SECONDS}s apart to avoid rate limits. Watch them "
+            f"turn ready on the course page."
+        ),
+    }

@@ -367,6 +367,23 @@ async def course_view(
             if n > 0:
                 section_has_stuck_any = True
 
+    # 2026-09-19 (orphan recovery): per-section count of rows stuck
+    # in transcribing/pending older than 15 min — the worker-restart
+    # orphan taxonomy, same rule as the recover-orphans endpoint (15
+    # min ≫ the 10s bulk stagger, so a healthy in-flight job never
+    # trips this). Computed server-side so the button badge and the
+    # endpoint's server-side re-check can never disagree.
+    now_15m_ago = datetime.now(_tz.utc).replace(tzinfo=None) - timedelta(minutes=15)
+    section_orphan_counts: dict[str, int] = {}
+    for section in (course.sections if course and course.sections else []):
+        section_orphan_counts[section.id] = sum(
+            1
+            for v in section.videos
+            if v.status in ("transcribing", "pending")
+            and v.created_at is not None
+            and v.created_at < now_15m_ago
+        )
+
     return templates.TemplateResponse(
         request,
         "course.html",
@@ -378,6 +395,7 @@ async def course_view(
             now_10m_ago=now_10m_ago,
             section_stuck_counts=section_stuck_counts,
             section_has_stuck_any=section_has_stuck_any,
+            section_orphan_counts=section_orphan_counts,
         ),
     )
 
