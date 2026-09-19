@@ -751,6 +751,110 @@ def test_video_chat_context_includes_transcript_with_proper_shape(paid_client: T
     assert "couldn't read it" not in prompt
 
 
+# ── Tier-aware transcript caps at the router (2026-09-20) ──────────────────
+
+
+def _seed_long_transcript(video_id: str, n_segments: int) -> None:
+    """Write an n-segment transcript asset onto a video."""
+    import json as _json
+    from app.database import SessionLocal
+    from app.models import Asset
+
+    segments = [
+        {"start": float(i), "end": float(i + 1), "text": f"seg {i}"}
+        for i in range(n_segments)
+    ]
+    payload = _json.dumps({
+        "segments": segments, "language": "en", "duration": float(n_segments),
+    })
+    with SessionLocal() as db:
+        existing = db.query(Asset).filter_by(
+            video_id=video_id, asset_type="transcript"
+        ).first()
+        if existing:
+            existing.content = payload
+        else:
+            db.add(Asset(
+                video_id=video_id, asset_type="transcript", content=payload,
+            ))
+        db.commit()
+
+
+def test_video_chat_context_tier_cap_free_truncates(paid_client: TestClient):
+    """FREE role (2): a 1500-segment video still truncates at 600 —
+    the FREE tier's Groq model has a small context window."""
+    from app.database import SessionLocal
+    from app.models import Video
+    from app.routers.chat import _build_video_chat_context
+
+    video_id = _setup_video(paid_client)
+    _seed_long_transcript(video_id, 1500)
+
+    with SessionLocal() as db:
+        video = db.get(Video, video_id)
+        prompt = _build_video_chat_context(db, video, user_role=2)
+
+    assert "omitted for length" in prompt
+    assert "seg 0" in prompt          # head kept
+    assert "seg 1499" in prompt       # tail kept
+    # Middle really gone: cap 600 → head 0-299, tail 1200-1499;
+    # anchor the checks so they can't substring-match kept lines
+    assert "[16:40] seg 1000" not in prompt
+    # The omission marker is honest about the count
+    assert "[900 segments omitted for length]" in prompt
+
+
+def test_video_chat_context_tier_cap_paid_full(paid_client: TestClient):
+    """PAID role (1): the same 1500-segment video fits entirely
+    under the 3000 cap — 'the AI watched the entire lecture'."""
+    from app.database import SessionLocal
+    from app.models import Video
+    from app.routers.chat import _build_video_chat_context
+
+    video_id = _setup_video(paid_client)
+    _seed_long_transcript(video_id, 1500)
+
+    with SessionLocal() as db:
+        video = db.get(Video, video_id)
+        prompt = _build_video_chat_context(db, video, user_role=1)
+
+    assert "omitted" not in prompt
+    assert "[16:40] seg 1000" in prompt   # the middle is there now
+    assert "seg 1499" in prompt
+
+
+def test_create_video_chat_session_resolves_role(
+    paid_client: TestClient, db_session
+):
+    """The session-creation endpoint resolves the caller's DB role and
+    passes it to the context builder (the tier cap must follow the
+    REAL role, not the default). Seeded PAID user → PAID cap applies."""
+    from app.routers.chat import _build_video_chat_context
+    from unittest.mock import patch as _patch
+
+    video_id = _setup_video(paid_client)
+    _seed_long_transcript(video_id, 1500)
+
+    captured = {}
+    original = _build_video_chat_context
+
+    def spy(db, video, *, user_role=2):
+        captured["user_role"] = user_role
+        return original(db, video, user_role=user_role)
+
+    with _mock_auth(), _patch(
+        "app.routers.chat._build_video_chat_context", side_effect=spy
+    ):
+        resp = paid_client.post(
+            "/api/chat/video-sessions",
+            json={"video_id": video_id},
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200, resp.text
+    # paid_client's fixture user (user-A) is seeded PAID (role=1)
+    assert captured["user_role"] == 1
+
+
 def test_video_chat_context_logs_transcript_parse_failure(paid_client: TestClient):
     """When the transcript Asset's content is genuinely malformed
     JSON, _build_video_chat_context should return the fallback

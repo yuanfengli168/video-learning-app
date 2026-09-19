@@ -166,16 +166,45 @@ def build_video_system_prompt(
     )
 
 
-def transcript_to_chat_text(segments: list[dict]) -> str:
+# ── Tier-aware transcript caps (2026-09-20) ────────────────────────────────
+# The old global 600 cap was tuned for the FREE tier's small-window Groq
+# model and applied to everyone. The paid chain (glm-5.2:cloud) has a 1M
+# context, so PAID/ADMIN users get near-full transcripts — a natural
+# tier differentiator ("Free: chat about the highlights. Paid: the AI
+# watched the entire lecture"). Numbers + unit economics captured in
+# doc/PriceAndCost/chat-context-economics.md (decision log 2026-09-19).
+#
+# Roughly ~18 tokens per segment → FREE 600 ≈ 11K tok, PAID 3000 ≈ 54K
+# tok (any video ≤ ~4.5h fits), ADMIN 8000 ≈ 144K tok.
+TIER_SEGMENT_CAPS = {2: 600, 1: 3000, 0: 8000}  # role int → cap (2=FREE, 1=PAID, 0=ADMIN)
+DEFAULT_SEGMENT_CAP = 600  # unknown/missing role → the conservative FREE cap
+
+
+def segment_cap_for_role(role: int | None) -> int:
+    """Resolve the transcript segment cap for a user role (0=ADMIN,
+    1=PAID, 2=FREE). Unknown roles get the conservative FREE cap."""
+    if role is None:
+        return DEFAULT_SEGMENT_CAP
+    return TIER_SEGMENT_CAPS.get(int(role), DEFAULT_SEGMENT_CAP)
+
+
+def transcript_to_chat_text(
+    segments: list[dict], *, max_segments: int | None = None
+) -> str:
     """Format transcript segments as `[mm:ss] text` lines for the chat.
 
     Used to put the transcript into the LLM context in a compact
-    but timestamped form. Truncates very long videos to keep the
-    prompt under ~20K tokens.
+    but timestamped form. Videos longer than the cap keep the head
+    and tail with an honest "[N segments omitted]" marker (the
+    user can ask about the intro or the conclusion; the LLM can
+    say when its answer would need the omitted middle).
 
     Args:
         segments: list of {start, end, text} dicts (as stored in
             the Asset.content JSON)
+        max_segments: tier-aware cap. None → the conservative
+            default (600) so non-chat callers keep their old
+            behavior. The router passes segment_cap_for_role(role).
 
     Returns:
         A newline-joined string of `[mm:ss] text` lines.
@@ -183,12 +212,11 @@ def transcript_to_chat_text(segments: list[dict]) -> str:
     if not segments:
         return ""
 
-    # Cap the transcript at MAX_SEGMENTS so a 2-hour video
-    # doesn't blow up the prompt. We keep the first half and the
-    # last half so the user can ask about the intro or the conclusion.
-    MAX_SEGMENTS = 600  # ~10K tokens of transcript
-    if len(segments) > MAX_SEGMENTS:
-        half = MAX_SEGMENTS // 2
+    cap = max_segments if max_segments is not None else DEFAULT_SEGMENT_CAP
+    cap = max(1, cap)
+
+    if len(segments) > cap:
+        half = cap // 2
         head = segments[:half]
         tail = segments[-half:]
         omitted = len(segments) - 2 * half

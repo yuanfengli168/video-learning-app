@@ -165,6 +165,72 @@ def test_transcript_to_chat_text_empty():
     assert transcript_to_chat_text([]) == ""
 
 
+# ── Tier-aware segment caps (2026-09-20) ───────────────────────────────────
+
+
+def test_segment_cap_for_role_tiers():
+    """FREE=600, PAID=3000, ADMIN=8000 (doc/PriceAndCost matrix)."""
+    from app.services.chat import segment_cap_for_role
+    assert segment_cap_for_role(2) == 600   # FREE
+    assert segment_cap_for_role(1) == 3000   # PAID
+    assert segment_cap_for_role(0) == 8000  # ADMIN
+
+
+def test_segment_cap_for_role_unknown_conservative():
+    """Unknown/missing role → the conservative FREE cap."""
+    from app.services.chat import segment_cap_for_role, DEFAULT_SEGMENT_CAP
+    assert segment_cap_for_role(None) == 600
+    assert segment_cap_for_role(99) == 600
+    assert segment_cap_for_role("1") == 3000  # int-castable strings work
+    assert DEFAULT_SEGMENT_CAP == 600
+
+
+def test_transcript_cap_default_is_600():
+    """No max_segments arg → 600 (non-router callers keep old behavior)."""
+    from app.services.chat import transcript_to_chat_text
+    segments = [{"start": float(i), "end": float(i + 1), "text": f"seg {i}"}
+                for i in range(700)]
+    text = transcript_to_chat_text(segments)
+    assert "omitted for length" in text  # 700 > default 600
+
+
+def test_transcript_cap_paid_gets_more():
+    """A 2000-segment video: FREE truncates, PAID/ADMIN keep it all."""
+    from app.services.chat import transcript_to_chat_text
+    segments = [{"start": float(i), "end": float(i + 1), "text": f"seg {i}"}
+                for i in range(2000)]
+
+    free_text = transcript_to_chat_text(segments, max_segments=600)
+    assert "omitted for length" in free_text
+    assert "seg 0" in free_text and "seg 1999" in free_text
+    # The omitted middle is really gone. cap 600 → head 0-299,
+    # tail 1700-1999; anchor with timestamps so checks can't
+    # substring-match anything in the kept halves. seg 700 starts
+    # at 700s = 11:40, seg 1000 at 1000s = 16:40.
+    assert "[11:40] seg 700" not in free_text
+    assert "[16:40] seg 1000" not in free_text
+
+    paid_text = transcript_to_chat_text(segments, max_segments=3000)
+    assert "omitted" not in paid_text  # 2000 ≤ 3000 → everything in
+    assert "[11:40] seg 700" in paid_text
+    assert "seg 1999" in paid_text
+
+
+def test_transcript_cap_admin_boundary():
+    """Exactly at the ADMIN cap (8000) → no truncation; over → marker."""
+    from app.services.chat import transcript_to_chat_text
+    at_cap = [{"start": float(i), "end": float(i + 1), "text": f"s{i}"}
+              for i in range(8000)]
+    text = transcript_to_chat_text(at_cap, max_segments=8000)
+    assert "omitted" not in text
+
+    over = [{"start": float(i), "end": float(i + 1), "text": f"s{i}"}
+            for i in range(8001)]
+    text = transcript_to_chat_text(over, max_segments=8000)
+    assert "[1 segments omitted for length]" in text
+    assert "s0" in text and "s8000" in text
+
+
 def test_render_quiz_for_chat_basic():
     """Quiz JSON renders as Q: / ✓ A: lines."""
     from app.services.chat import render_quiz_for_chat

@@ -365,9 +365,14 @@ def _maybe_log_transcript_parse_error(
     )
 
 
-def _build_video_chat_context(db: Session, video: Video) -> str:
+def _build_video_chat_context(db: Session, video: Video, *, user_role: int | None = 2) -> str:
     """Pull the video's transcript + summary + mindmap + quiz and
     format them into the LLM system prompt for a video-scope chat.
+
+    user_role drives the tier-aware transcript cap (2026-09-20):
+    FREE keeps the 600-segment cap (its Groq model has a small
+    window), PAID gets 3000, ADMIN 8000. The default (2=FREE) keeps
+    any non-router caller conservative.
 
     Returns the formatted system prompt string. Falls back to a
     placeholder when an asset is missing so the chat is still
@@ -383,6 +388,11 @@ def _build_video_chat_context(db: Session, video: Video) -> str:
     transcript_text = ""
     transcript_asset = by_type.get("transcript")
     if transcript_asset and transcript_asset.content:
+        # Tier-aware cap (2026-09-20): resolve per the session owner's
+        # role BEFORE formatting — see doc/PriceAndCost/chat-context-
+        # economics.md for the numbers and the reasoning.
+        from app.services.chat import segment_cap_for_role
+        cap = segment_cap_for_role(user_role)
         try:
             # json_to_transcript() returns a wrapper dict
             # `{"segments": [...], "language": ..., "duration": ...}`. We
@@ -397,7 +407,9 @@ def _build_video_chat_context(db: Session, video: Video) -> str:
                 if isinstance(transcript_obj, dict)
                 else transcript_obj
             )
-            transcript_text = transcript_to_chat_text(segments)
+            transcript_text = transcript_to_chat_text(
+                segments, max_segments=cap
+            )
         except Exception as exc:
             # Bad JSON in the DB — log it for the developer AND give
             # the LLM a clearer message so it can tell the user what
@@ -464,8 +476,17 @@ async def create_video_chat_session(
             f"(visibility={video.visibility}, your role={user.get('role')})",
         )
 
-    # Build the LLM context from the video's existing materials
-    system_prompt = _build_video_chat_context(db, video)
+    # Build the LLM context from the video's existing materials.
+    # 2026-09-20: resolve the caller's DB role for the tier-aware
+    # transcript cap (the token claims' role can be stale after a
+    # tier upgrade; get_user_role_from_db is the same source of
+    # truth send_message uses for the LLM chain pick).
+    from app.auth.admin import get_user_role_from_db
+
+    user_role = int(get_user_role_from_db(user.get("uid", ""), db))
+    system_prompt = _build_video_chat_context(
+        db, video, user_role=user_role
+    )
 
     session = ChatSession(
         user_id=user.get("uid", ""),
