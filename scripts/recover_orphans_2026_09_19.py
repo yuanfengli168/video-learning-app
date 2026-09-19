@@ -34,10 +34,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.database import SessionLocal  # noqa: E402
 from app.models import Video  # noqa: E402
 
-# The 7 rows from the 2026-09-19 diagnosis (status before recovery:
-# 3× error after fix_stuck_transcribe, 4× pending)
+# The 7 rows from the 2026-09-19 diagnosis. Status updates:
+#   - LangChain webm 6ba2a9ee → READY (recovered run 2, job-registration fix)
+#   - MIT 10 acff9004 → READY (recovered run 1)
+# Remaining: 5 YouTube rows blocked by the per-IP timedtext throttle
+# (cleared by ~23:46 — verified by direct CLI probe before this run).
 FILE_UPLOAD_IDS = [
-    "6ba2a9ee-d38c-4337-a69b-3404071378c3",  # LangChain LCEL webm
+    # "6ba2a9ee-…" removed — already ready; re-running would re-transcribe
 ]
 YOUTUBE_IDS = [
     "f0155494-e2ea-4c98-87d5-24a6b2cc407f",  # NVIDIA desktop AI PC
