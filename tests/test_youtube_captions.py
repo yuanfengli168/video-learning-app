@@ -214,6 +214,120 @@ def test_parse_vtt_empty_input_returns_empty_list():
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# _dedupe_rolling_captions — YouTube ASR rolling-window duplicates
+# (2026-09-20: user report "duplicate lines in transcript"; verified on
+# a live seoul-guide VTT: every line appears up to 3×)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+ROLLING_VTT_SAMPLE = """WEBVTT
+Kind: captions
+Language: en
+
+00:00:22.400 --> 00:00:26.950 align:start position:0%
+Tough<00:00:22.880><c> time.</c> Leave the air behind.
+
+00:00:26.950 --> 00:00:26.960 align:start position:0%
+Tough time. Leave the air behind.
+
+00:00:26.960 --> 00:00:31.349 align:start position:0%
+Tough time. Leave the air behind.
+Almost<00:00:27.519><c> gone</c> into the night.
+
+00:00:31.349 --> 00:00:31.359 align:start position:0%
+Almost gone into the night.
+
+00:00:31.359 --> 00:00:35.910 align:start position:0%
+Almost gone into the night.
+Memories linger dark and bright.
+
+00:00:35.910 --> 00:00:35.920 align:start position:0%
+Memories linger dark and bright.
+"""
+
+
+def test_dedupe_rolling_captions_collapses_the_triple():
+    """The live sample: each line appears as word-timed cue + echo +
+    rolling prefix. Dedupe must emit each line exactly once, in order,
+    WITHOUT the rolling merged lines."""
+    from app.services.youtube_captions import _dedupe_rolling_captions
+
+    raw = parse_vtt_text(ROLLING_VTT_SAMPLE)
+    # The raw parse has the rolling pattern (with merged two-line cues)
+    assert len(raw) >= 6
+
+    deduped = _dedupe_rolling_captions(raw)
+    texts = [s["text"] for s in deduped]
+    assert texts == [
+        "Tough time. Leave the air behind.",
+        "Almost gone into the night.",
+        "Memories linger dark and bright.",
+    ]
+
+
+def test_dedupe_rolling_captions_preserves_legit_repeat():
+    """A speaker genuinely repeating the same line back-to-back is NOT
+    a rolling artifact — both instances must survive (when timing is
+    non-contiguous, i.e. real separate speech)."""
+    from app.services.youtube_captions import _dedupe_rolling_captions
+
+    segs = [
+        {"start": 0.0, "end": 2.0, "text": "I love it."},
+        {"start": 3.0, "end": 5.0, "text": "I love it."},  # 1s gap → real repeat
+    ]
+    deduped = _dedupe_rolling_captions(segs)
+    assert len(deduped) == 2
+    assert deduped[0]["text"] == deduped[1]["text"] == "I love it."
+
+
+def test_dedupe_rolling_captions_echo_extends_end():
+    """An echo cue's timing window belongs to the kept line — the
+    kept segment's end must extend to cover it."""
+    from app.services.youtube_captions import _dedupe_rolling_captions
+
+    segs = [
+        {"start": 10.0, "end": 12.0, "text": "Line one."},
+        {"start": 12.0, "end": 12.01, "text": "Line one."},  # echo blip
+    ]
+    deduped = _dedupe_rolling_captions(segs)
+    assert len(deduped) == 1
+    assert deduped[0]["end"] == 12.01
+
+
+def test_dedupe_rolling_captions_real_vtt_reduction():
+    """End-to-end on the real rolling pattern: word-timed cue → echo →
+    rolling extension. The delta-emission path must produce clean
+    single lines with correct start times."""
+    from app.services.youtube_captions import _dedupe_rolling_captions
+
+    segs = [
+        {"start": 100.0, "end": 105.0, "text": "Alpha."},
+        {"start": 105.0, "end": 105.01, "text": "Alpha."},
+        {"start": 105.01, "end": 110.0, "text": "Alpha. Beta here."},
+        {"start": 110.0, "end": 110.01, "text": "Beta here."},
+        {"start": 110.01, "end": 115.0, "text": "Beta here. Gamma next."},
+    ]
+    deduped = _dedupe_rolling_captions(segs)
+    assert [(s["text"]) for s in deduped] == [
+        "Alpha.",
+        "Beta here.",
+        "Gamma next.",
+    ]
+    # Delta segments start when the rolling cue started
+    assert deduped[1]["start"] == 105.01
+    assert deduped[2]["start"] == 110.01
+
+
+def test_dedupe_rolling_captions_empty_and_identity():
+    """Empty input → empty; single segment passes through."""
+    from app.services.youtube_captions import _dedupe_rolling_captions
+
+    assert _dedupe_rolling_captions([]) == []
+    one = [{"start": 0.0, "end": 1.0, "text": "Only line."}]
+    assert _dedupe_rolling_captions(one) == one
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # _pick_language_priority
 # ─────────────────────────────────────────────────────────────────────────
 

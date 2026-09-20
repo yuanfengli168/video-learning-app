@@ -399,7 +399,9 @@
     let fetchSeq = 0;           // drop stale responses (admin typed on)
 
     function extractId(url) {
-        const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
+        // 2026-09-20: /live/ added — live-stream URLs (youtube.com/live/ID)
+        // previously showed "Could not detect" and never prefetched the title.
+        const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([A-Za-z0-9_-]{11})/);
         if (m) return m[1];
         if (/^[A-Za-z0-9_-]{11}$/.test(url)) return url;  // bare ID
         return null;

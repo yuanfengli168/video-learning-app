@@ -68,6 +68,14 @@ _EMBED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 5. youtube.com/live/ID  (live-stream URL — the 2026-09-20 report:
+# 'https://www.youtube.com/live/jw_o0xr8MWU?si=...' failed to parse.
+# Same video ID space as watch?v= — a stream is just a video.)
+_LIVE_RE = re.compile(
+    rf"youtube\.com/live/({_VIDEO_ID_CHARS})",
+    re.IGNORECASE,
+)
+
 
 def extract_playlist_id(url_or_id: str | None) -> str | None:
     """Extract a YouTube playlist ID from a URL or bare ID.
@@ -79,28 +87,6 @@ def extract_playlist_id(url_or_id: str | None) -> str | None:
       bare PL… ID
 
     Returns the playlist ID (usually PL-prefixed, 13-48 chars), or None.
-    """
-    if not url_or_id or not isinstance(url_or_id, str):
-        return None
-    m = re.search(r"[?&]list=([A-Za-z0-9_-]+)", url_or_id)
-    if m:
-        return m.group(1)
-    s = url_or_id.strip()
-    if re.fullmatch(r"[A-Za-z0-9_-]{13,64}", s) and not s.startswith("http"):
-        return s
-    return None
-
-
-def extract_playlist_id(url_or_id: str | None) -> str | None:
-    """Extract a YouTube playlist ID from a URL or bare ID.
-
-    Supported formats:
-      https://www.youtube.com/playlist?list=PLxxxxxxxxxxxx
-      https://www.youtube.com/watch?v=ID&list=PLxxxxxxxxxxxx (the
-          &list= param is what we want)
-      bare ID (13-64 chars, not starting with http)
-
-    Returns the playlist ID, or None.
     """
     if not url_or_id or not isinstance(url_or_id, str):
         return None
@@ -154,7 +140,8 @@ def extract_youtube_id(url_or_id: str | None) -> str | None:
         return None
 
     # Try each URL pattern in order. Most-specific first.
-    for pattern in (_WATCH_V_RE, _SHORTS_RE, _EMBED_RE, _SHORT_RE):
+    # (_LIVE_RE added 2026-09-20: /live/ URLs didn't parse.)
+    for pattern in (_WATCH_V_RE, _SHORTS_RE, _LIVE_RE, _EMBED_RE, _SHORT_RE):
         m = pattern.search(s)
         if m:
             return m.group(1)
