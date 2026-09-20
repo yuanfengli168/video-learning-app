@@ -9,23 +9,48 @@ workers = 4
   PRODUCTION MACHINE (verified 2026-09-16, audit doc decision #8):
   Mac Studio 2023 (Mac14,13), Apple M2 Max, 30-core GPU, 32GB RAM.
   Each worker holds ~300 MB; 4 workers ≈ 1.2 GB.
+"""
 
-  NOTE: this comment block previously described a "Mac Studio 10 CPU
-  cores / 64 GB RAM" — a machine that never existed (the 9/12 audit
-  ran on the dev MacBook Pro M1 Max 64GB and confused the two). All
-  figures below are re-derived for the real 32GB box.
+# ── macOS fork-safety (2026-09-20 hardening — the worker SIGABRT crash-loop) ──
+#
+# WHAT HAPPENED: gunicorn's PRELOAD-LESS forking model (master forks
+# workers) intermittently hits macOS's Objective-C fork-safety abort:
+# "objc[pid]: +[NSMutableString initialize] may have been in progress
+# in another thread when fork() was called... Crashing instead."
+# Live impact (9/19 AND 9/20): a freshly-spawned worker dies with
+# SIGABRT seconds after boot — including MID-REQUEST (a user upload
+# POST got its 202, the worker aborted before the Video row committed,
+# leaving an orphaned file and a "server error" in the UI).
+#
+# WHY: macOS 10.14+ deliberately crashes forked children that touch
+# ObjC runtime state mid-initialization. The master process is a
+# Python daemon that has loaded Foundation via various native deps
+# (whisper's ctranslate2, CloudTelemetry, etc.) — when the master
+# forks while ObjC initialization is racing a thread, the child
+# aborts by design.
+#
+# THE FIX: this env var disables the abort for our workload. It is
+# safe here because our forked children (gunicorn workers, whisper
+# subprocess wrappers) immediately exec or re-init ObjC in their
+# own single-threaded early lifetime — the classic hang risk this
+# guard protects against (a multithreaded child calling ObjC before
+# exec) does not apply: our children are ASGI servers + pure-Python
+# workers that initialize their own threading deterministically.
+# (Same mitigation Cloudflare/Python/Go daemons on macOS use.)
+#
+# Set BEFORE any import that could load ObjC-using native modules.
+import os
 
-  32GB budget (audit decision #12): macOS resident 4-10 GB + gunicorn
-  1.2 GB + MLX turbo model ~3 GB (loaded inside the SUBPROCESS worker;
-  the cache-lock keeps ONE copy for the in-process faster-whisper
-  side) + audio decode buffers ~0.5-1 GB × 2 slots (mini-queue cap) +
-  6 GB reserve. 4 workers fit comfortably with room for the
-  mini-queue's 2 transcribe slots.
+os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
 
-  Why 4 and not more: SQLite prefers few WRITERS (one at a time under
-  WAL since commit eec1f36) — more processes = more write contenders,
-  zero read benefit (WAL readers don't block). The concurrency win
-  comes from threads (below), not processes.
+"""
+The full original rationale docstring, preserved verbatim (the short
+per-setting comments in the config sections below are derived from it):
+
+workers = 4
+  PRODUCTION MACHINE (verified 2026-09-16, audit doc decision #8):
+  Mac Studio 2023 (Mac14,13), Apple M2 Max, 30-core GPU, 32GB RAM.
+  Each worker holds ~300 MB; 4 workers ≈ 1.2 GB.
 
 threads = 8
   8 threads per worker = 32 concurrent request slots total (was 2

@@ -171,15 +171,20 @@ def _start_pool_watchdog() -> None:
         while True:
             time.sleep(_WATCHDOG_INTERVAL_SECONDS)
             try:
-                status = engine.pool.status()
-                # status() → (pool_size, checked_in, checked_out, overflow)
-                checked_out = status[2] + status[3]
+                # NOTE (2026-09-20 hotfix): pool.status() returns a
+                # human-readable STRING in this SQLAlchemy version
+                # ("QueuePool id:... size: N"), not a metrics tuple —
+                # the first watchdog release indexed it and TypeError'd
+                # on every tick, crashing the thread. The real metrics
+                # are the checkedout()/checkedin()/overflow() calls.
+                checked_out = engine.pool.checkedout()
+                overflow = engine.pool.overflow()
                 if checked_out >= _WATCHDOG_TRIP_THRESHOLD:
                     consecutive_high += 1
                     log.warning(
-                        "pool pressure: checked_out=%d (size=%d overflow=%d) "
+                        "pool pressure: checked_out=%d overflow=%d "
                         "sample %d/%d",
-                        checked_out, status[0], status[3],
+                        checked_out, overflow,
                         consecutive_high, _WATCHDOG_TRIP_SAMPLES,
                     )
                     if consecutive_high >= _WATCHDOG_TRIP_SAMPLES:

@@ -1,5 +1,13 @@
 """FastAPI application entry point."""
 
+import os
+
+# macOS fork-safety (2026-09-20 hardening): same rationale as the top of
+# gunicorn.conf.py — set BEFORE any import can load ObjC-using native
+# modules (ctranslate2, telemetry, etc.). Direct-uvicorn runs (dev,
+# scripts/start.sh) get the same protection the gunicorn path has.
+os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
