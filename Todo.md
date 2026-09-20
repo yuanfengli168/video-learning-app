@@ -448,3 +448,43 @@ doc/launch-risk-audit-2026-09-12.md "审计后决策"）。代价：重启蒸发
 
 6. **Test approach for the new endpoint/UI** — should I follow the same A/B/C commit pattern (impl / tests / fix) for tasks 3 and 4, or batch them since the patterns are now well-established? Default: A/B/C for the export endpoint (new API surface, needs the discipline); A/B for the retry button (UI-only, lighter). A = 1 commit, B = 1 commit, C = optional follow-up if something needs fixing in test 2.
 
+---
+
+## 12. Whisper-output duplicate-line cleanup (deferred 2026-09-20)
+
+**Idea:** Deduplicate transcript lines on the **Whisper (file-upload) path**.
+
+**History / why (2026-09-20):** while verifying the YouTube ASR rolling-caption
+dedupe (commit `3d0f0c2`, which fixed the caption-download path), a DB scan
+found the worst duplicate offender is NOT a YouTube import but an uploaded
+file transcribed by local Whisper:
+
+- "Call with Hugh Purcell-20260819_162813-Meeting" — 125 duplicate pairs in
+  494 segments (~25% of the transcript is repeats)
+
+Whisper hallucination-repeats are a **different artifact** from YouTube's
+rolling-window format: Whisper tends to repeat a line during silence/music
+(freeze-loop hallucination), often with a real time gap between the repeats —
+so the contiguous-echo rules from `_dedupe_rolling_captions` (app/services/
+youtube_captions.py) do NOT transfer. A Whisper-side dedupe needs its own
+ruleset (e.g. N consecutive identical lines regardless of timing, or repeat
+bursts during no-speech windows), and the genuine-verbatim-speech question
+("I said no. I said no.") needs a considered answer before shipping.
+
+**Rough shape (when picked up):**
+- Post-transcription pass in `app/services/transcription.py` (after segments
+  land, before the Asset is written), OR a one-shot backfill script for
+  existing rows (same shape as `scripts/fix_stuck_transcribe.py`).
+- Detection rule to ratify first: exact-identical text in ≥2 consecutive
+  segments (collapse to 1), possibly conditioned on segment duration or gap
+  so genuine repeats survive.
+- Tests: crafted Whisper-shaped repeat samples + a real meeting recording.
+
+**Effort:** ~2–3 h including tests + the backfill decision.
+
+**Depends on:** nothing. Trigger: next time an uploaded recording with
+music/silence sections produces an ugly transcript, or anytime.
+
+**Status:** logged 2026-09-20 after the live-URL import fixes; deferred in
+favor of the two never-run launch tests (crash-recovery + reboot).
+
