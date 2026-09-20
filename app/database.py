@@ -121,6 +121,102 @@ if _is_file_backed_sqlite(settings.database_url):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+# ── Pool watchdog (2026-09-20 — the QueuePool-exhaustion outage) ──────────
+#
+# WHAT HAPPENED: a claim bug in the transcribe queue rolled back status
+# flips, letting the 4 per-process schedulers re-claim and re-dispatch the
+# same video every 3s. The live incident stacked ~60 concurrent transcribe
+# threads (15/worker), each holding a checked-out pool connection through
+# multi-minute Whisper work — 60 checked-out vs a 30-capacity pool meant
+# EVERY request timed out (the "Internal server error: TimeoutError" users
+# saw on 9/19 AND 9/20; the site sat dark for hours between restarts).
+#
+# WHAT THIS DOES: a daemon thread per process samples the pool every 30s.
+# Sustained near-full checked-out counts (>24 of 30 for 3 consecutive
+# samples = 90s) mean a leak, not a burst. When tripped it:
+#   1. logs pool diagnostics + a thread list (the evidence we had to
+#      sudo-sample by hand during the incident)
+#   2. calls engine.pool.dispose() — closes ALL checked-out/idle
+#      connections; in-use sessions get fresh connections on their next
+#      checkout. Leaked-but-dead sessions release here; live threads
+#      transparently reconnect. This is the self-heal: pool pressure
+#      clears without a restart.
+# The root-cause fix is the claim-commit in transcribe_queue.py; this
+# watchdog is defense in depth for ANY future session leak.
+_WATCHDOG_INTERVAL_SECONDS = 30
+_WATCHDOG_TRIP_THRESHOLD = 24  # of 30 — 80% sustained
+_WATCHDOG_TRIP_SAMPLES = 3     # consecutive samples → dispose
+
+_pool_watchdog_started = False
+_pool_watchdog_lock = __import__("threading").Lock()
+
+
+def _start_pool_watchdog() -> None:
+    """Start the per-process pool watchdog (idempotent)."""
+    global _pool_watchdog_started
+    import logging
+    import threading
+
+    with _pool_watchdog_lock:
+        if _pool_watchdog_started:
+            return
+        _pool_watchdog_started = True
+
+    log = logging.getLogger("database.pool_watchdog")
+
+    def _watchdog_loop() -> None:
+        import time
+
+        consecutive_high = 0
+        while True:
+            time.sleep(_WATCHDOG_INTERVAL_SECONDS)
+            try:
+                status = engine.pool.status()
+                # status() → (pool_size, checked_in, checked_out, overflow)
+                checked_out = status[2] + status[3]
+                if checked_out >= _WATCHDOG_TRIP_THRESHOLD:
+                    consecutive_high += 1
+                    log.warning(
+                        "pool pressure: checked_out=%d (size=%d overflow=%d) "
+                        "sample %d/%d",
+                        checked_out, status[0], status[3],
+                        consecutive_high, _WATCHDOG_TRIP_SAMPLES,
+                    )
+                    if consecutive_high >= _WATCHDOG_TRIP_SAMPLES:
+                        log.error(
+                            "pool watchdog DISPOSING pool — %d connections "
+                            "checked out for >%ds (session leak?). "
+                            "Threads: %s",
+                            checked_out,
+                            _WATCHDOG_INTERVAL_SECONDS * _WATCHDOG_TRIP_SAMPLES,
+                            [
+                                f"{t.name}({'daemon' if t.daemon else 'user'})"
+                                for t in threading.enumerate()
+                            ],
+                        )
+                        engine.pool.dispose()
+                        consecutive_high = 0
+                else:
+                    consecutive_high = 0
+            except Exception:
+                # Never die; a watchdog crash must not take the worker.
+                log.exception("pool watchdog tick failed")
+
+    t = threading.Thread(
+        target=_watchdog_loop,
+        daemon=True,
+        name="pool-watchdog",
+    )
+    t.start()
+    log.info(
+        "pool watchdog started (threshold=%d/%d for %d samples)",
+        _WATCHDOG_TRIP_THRESHOLD, 30, _WATCHDOG_TRIP_SAMPLES,
+    )
+
+
+_start_pool_watchdog()
+
+
 class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
 

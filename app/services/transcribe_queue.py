@@ -78,8 +78,13 @@ _last_claim_monotonic = 0.0
 # owner_uid -> monotonic time the last slot was claimed for that user
 # (per-process; the DB is the cross-process truth — this only staggers
 # claims made by THIS process within one pass)
-_recent_claims: dict[str, float] = {}
-
+_recent_claims: dict[str, float] = {}# 2026-09-20 (duplicate-dispatch guard): video_ids this process has EVER
+# dispatched for. If a claim bug ever regresses (rollback reverts the
+# row to 'queued', another pass re-claims it), this set makes the
+# second dispatch impossible WITHIN a process — one video, one thread.
+# Cross-process safety remains the DB claim's job (now with the commit
+# fix); this is the per-process belt-and-braces for claim regressions.
+_dispatched_videos: set[str] = set()
 
 def _now_utc() -> datetime:
     return datetime.now(_tz.utc).replace(tzinfo=None)
@@ -124,7 +129,23 @@ def _claim_one(db: Session, *, pass_two: bool) -> str | None:
         """
     )
     row = db.execute(sql).first()
-    return row[0] if row else None
+    if row is None:
+        return None
+
+    # 2026-09-20 CRITICAL FIX (the duplicate-dispatch storm): the claim's
+    # UPDATE must be COMMITTED, not just flushed. This session is opened
+    # via `with SessionLocal() as db:` which ROLLS BACK on close — so
+    # the status flip silently reverted to 'queued' after every pass,
+    # and each of the 4 workers' schedulers re-claimed the SAME row every
+    # 3 seconds. Each claim spawned another _staggered_transcribe_job
+    # thread that never observed "already claimed": the live incident
+    # had ~60 concurrent transcribe threads (15/worker) for ONE video,
+    # each holding a pool connection through multi-minute Whisper work
+    # — 60 checked-out connections vs a 30-connection QueuePool took
+    # the whole site dark (QueuePoolTimeoutError on every request).
+    # The commit makes the claim durable across processes immediately.
+    db.commit()
+    return row[0]
 
 
 def _owner_of(db: Session, video_id: str) -> str:
@@ -219,6 +240,23 @@ def _scheduler_pass_inner(db: Session) -> int:
             break  # queue empty
 
         _last_claim_monotonic = time.monotonic()
+
+        # 2026-09-20 duplicate-dispatch guard: refuse to dispatch the
+        # same video twice from THIS process (see _dispatched_videos).
+        # If the DB claim ever regresses, the duplicate thread is
+        # rejected here instead of stacking another Whisper pipeline.
+        if video_id in _dispatched_videos:
+            logger.error(
+                "mini-queue: duplicate claim of %s detected — refusing "
+                "second dispatch (claim rollback regression?)",
+                video_id,
+            )
+            # Leave the row as-is: if the first dispatch is genuinely
+            # running, it owns the work; if it died, requeue-stuck /
+            # recover-orphans handle it as designed. Not counted as a
+            # claim — no dispatch happened, no thread was started.
+            break
+        _dispatched_videos.add(video_id)
         claimed += 1
 
         # Dispatch the full chain (same worker as the existing retry

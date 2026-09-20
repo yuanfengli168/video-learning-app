@@ -127,6 +127,78 @@ def test_slot_frees_when_transcription_completes(db_session, clean_queue_state):
     assert db_session.get(Video, w1.id).status == "transcribing"
 
 
+# ── Claim durability (2026-09-20 — the duplicate-dispatch storm) ─────────
+
+
+def test_claim_survives_session_close(db_session, clean_queue_state):
+    """REGRESSION (2026-09-20 outage root cause): the claim's UPDATE
+    must be COMMITTED, not left to the session's close. The scheduler
+    loop opens sessions with `with SessionLocal() as db:` — on close
+    that ROLLS BACK un-flushed work. The original claim code relied on
+    that flush alone, so the status flip reverted to 'queued' and the
+    next pass (3s later, 4 workers) re-claimed the same row — stacking
+    ~60 concurrent transcribe threads for one video and exhausting the
+    30-connection QueuePool (site-wide TimeoutErrors, 9/19 AND 9/20).
+
+    This test reproduces the EXACT bug shape: claim via a FRESH session
+    (like the scheduler's own), then verify the flip is visible from a
+    THIRD session after the first one closes. Rollback → the test fails.
+    """
+    from app.database import SessionLocal
+
+    section = _mk_course_section(db_session, "u1")
+    queued = _mk_queued_video(db_session, section, title="victim")
+
+    # The scheduler's shape: fresh session, claim, close (no commit in
+    # the ORIGINAL code — the fix added db.commit() inside _claim_one).
+    with SessionLocal() as sched_db:
+        claimed_id = clean_queue_state._claim_one(sched_db, pass_two=True)
+        assert claimed_id == queued.id
+
+    # Session is CLOSED here. If the claim rolled back, the row reads
+    # 'queued' from a fresh session and would be re-claimable → storm.
+    with SessionLocal() as verifier:
+        row = verifier.get(Video, queued.id)
+        assert row.status == "transcribing", (
+            "claim did not survive session close — the duplicate-dispatch "
+            "storm bug is back (missing db.commit() in _claim_one)"
+        )
+        # And a second claim in a fresh session finds nothing to claim
+        again = clean_queue_state._claim_one(verifier, pass_two=True)
+        assert again is None, "the row is re-claimable → double dispatch"
+
+
+def test_duplicate_dispatch_refused(db_session, clean_queue_state):
+    """Belt-and-braces: even if a claim bug regresses (rollback reverts
+    a row to 'queued'), the per-process _dispatched_videos guard makes
+    the second dispatch of the same video impossible — the scheduler
+    logs ERROR and stops, never stacks another Whisper pipeline."""
+    tq = clean_queue_state
+    section = _mk_course_section(db_session, "u1")
+    v1 = _mk_queued_video(db_session, section, title="d1")
+
+    # Simulate the first claim+dispatch (records v1 in the guard set)
+    with patch("app.routers.courses._staggered_transcribe_job") as job:
+        assert _REAL_PASS(db_session) == 1
+        assert v1.id in tq._dispatched_videos
+
+        # Simulate the regression: the row flips BACK to 'queued'
+        db_session.expire_all()
+        row = db_session.get(Video, v1.id)
+        row.status = "queued"
+        db_session.commit()
+
+        # A new pass claims it again (SQL matches 'queued' rows)…
+        # …but the guard must refuse the second dispatch: the pass
+        # reports 0 claims dispatched (logs ERROR and breaks).
+        claimed = _REAL_PASS(db_session)
+        assert v1.id in tq._dispatched_videos  # still just one entry
+        # The pass returned 0: dispatch was refused, no second thread.
+        assert claimed == 0, (
+            "duplicate dispatch not refused — the guard regressed"
+        )
+
+
 # ── Two-pass fairness (decision #10) ──────────────────────────────────────
 
 
