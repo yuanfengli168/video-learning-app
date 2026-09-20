@@ -518,3 +518,37 @@ customer-real), batch count cap (leaning drop), storage quota size.
 **Status:** design captured; awaiting sign-off on the open decisions
 before 13a starts.
 
+---
+
+## 14. Beta program — 100 users, 3-month founding free + feedback loop (planned 2026-09-20)
+
+**Idea:** Owner-ratified plan: PAID = 19.99 SGD/mo (4GB/video, 25GB
+storage). Invite 50 FREE + 50 founding PAID users; founding members free
+3 months in exchange for structured feedback. Full program + economics
++ success criteria: **doc/PriceAndCost/upload-size-architecture.md
+Addendum A8** (read that first).
+
+**Phases:**
+- 14a. FREE-tier trial upload (ONE upload ≤200MB per free user, full
+  study-kit) — the "magic moment" funnel experiment. Small capability
+  gate change; highest-leverage growth move identified in the pricing
+  critique.
+- 14b. Stripe beta billing: card-on-file at $0 day 0 (native Stripe
+  trial support), auto-charge 19.99 at day 90, founding lock at 14.99
+  forever (metadata on the subscription).
+- 14c. Feedback infra: Discord routing (link already wired), weekly
+  3-question pulse survey, 10 scheduled interviews, events-table
+  mining dashboard.
+- 14d. LLM quota review before invitations: per-user rate limits vs
+  50-user load; OpenAI fallback budget estimate (~S$20–50/mo peak).
+
+**Success criteria (defined pre-invitation, per A8):** ≥35/50 weekly-
+active in month 3; ≥40% day-90 conversion; ≥10 interviews; zero data
+loss. <40% conversion → iterate before growth spend.
+
+**Effort:** 14a ~half day; 14b ~2–3 days; 14c ~1 day; 14d ~half day.
+
+**Status:** plan ratified with the A8 five fixes; not started.
+Sequencing recommendation: 13a (chunked uploads) first — the beta
+promises 4GB via tunnel, which requires it — then 14a.
+

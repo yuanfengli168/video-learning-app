@@ -206,3 +206,70 @@ concurrency pointless anyway).
 3. Stripe Checkout + webhook + entitlement
 4. Storage quota + meter (the sustainability lever — may move earlier if user growth is fast)
 5. Then: launch tests, Whisper dedupe (#12), long-video handling (its own doc someday)
+
+---
+
+## Addendum A8 — pricing verdict + the beta program (2026-09-20, third round)
+
+> Decision update: **PAID = 19.99 SGD/mo, 4GB max per video, 25GB storage** (the
+> A3 size-ladder sketch is superseded). Beta program ratified with five fixes.
+
+### The competitive honesty (kept from the critique, still true)
+
+NotebookLM is free and does ~70% of this product's core flow. The defensible
+wedge: complete study-kit (mindmap+flashcards+quiz+timestamped chat citations
+in one flow), Chinese/English mixed-content handling, YouTube playlist bulk
+import. The price is defensible ONLY alongside that wedge and a trial that
+lets users feel it.
+
+### The beta program (owner's plan, 2026-09-20)
+
+- 19.99 SGD/mo PAID; 4GB/video; 25GB storage
+- Invite **50 FREE users + 50 founding PAID users**
+- Founding members: **free for 3 months**, in exchange for feedback
+- Goal: 50 paying users after "beta success"
+
+### The five fixes (ratified into the plan)
+
+1. **Card on file at day 0** ($0 hold, charge at day 90). The strongest
+   conversion predictor; without it, month 3 asks 50 people to pay from a
+   standing start. Stripe supports this natively.
+2. **Founding-member price lock**: beta users keep 14.99 SGD forever; 19.99
+   becomes the true list price for post-beta users. Rewards risk-takers,
+   makes the anchor real, testable.
+3. **FREE cohort = funnel experiment**: free tier gets exactly ONE trial
+   upload (the "magic moment" — their own lecture → full study kit) plus
+   browse/limited chat. Founding cohort = retention + conversion experiment.
+   Two experiments, one beta. The FREE tier today cannot upload at all —
+   without a trial upload, free users never feel why to pay.
+4. **Feedback structure**: route to the existing Discord
+   (COMMUNITY_INVITE_URL already wired), weekly 3-question pulse, 10× 15-min
+   interviews, and mine the events table (what people DO > what they say).
+5. **LLM quota is the shared bottleneck, not storage**: Ollama 3000 req/wk
+   is shared across ALL paid chats; 50 users ≈ 1000/wk typical but exam-season
+   spikes will breach → OpenAI gpt-4o-mini fallback costs real money
+   (est. S$20–50/mo peak). Review per-user rate limits before invitations.
+
+### Beta success criteria — defined BEFORE invitations (else post-hoc rationalization)
+
+- ≥35/50 founding users still weekly-active in month 3
+- ≥40% of founding cohort converts to paying at day 90
+  (industry free→paid is 5–15%; founding psychology buys up to ~40%)
+- ≥10 structured interviews completed
+- Zero data-loss incidents
+- If conversion <40% → iterate price/product BEFORE growth spend
+
+### Economics of the free beta
+
+3 months, 100 users, S$0 revenue. Costs: electricity ~S$30–60/mo + OpenAI
+fallback (~S$20–50 peak months) ≈ **S$200–400 total**. Cheap validation —
+but budgeted, not discovered.
+
+### Capacity recheck at this exact shape (50 paid × 25GB)
+
+1,250GB worst case = 68% of the 1.8TB volume — fits with the earlier headroom
+math. GPU at 50 users ≈ 12–25 whisper-hours/mo — fine. FREE trial uploads:
+50 × ≤200MB = 10GB — trivial. The 2GB-vs-4GB concern from A-critique is
+accepted-with-eyes-open: keep 4GB as the promise, watch streaming bandwidth
++ Cloudflare free-plan video-serving ToS exposure during beta, and revisit
+if the tunnel complains (R2 playback is the escape hatch).
