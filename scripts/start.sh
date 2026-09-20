@@ -94,6 +94,18 @@ echo ""
 export NO_PROXY="*"
 export no_proxy="*"  # belt + suspenders (some libs check lowercase)
 
+# ── macOS fork-safety (2026-09-20 hardening #2 — the 502 crash) ─────────────
+# The first attempt set OBJC_DISABLE_INITIALIZE_FORK_SAFETY inside
+# gunicorn.conf.py + app/main.py — but that runs AFTER the master's
+# Python runtime (and its ObjC-active imports) has already initialized;
+# live verification showed the env var missing from the running
+# processes and workers still SIGABRT-ing (42 crashes, one mid-upload
+# → the user's 502). The variable must exist in the environment BEFORE
+# any Python starts — start.sh is the earliest hook the launchd
+# daemon runs. (The config-file copies stay as belt-and-braces for
+# manual gunicorn runs without this script.)
+export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+
 # ── Start ───────────────────────────────────────────────────────────────────
 if [[ "$SERVER" == "gunicorn" ]]; then
     # Production: gunicorn process manager with uvicorn workers
