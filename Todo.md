@@ -488,3 +488,33 @@ music/silence sections produces an ugly transcript, or anytime.
 **Status:** logged 2026-09-20 after the live-URL import fixes; deferred in
 favor of the two never-run launch tests (crash-recovery + reboot).
 
+---
+
+## 13. Chunked uploads + paid add-on ladder (planned 2026-09-20)
+
+**Idea:** Remote PAID users can't upload >100MB through the Cloudflare
+tunnel (edge-enforced; no plan tier fixes it). Solution: chunked/resumable
+uploads (32–64MB slices) + a size-tier entitlement system. Full design +
+pricing brainstorm in **doc/PriceAndCost/upload-size-architecture.md**
+(read that first — this entry is just the tracking pointer).
+
+**Phases:**
+- 13a. Chunked upload core: init/chunk/complete endpoints, client JS,
+  resume-status, abandoned-upload sweeper. PAID=500MB stubbed internally.
+- 13b. Per-file tier checks + the skip-with-reason batch UX (per-file
+  semantics, pre-upload size check, teach-the-fix messages).
+- 13c. Stripe Checkout + webhook + entitlement lookup; one add-on
+  (Large Uploads, ~$4.99 one-time; hard cap 1GB — pending the OPEN
+  customer-need question in the doc).
+- 13d. Per-user storage quota ~15GB + dashboard meter + verify delete
+  actually frees disk (the 100-user sustainability lever).
+
+**Effort:** 13a ~1–2 days; 13b ~half day; 13c ~2–3 days; 13d ~1 day.
+
+**Open decisions (see doc addendum A1–A6):** per-file vs batch-total
+(leaning per-file), 1GB vs 2GB cap (hinges on whether 3–4GB is
+customer-real), batch count cap (leaning drop), storage quota size.
+
+**Status:** design captured; awaiting sign-off on the open decisions
+before 13a starts.
+

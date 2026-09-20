@@ -105,3 +105,104 @@ Point `upload.capysmart.com` DNS-only (no proxy) at the home IP with a Let's Enc
 Sequencing proposal: write the endpoint design doc for sign-off (init/chunk/complete schemas, resume-status response, sweeper policy, per-tier upload caps — e.g. should FREE users get chunked uploads too, or is >100MB a PAID feature?), then implement in the A/B/C commit pattern this repo already uses.
 
 **Not started — awaiting go-ahead.** Related reading: `mvp2-storage-architecture.md` (where uploads live), `roles-tiers-cheatsheet.md` (tier gating questions), `chat-context-economics.md` (the same "business limit that looks like a bug" family).
+
+---
+
+## Addendum — pricing & semantics brainstorm (2026-09-20, later same day)
+
+> A second round after the initial doc. Product framing shifted from "three
+> add-on categories" to "**one included tier + one add-on**", plus a storage
+> sustainability model for ~100 paid users. Decisions marked **[DECIDED]** or
+> **[OPEN]**.
+
+### A1. Corrected ladder: PAID includes ≤500MB, one add-on above it
+
+**[DECIDED]** Every PAID user can upload files up to **500MB** with no
+purchase — chunked uploads ship as part of the base PAID plan. Add-ons exist
+ONLY above 500MB. (Earlier draft wrongly had a "≤500MB add-on" purchase —
+corrected by product owner: "any paid user has ability to upload ≤500MB".)
+
+### A2. Per-file vs batch-total semantics
+
+Two models were laid out in detail:
+
+- **(a) batch-total**: the whole selection's sum must fit the tier → awkward
+  partial-acceptance UX, and trivially circumvented by re-submitting files
+  one at a time (a limit that users route around breeds resentment).
+- **(b) per-file** *(recommended)*: each file evaluated independently;
+  oversized ones are skipped pre-upload with a per-file reason; the rest
+  proceed. Matches the existing bulk architecture (audit decision #9 already
+  built per-file skip-with-reason + projected caps), and chunked uploads are
+  inherently per-file anyway (one session per file, tier checked at init).
+
+**[OPEN — leaning (b)]** The worked example that sold (b): user selects
+100MB + 200MB + 150MB + 800MB → first three upload, video 4 shows
+"800MB — above your 500MB plan. Unlock 1GB uploads →" with ZERO wasted
+bytes (the browser knows file.size before upload).
+
+### A3. Hard cap + single add-on
+
+Product instinct: cap the platform at a modest size and teach users to
+shrink beyond it, rather than selling ever-bigger tiers:
+
+- **Proposed: 1GB hard cap**; single add-on "Large Uploads — up to 1GB",
+  **$4.99 one-time** (pending the OPEN question below).
+- Failure messages must teach: "2.3GB is over the 1GB limit. Quick fix:
+  HandBrake → H.265, or your phone's 'high-efficiency' recording setting
+  gets most lectures under 1GB."
+- Content-reality table that motivates the cap: >1GB files are exactly the
+  ones that stress the queue (hours of Whisper holding a 2-slot global
+  queue), the chat context cap (3–4h video blows past even ADMIN 8000
+  segs), and disk.
+- **[OPEN]** Is the 3–4GB need customer-real or admin-own-workflow?
+  If customers genuinely need 3–4GB, a 1GB cap fails them on day one
+  (cap should then be 2GB and add-on 500MB→2GB). The localhost 10GB
+  direct path covers the admin's own big files either way.
+- Future "no friction" option (NOT now): server-side transcode via the
+  M2 Max media engine — upload anything, we shrink to ≤1GB automatically.
+
+### A4. Purchase flow — Stripe Checkout
+
+**[DECIDED]** Stripe Checkout hosted page (payment UX, receipts, cards,
+errors all handled by Stripe); we implement: entitlement check at upload
+init, webhook handler, and the upsell cards. Surfaced at (1) the failure
+moment — inline "unlock" card, and (2) a dashboard/uploads settings card
+for buy-ahead. No in-app billing UI.
+
+### A5. Sustainability math for ~100 paid users — storage is the real lever
+
+The packs don't sustain anything; **disk does**:
+
+- Included-tier habit ≈ 5 videos/mo × 500MB = 2.5GB/user/mo
+- 100 users → **250GB/month → the 1.8TB NVMe fills in ~7 months**
+  regardless of add-ons
+- **[OPEN — leaning yes] Proposed: per-user storage quota ~15GB**
+  (1.8TB ÷ 100 = 18GB each; 15GB leaves margin; a 2TB drive is a rounding
+  error against $1,499/mo revenue if we'd rather scale than limit).
+  Needs: storage meter on dashboard, a "storage full — delete to continue"
+  state, and VERIFICATION that deleting a video actually frees the source
+  file from disk (unverified as of this doc).
+- The asymmetry that saves us: transcripts + materials are ~100–500KB per
+  video — the learning value survives at negligible cost even with tight
+  source-file management.
+- GPU is fine: 100 users ≈ 250 content-hours/mo ≈ 25–50 MLX-whisper hours
+  ≈ 1–2h/day. Uplink fine: chunking self-serializes.
+- **Long-term pricing insight**: storage quota (+50GB for $X/mo, the
+  iCloud/Dropbox model) is the more honest add-on — upload-size add-on now
+  (matches user intent: "this file is too big"), storage add-on later
+  (matches our cost reality). They compose.
+
+### A6. Batch limits
+
+**[OPEN — leaning drop]** Drop any batch item-count cap (the existing
+15/day + 6 in-flight already bound volume); optionally enforce one
+concurrent upload session per user (uplink serialization makes more
+concurrency pointless anyway).
+
+### Sequencing (unchanged + expanded)
+
+1. Chunked upload core (entitlements stubbed: PAID=500MB internally, unlimited while testing)
+2. Per-file tier checks + skip-with-reason batch UX (Stripe not needed yet)
+3. Stripe Checkout + webhook + entitlement
+4. Storage quota + meter (the sustainability lever — may move earlier if user growth is fast)
+5. Then: launch tests, Whisper dedupe (#12), long-video handling (its own doc someday)
