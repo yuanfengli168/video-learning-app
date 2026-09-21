@@ -775,12 +775,25 @@ def _staggered_transcribe_job(video_id: str, delay_seconds: int) -> None:
                 video_id, "transcribe", total=100,
                 message="Queue claimed — loading Whisper...",
             )
+            # 2026-09-21 CRITICAL FIX (doc/known-issues-2026-09-21.md §4):
+            # the old code hardcoded _run_transcribe_job(video_id, "base")
+            # — every queue dispatch since 9/16 transcribed with CPU
+            # faster-whisper "base" instead of the model the upload STAMPED
+            # on the row (whisper_model, set at upload from the user's
+            # choice / smart default). The 9/18-19 MLX runs in the DB came
+            # from the recovery scripts, which passed the model correctly —
+            # masking the bug. Now: read the stamped choice at dispatch;
+            # NULL (legacy rows) falls back to the smart default.
+            _choice = _v.whisper_model or None
             _v.last_transcribe_job = serialize_job(_job)
             _db.commit()
     finally:
         _db.close()
+    if not _choice:
+        from app.services.transcription import get_default_model_choice
+        _choice = get_default_model_choice()
 
-    _run_transcribe_job(video_id, "base")
+    _run_transcribe_job(video_id, _choice)
 
     # Transcribe failed? _run_transcribe_job set status='error' and
     # wrote the failure to the job tracker — nothing to chain into.

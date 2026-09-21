@@ -281,7 +281,34 @@ def test_staggered_transcribe_job_registers_job_before_running(db_session):
     job = get_job(video.id, "transcribe")
     assert job is not None
     assert job["status"] == "running"
-    run_mock.assert_called_once_with(video.id, "base")
+    # 2026-09-21 (§4 fix): the dispatch passes the model STAMPED on the
+    # row — _mk_video leaves whisper_model NULL → the smart default.
+    from app.services.transcription import get_default_model_choice
+    run_mock.assert_called_once_with(
+        video.id, get_default_model_choice()
+    )
+
+
+def test_staggered_transcribe_job_uses_stamped_model(db_session):
+    """REGRESSION (doc/known-issues-2026-09-21.md §4): the dispatch must
+    use the whisper_model the upload STAMPED on the row, not a hardcoded
+    'base'. Live impact: every queue upload since 9/16 ran CPU
+    faster-whisper 'base' instead of MLX turbo (quality + speed loss;
+    the 7-minute transcribe on a 47-min 4K video).
+    """
+    section = _mk_course_section(db_session)
+    video = _mk_video(db_session, section.id, status="queued")
+    video.whisper_model = "local-large-turbo"   # what a real upload stamps
+    db_session.commit()
+
+    from app.routers.courses import _staggered_transcribe_job
+
+    with patch(
+        "app.routers.videos._run_transcribe_job"
+    ) as run_mock:
+        _staggered_transcribe_job(video.id, 0)
+
+    run_mock.assert_called_once_with(video.id, "local-large-turbo")
 
 
 def test_requeue_staggered_pipeline_registers_job(db_session):
