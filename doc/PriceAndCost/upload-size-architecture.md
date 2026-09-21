@@ -273,3 +273,81 @@ math. GPU at 50 users ≈ 12–25 whisper-hours/mo — fine. FREE trial uploads:
 accepted-with-eyes-open: keep 4GB as the promise, watch streaming bandwidth
 + Cloudflare free-plan video-serving ToS exposure during beta, and revisit
 if the tunnel complains (R2 playback is the escape hatch).
+
+---
+
+## Addendum A9 — the shutdown-beta plan (2026-09-21; supersedes A8's billing sections)
+
+> **Premise change**: the beta is now a PRODUCT-AND-OPS beta that ends with a
+> **shutdown at ~3 months**, followed by a polish window and a relaunch.
+> There is **no conversion event during beta** — nothing charges, nobody
+> pays. Consequently A8's billing mechanics (card-on-file day 0, day-30
+> charge, 40% day-90 conversion criterion) are **obsolete** and dropped.
+> The beta's deliverables: reliability evidence at 100 users on one Mac
+> Studio, study-kit quality feedback, events-table usage data, and a Discord
+> community that survives the shutdown.
+
+### Stripe: DEFERRED to relaunch — critical reasoning
+
+- Billing infra (webhooks, entitlements, test-mode) would process **zero
+  invoices before the server shuts down**. Negative ROI vs 13a.
+- **Manual SQL flips are appropriate tooling** for ≤100 invited users
+  (same pattern as promote-admin.sh): user emails their Gmail → owner flips
+  `role` in the DB → log the flip in the events table. A flip-kit is ~20 min.
+- Stripe gets built **once, properly, at relaunch** — after the beta reveals
+  which entitlements matter, with real pricing, without fire-fighting.
+- Accepted consciously: **no revealed-preference pricing data during beta**.
+  Compensating control: shutdown-week return-intent survey ("would you
+  return at 14.99 founding / 19.99?") — stated intent inflates ~2–3× vs
+  behavior; know that going in.
+- **Zero-code middle option** (take it): create the Stripe account + two
+  Prices (Founding 14.99 / List 19.99) in the dashboard now (~30 min, no
+  integration) + a Payment Link in Discord: "Founding pre-order — lock
+  14.99 forever, beta's free anyway." 5–10 voluntary payers = real
+  willingness-to-pay signal at zero engineering cost; reconcile manually.
+
+### Pre-beta MUST list (~4–5 days)
+
+| Item | Why it can't defer | Effort |
+|---|---|---|
+| 13a — chunked uploads | The beta's core loop is "upload real lecture → study kit"; real lectures are 500MB–2GB, tunnel caps 100MB without it | 1–2 d |
+| 14c-lite — feedback infra | Under this plan, feedback IS the beta's product; also the bridge through the shutdown (Discord survives) | ~1 d |
+| 14d — LLM quota review | 100 users share 3000 Ollama req/wk INTO finals season; per-user limits must be set before invitations | ~0.5 d |
+| Delete-frees-disk audit | Beta users churn; phantom storage over 3 months. Verify with 3–4 test deletions | ~2 h |
+| The two launch tests | crash-recovery + reboot, before anyone depends on the box | 10 min |
+| Flip-kit | promote-paid SQL snippet + events-table logging | ~20 min |
+
+### DEFER-to-relaunch list (this IS the relaunch checklist)
+
+| Item | Why deferring is safe/correct |
+|---|---|
+| 14b — Stripe billing | See above; build once at relaunch |
+| 14a — trial-upload funnel | SELF-SERVE relaunch feature; invite-only beta has no signup funnel (every user hand-granted) |
+| 13d — storage quota/meter | Worst case 50×25GB = 68% of volume fits; disk risk bounded by invite count; weekly `df -h` glance substitutes for a meter |
+| Tier automation / webhooks | SQL flips cover beta entirely |
+| R2 playback / streaming hardening | Only matters when promising 4GB streams to strangers; monitor tunnel load during beta instead |
+| Whisper dedupe (#12) | Borderline: beta QUALITY (ugly transcripts = bad feedback) but not blocking; sneak in if 13a lands early (2–3h) |
+
+### Shutdown conditions (all three are commitments, not suggestions)
+
+1. **Announce the shutdown date + data policy IN THE INVITATION**: "Beta
+   ends ~Dec 21; service pauses for a rebuild; export your materials
+   anytime (export endpoint exists); founding members get first access +
+   locked pricing at relaunch." Never surprise-delete a semester of work —
+   SG uni circles are small and talk.
+2. **Write the relaunch gate NOW**: deferred list above + "relaunch before
+   semester starts, mid-Jan." Indefinite polish is the classic indie
+   graveyard; a dated gate is the protection.
+3. **New success criteria** (no conversion event exists, so measure product
+   + ops): ≥50/100 weekly-active during finals weeks; upload success rate
+   ≥95%; study-kit quality ≥4/5 in interviews; ≤2 production incidents;
+   ≥10 interviews; shutdown-week return-intent survey. Define "polish
+   complete" before turning the server off.
+
+### The calendar (quietly perfect)
+
+Beta now → shutdown ~Dec 21 captures SG midterms (Oct) AND finals
+(late Nov–early Dec) — both peak-value windows. December break = natural
+dormancy. Polish through December. **Relaunch mid-January for semester
+start.** The shutdown cadence and the target market's academic calendar
+align with zero forcing.

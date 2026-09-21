@@ -552,3 +552,16 @@ loss. <40% conversion → iterate before growth spend.
 Sequencing recommendation: 13a (chunked uploads) first — the beta
 promises 4GB via tunnel, which requires it — then 14a.
 
+**UPDATE 2026-09-21 (A9 — the shutdown-beta supersedes parts of this
+entry):** the beta now ENDS with a shutdown at ~3 months → polish →
+mid-Jan relaunch. NO conversion event during beta: **14b (Stripe) is
+DEFERRED to relaunch** — billing infra would process zero invoices;
+manual SQL role flips (flip-kit, ~20 min, same pattern as
+promote-admin.sh) cover the invite-only cohort. **14a (trial-upload
+funnel) also defers** — self-serve feature, no signup funnel exists in
+an invite-only beta. Kept from A8: 14c-lite (feedback infra — now MORE
+important: feedback IS the beta's product) and 14d (LLM quota review —
+100 users into finals season). Full triage + relaunch checklist +
+shutdown conditions: doc/PriceAndCost/upload-size-architecture.md
+Addendum A9.
+
