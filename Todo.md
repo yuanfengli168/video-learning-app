@@ -516,6 +516,57 @@ play it).
 
 ---
 
+## 16. Session/auth hardening — token refresh audit + optional backend sessions (deferred 2026-09-21)
+
+**Context (2026-09-21, from the owner's two live reports):**
+
+1. **"Login on browser B kicks browser A"** — investigated; my first
+   theory (Firebase revoking A's token on B's sign-in) was WRONG and is
+   retracted. Firebase does not revoke existing sessions on a new
+   sign-in; persistence + our cookie are both per-browser. Design says
+   two browsers should hold the same account simultaneously. The
+   observation remains UNEXPLAINED — needs a structured repro
+   (protocol captured below) before any fix.
+
+2. **The 1-hour cookie** — the `COOKIE_MAX_AGE=3600` is correct and
+   matches Firebase's own hard 1-hour ID-token expiry (a longer cookie
+   just holds a dead token). Real login longevity comes from the
+   SILENT REFRESH: the frontend's cached Firebase session
+   (IndexedDB) re-issues tokens via getIdToken() → re-POST
+   /api/auth/session → new cookie. If that refresh path has gaps
+   (only runs on some navigations? not before cookie expiry?), users
+   get bounced to login and report "random logouts" — the LIKELY
+   real cause behind report #1 too.
+
+**The deferred work (when picked up):**
+
+- **A. Token-refresh audit + fix** (small, do first): trace every
+  page's refresh behavior — when is getIdToken() called, is there a
+  proactive refresh when the cookie is near expiry, what happens on
+  long-lived tabs (dashboard left open 2h+). Make refresh robust on
+  all pages. This likely explains BOTH reports.
+- **B. Backend-issued session tokens** (the real fix if A isn't
+  enough, relaunch tier): backend verifies Firebase once, issues its
+  own 7-30 day revocable session (DB row per device) → true multi-
+  device sessions, "sign out everywhere" UI, clear "signed in
+  elsewhere" messaging. ~1-2 days; auth-architecture change.
+- **Repro protocol for report #1** (run before fixing anything):
+  A-browser signs in as X → B-browser signs in as SAME X → check
+  (i) B lands on /, (ii) A works on next click. Note exact URLs,
+  error text, timestamps; same-browser-profile vs different-browser-
+  app vs different-machine all behave differently — record which.
+
+**Decision (owner, 2026-09-21): defer entirely.** Beta users can
+re-login on the (rare) bounce; the auth work happens at polish time
+with real beta logout-frequency data informing whether B is needed
+at all.
+
+**Status:** deferred. Revisit at the December polish window or if
+beta users report frequent unexpected logouts (track: any Discord
+complaints matching this pattern).
+
+---
+
 ## 13. Chunked uploads + paid add-on ladder (planned 2026-09-20)
 
 **Idea:** Remote PAID users can't upload >100MB through the Cloudflare
