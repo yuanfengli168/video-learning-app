@@ -63,17 +63,17 @@ uploads."); the server re-validates at init (the client can be lied to).
 | PAID | **25 GB** | `STORAGE_QUOTA_PAID_GB` | `users.storage_quota_bytes` |
 | FREE | ❌ n/a (no uploads) | — | — |
 
-**What counts** (ratified 2026-09-21): **completed videos + ACTIVE staging
-sessions** (chunked uploads in flight or abandoned-but-not-yet-swept).
-Why: without counting staging, a user could abandon-upload repeatedly and
-stack orphaned partial files while their meter reads under-quota — a milder
-version of the 9/20 fork-crash orphan-file incident. With counting: the
-meter always matches disk reality, enforcement fails fast at init (never at
-chunk 20 of 32), abandoned space returns automatically via the 24h sweeper,
-and a `DELETE /upload-sessions/{id}` endpoint (ships with 13a) gives
-instant space back. Transcripts/materials (~KBs each) are EXCLUDED from
-the count by design — the meter stays legible, and the learning value
-survives deletions.
+**What counts** (ratified 2026-09-21, revised same day): **completed videos
++ ACTIVE staging sessions at their DECLARED size** (the reservation model,
+see §3a). Why declared not actual-bytes: actual-bytes is gameable at the
+margin (abandon at 99% repeatedly — each new init passes because "only
+990MB staged"); declared keeps check/display/actual one consistent number,
+and one-active-session-per-user prevents stacking abuse. Meter wording:
+"24.0 GB of 25 GB used — includes 1.0 GB reserved for an upload in
+progress." The instant-release valve is the DELETE endpoint; the sweeper
+(1h TTL, §3a) is the automatic backstop. Transcripts/materials (~KBs each)
+are EXCLUDED from the count by design — the meter stays legible, and the
+learning value survives deletions.
 
 **ADMIN 100GB note** (owner-ratified with eyes open): admin owns the box
 and the override column — this is a soft/documented cap that reflects the
@@ -90,7 +90,83 @@ and the admin's 100GB budgeted separately.
 |---|---|---|
 | Chunk size | 32 MB (under the 100MB edge cap; ≤~30s/request even on weak uplinks; a 1GB file = 32 chunks) | `UPLOAD_CHUNK_SIZE_MB` |
 | Active sessions per user | 1 (uplink self-serializes; blocks quota gaming) | — (constant) |
-| Abandoned-session sweeper | 24h no-activity → staging deleted | — (constant) |
+| Abandoned-session sweeper | **1h no-activity → staging deleted** (2026-09-21 revision, see §3a) | `UPLOAD_SESSION_TTL_HOURS` (default 1) |
+
+### §3a — The sweeper design (ratified 2026-09-21, after two full design rounds)
+
+**Round 1 (24h TTL + resume-across-restart)** was superseded by **Round 2**
+below. Both rounds logged here because the *reasoning* is the reusable part.
+
+**The physical fact that shapes everything**: with chunked HTTP uploads, the
+server receives **no signal at the moment of abandonment** — tab close, lid
+close, browser crash, and server crash all look identical (client silence).
+The only detector available is "no chunks for X time." **There is no
+instant.** (Browser `pagehide` beacons were considered and rejected: they
+also fire on refresh — killing every F5 — and never fire on sleep/crash.)
+
+**Abandonment taxonomy** (the scenarios the design must cover):
+
+| Scenario | What happens | Swept? |
+|---|---|---|
+| A. Genuine abandonment — user picks a big file, sees the estimate, closes the tab forever | Chunks stop; timer runs | ✅ the classic case |
+| B. Sleep/laptop-close — 60% done, lid closes, wakes later | Old design: resume within 24h. **New design: re-upload from zero** (the accepted trade, see below) | ✅ (at 1h) |
+| C. Deliberate but unfinished — "I'll finish tonight" | Same as B | ✅ if they don't return within TTL |
+| D. **Our crash/orphan** (the 9/20 fork-crash pattern: request accepted, process dies) | Session dead but looks active — the Hermes orphan-files incident, systematized | ✅ — **and 1h TTL beats 24h here; this was the owner's key improvement** |
+| E. Staging probing — someone stages chunks to test how long free storage persists | Timer runs | ✅ exposure capped at TTL×size |
+
+**Round 2 — the ratified simple model (owner decision 2026-09-21):**
+
+- **TTL = 1 hour of no chunk activity** (env `UPLOAD_SESSION_TTL_HOURS`,
+  default 1). "Effectively immediate in human terms" while barely surviving
+  a lunch-break lid-close. Sweep pass every ~10 min.
+- **During-upload robustness is unchanged and stays**: automatic per-chunk
+  retries absorb flaky networks *mid-upload* (that's robustness during a
+  session, distinct from resume *across* sessions).
+- **Mid-flight failure UX**: client error toast — "Upload failed —
+  connection dropped. Retry / Cancel." Retry re-sends from zero (1GB ≈
+  2–10 min on typical wifi); **Cancel = instant space release** (the
+  DELETE endpoint).
+- **The permanent banner (owner's "error sign somewhere")**: after a sweep,
+  the user's next visit to the upload page shows, until their next
+  successful upload completes (with a dismiss ✕): *"Your last upload was
+  interrupted and cleaned up — nothing was lost, just upload again."*
+  Transparent garbage collection, no surprises, actionable.
+- **Claim mechanics (the c827a7b lesson applied by construction)**: sweeper
+  claims rows with an atomic UPDATE → **commits the claim immediately** →
+  deletes the staging dir (filesystem is the session's source of truth —
+  the resume bitmap is a directory listing; deleting is idempotent) →
+  row marked `cancelled` + an events-table row per batch
+  (`source='services.upload_sweeper'`: count + bytes freed — the beta's
+  abandonment-rate data).
+- **Runner**: in-app sweeper thread (the proven queue pattern) — testable
+  with the repo's standard db_session fixtures; hourly cadence × 4 workers
+  via the claim; NOT a LaunchDaemon (least-testable path; the queue thread
+  pattern is now battle-tested after the 9/20 incident fixes).
+
+**The conscious trade-off (ratified with eyes open)**: resume-across-restart
+(scenario B) is **dropped for beta** — a swept session means re-upload from
+zero. Quantified: at the beta's 1GB cap this costs 2–10 minutes and most
+uploads finish in one sitting; at relaunch's 2–4GB (30–60+ min uploads,
+common interruptions) it would be exactly the pain chunking exists to
+remove. **Resume returns at relaunch** — cheaply, because the
+filesystem-as-truth design keeps the server-side capability nearly free
+(the expensive part was always the client UX states we're deferring).
+Revisit trigger: when file limits are raised past 2GB.
+
+**Quota basis**: declared-size reservation (init reserves the full
+declared size; the meter shows "includes X GB reserved for an upload in
+progress"; one active session per user prevents stacking abuse). Rationale:
+actual-bytes counting is gameable at the margin (abandon at 99% repeatedly);
+declared-size keeps check/display/actual one consistent number; the DELETE
+endpoint is the instant-release valve.
+
+**Why 1h and not shorter**: any threshold in seconds kills real uploads on
+cellular (30–60s stalls are routine); minutes kills lid-close; 1h survives
+all legitimate pauses while capping exposure at ~1h×size×users (all 50 PAID
+users abandoning 1GB simultaneously = 50GB for an hour = 2.7% of the
+volume, trivial). Why not longer: staging counts toward quota — a parked
+session holds the user's meter hostage, and 24h would block their next
+upload for a day.
 
 ## 4. Chat — transcript segments in context (SHIPPED, commit `498eb4e`)
 
@@ -153,4 +229,5 @@ Do not raise SLOTS without a live throughput test (audit decision #12).
 
 | Date | Change |
 |---|---|
-| 2026-09-21 | Registry created. §1–3 ratified (not yet implemented): 1GB PAID file cap (env), 20GB ADMIN (env), 25GB/100GB quotas (env), per-user override columns, 32MB chunks, staging-counts-toward-quota. §4–8: existing shipped limits, recorded for completeness. |
+| 2026-09-21 | Registry created. §1–3 ratified (not yet implemented): 1GB PAID file cap (env), 20GB ADMIN (env), 25GB/100GB quotas (env), per-user override columns, 32MB chunks, per-user override infra. §4–8: existing shipped limits, recorded for completeness. |
+| 2026-09-21 (later) | **Sweeper revision after two design rounds** (§3a): TTL 24h → **1h** (env `UPLOAD_SESSION_TTL_HOURS`); resume-across-restart DROPPED for beta (re-upload from zero after a sweep — quantified trade, revisit at relaunch when limits pass 2GB); permanent interrupted-upload banner on the upload page (with dismiss ✕); in-app sweeper thread (not a LaunchDaemon); declared-size quota reservation; sweep claim-commits immediately (the c827a7b pattern by construction). Owner's key insight captured: shorter TTL *improves* scenario D (our own crash-orphans squat the user's quota for 1h, not 24h). |
