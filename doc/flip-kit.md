@@ -34,6 +34,19 @@ uses (the anti-drift rule).
 
 ## The commands (copy-paste)
 
+> **2026-09-21: `scripts/promote-paid.sh` now wraps ALL of this** — prefer
+> the script (it converts GB/MB, refuses accidental lowering, and writes
+> the events-table audit row automatically):
+>
+> ```bash
+> bash scripts/promote-paid.sh their@gmail.com --file-limit 2GB --quota 50GB
+> bash scripts/promote-paid.sh their@gmail.com --reset-limits
+> bash scripts/promote-paid.sh            # list users + current overrides
+> ```
+>
+> The raw SQL below remains the reference for understanding what the
+> script does — and the fallback if you ever need it by hand.
+
 **DB path** (from `.env`): `/Volumes/Storage-Fast-NVMe/video_learning.db`
 
 ### Raise a user's per-file upload limit (e.g. to 2GB)
@@ -129,7 +142,8 @@ in this file by hand:
 
 ## The future `promote-paid.sh` (spec for when it's built)
 
-One command replacing the raw SQL (Todo #14's flip-kit):
+**BUILT 2026-09-21** (`scripts/promote-paid.sh`, tested live on every path).
+The spec below is now the historical record of what it implements:
 
 ```
 bash scripts/promote-paid.sh their@gmail.com --role paid
@@ -140,4 +154,6 @@ bash scripts/promote-paid.sh their@gmail.com --reset-limits
 Behavior: locate DB from `.env` (the promote-admin.sh pattern), verify the
 user exists (sign-in-first flow), apply, verify, and write an events-table
 row (`source='admin.flip'`, the email + the before/after values) so the
-audit table above becomes automatic.
+audit table above is automatic. ✅ All shipped — plus two behaviors the spec
+didn't have: refuses to LOWER limits without `--force`, and the listing
+mode (no args) shows every user with their current GB-formatted overrides.
