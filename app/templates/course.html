@@ -212,10 +212,31 @@
                                 </svg>
                                 <span id="upload-progress-label-{{ section.id }}" class="truncate flex-1">Uploading…</span>
                                 <span id="upload-progress-pct-{{ section.id }}" class="font-mono text-indigo-600 dark:text-indigo-400"></span>
+                                <button id="upload-cancel-{{ section.id }}"
+                                        onclick="if (window._cancelUpload) window._cancelUpload()"
+                                        class="hidden text-xs px-2 py-0.5 rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                                        title="Cancel this upload — frees your storage space immediately">✕ Cancel</button>
                             </div>
                             <div class="mt-1.5 h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                                 <div id="upload-progress-bar-{{ section.id }}" class="h-full bg-indigo-500 rounded-full transition-all duration-150" style="width: 0%"></div>
                             </div>
+                        </div>
+                        {# 2026-09-21 (13a, §3a): the interrupted-upload
+                           banner — shows if the user's last upload session
+                           was swept/cancelled (auto-cleaned after 1h of
+                           inactivity). Dismissable; clears on the next
+                           successful upload (which navigates away anyway).
+                           Populated by JS on page load (fetches
+                           /api/upload-sessions/last-cancelled). #}
+                        <div id="upload-interrupted-{{ section.id }}" class="hidden mt-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                            <span class="flex-1">
+                                <strong>Previous upload cleaned up.</strong>
+                                <span id="upload-interrupted-detail-{{ section.id }}"></span>
+                                Nothing was lost — just upload again.
+                            </span>
+                            <button onclick="dismissInterrupted('{{ section.id }}')"
+                                    class="text-amber-500 hover:text-amber-700"
+                                    title="Dismiss">✕</button>
                         </div>
                     </div>
                 </div>
@@ -515,6 +536,65 @@ if (document.readyState === 'loading') {
     applyStoredCourseSortOnLoad();
 }
 
+// ── Interrupted-upload banner (13a, registry §3a Round 2) ─────────────
+// On page load, ask the server whether the user's most recent upload
+// session was swept (1h inactivity) or cancelled — and if so, show
+// the friendly "nothing was lost, just upload again" notice on every
+// section's upload widget. Server-computed (the endpoint reads the
+// upload_sessions table) so the banner and reality can't diverge.
+// Dismissal is localStorage-only (the row stays as history — a later
+// NEW sweep overwrites it and re-shows, correctly).
+async function loadInterruptedBanner() {
+    try {
+        const resp = await fetch('/api/upload-sessions/last-cancelled', {
+            credentials: 'include',
+        });
+        if (!resp.ok) return;   // non-uploaders (FREE tier) → 403, ignore
+        const data = await resp.json();
+        if (!data.has_cancelled) return;
+
+        // One dismissal per cancelled session id… we don't get the id
+        // from the endpoint, so key on filename+size — good enough for
+        // a UX banner (the goal: don't nag after the user saw it).
+        const key = 'uploadBannerDismissed:' + data.filename + ':' + data.declared_size;
+        try {
+            if (localStorage.getItem(key) === '1') return;
+        } catch (_) { /* localStorage blocked — just show it */ }
+
+        document.querySelectorAll('[id^="upload-interrupted-"]').forEach(el => {
+            el.classList.remove('hidden');
+            const detail = el.querySelector('[id^="upload-interrupted-detail-"]');
+            if (detail) {
+                const mb = (data.declared_size / 1048576).toFixed(0);
+                detail.textContent = ` (${data.filename}, ${mb} MB)`;
+            }
+        });
+    } catch (e) {
+        // Network hiccup — no banner, no noise. Non-essential UX.
+    }
+}
+
+function dismissInterrupted() {
+    document.querySelectorAll('[id^="upload-interrupted-"]').forEach(el => {
+        el.classList.add('hidden');
+        // Persist the dismissal keyed on the CURRENT banner's data
+        // (re-read from the detail span — simplest reliable key).
+        const detail = el.querySelector('[id^="upload-interrupted-detail-"]');
+        if (detail && detail.textContent) {
+            try {
+                localStorage.setItem(
+                    'uploadBannerDismissed:' + detail.textContent, '1');
+            } catch (_) { /* blocked — re-shows next load, acceptable */ }
+        }
+    });
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadInterruptedBanner);
+} else {
+    loadInterruptedBanner();
+}
+
 async function createSection(e) {
     e.preventDefault();
     const title = document.getElementById('section-title').value;
@@ -566,6 +646,9 @@ async function uploadVideo(sectionId, input) {
         if (progressBox) progressBox.classList.add('hidden');
         setProgress(0, '');
         input.value = '';
+        const cancelBtn = document.getElementById('upload-cancel-' + sectionId);
+        if (cancelBtn) cancelBtn.classList.add('hidden');
+        window._cancelUpload = null;
     };
 
     // XHR wrapper (fetch can't report upload progress; XHR's
@@ -585,10 +668,116 @@ async function uploadVideo(sectionId, input) {
         xhr.send(form);
     });
 
+    // 2026-09-21 (13a): the CHUNKED uploader — files >100MB can't go
+    // through the Cloudflare tunnel as one request (the free plan's
+    // 100MB edge cap), so big files are sliced client-side into
+    // server-planned chunks (init → chunk×N → complete; the API is
+    // registry §3, live-verified by scripts/smoke_test_chunked_upload.py).
+    // Design decisions:
+    //   - ≤100MB keeps the legacy single-request path (fast, one hop)
+    //   - >100MB → chunked; the threshold is the EDGE cap, not our tier
+    //     limit — the SERVER enforces the tier wording either way
+    //   - per-chunk retry (3 attempts): a flaky wifi drop re-sends ONE
+    //     32MB chunk, never the whole file
+    //   - cancel button = the DELETE session endpoint (instant quota
+    //     release, registry §2's valve)
+    //   - the interrupted-upload banner (§3a) shows on page load if
+    //     the user's last session was swept/cancelled
+    const CHUNK_THRESHOLD = 100 * 1024 * 1024;  // the edge cap
+    const CHUNK_RETRIES = 3;
+
+    async function uploadChunked(sectionId, file, ui) {
+        // 1. init: declare → get the chunk plan (all validation
+        //    server-side: tier limit, quota, one-session — BEFORE any
+        //    bytes move; a 413 here is instant, not after minutes).
+        let resp = await fetch('/api/upload-sessions/init', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                section_id: sectionId,
+                filename: file.name,
+                declared_size: file.size,
+            }),
+        });
+        const init = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw Object.assign(new Error(init.detail || `Server error (${resp.status})`), { status: resp.status });
+        }
+        const { session_id, chunk_size, total_chunks } = init;
+
+        // The cancel affordance while chunks fly.
+        ui.setCancel(() => fetch('/api/upload-sessions/' + session_id, {
+            method: 'DELETE', credentials: 'include',
+        }).then(() => { cancelled = true; }));
+        const cancelBtn = document.getElementById('upload-cancel-' + sectionId);
+        if (cancelBtn) cancelBtn.classList.remove('hidden');
+
+        let cancelled = false;
+
+        // 2. chunks: slice + PUT. The LAST chunk is the remainder
+        //    (matches the server's declared-size verification).
+        for (let i = 0; i < total_chunks; i++) {
+            if (cancelled) throw new Error('Upload cancelled');
+            const start = i * chunk_size;
+            const end = (i === total_chunks - 1)
+                ? file.size
+                : (i + 1) * chunk_size;
+            const blob = file.slice(start, end);
+
+            // Per-chunk retry — one flaky wifi moment re-sends ONE
+            // chunk (32MB), never the whole file.
+            let lastErr = null;
+            for (let attempt = 1; attempt <= CHUNK_RETRIES; attempt++) {
+                try {
+                    const r = await fetch(
+                        `/api/upload-sessions/${session_id}/chunk/${i}`,
+                        { method: 'PUT', credentials: 'include', body: blob },
+                    );
+                    if (r.ok) { lastErr = null; break; }
+                    const d = await r.json().catch(() => ({}));
+                    // 409: the session was swept/completed — not retryable.
+                    if (r.status === 409) throw Object.assign(
+                        new Error(d.detail || 'Session expired'), { fatal: true });
+                    lastErr = new Error(d.detail || `Chunk ${i + 1} failed (${r.status})`);
+                } catch (e) {
+                    if (e.fatal) throw e;
+                    lastErr = e;
+                }
+                if (attempt < CHUNK_RETRIES) {
+                    await new Promise(r => setTimeout(r, 500 * attempt));
+                }
+            }
+            if (lastErr) throw lastErr;
+
+            ui.progress((i + 1) / total_chunks,
+                `Uploading ${describe}… chunk ${i + 1}/${total_chunks}`);
+        }
+
+        // 3. complete: assemble + queue handoff → navigate like the
+        //    legacy path does.
+        ui.progress(1, 'Finishing up…');
+        resp = await fetch(`/api/upload-sessions/${session_id}/complete`, {
+            method: 'POST', credentials: 'include',
+        });
+        const done = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw new Error(done.detail || `Server error (${resp.status})`);
+        }
+        return done.video_id;
+    }
+
     startUi();
     try {
-        if (files.length === 1) {
-            // Single file: regular endpoint, redirect to video page.
+        if (files.length === 1 && files[0].size > CHUNK_THRESHOLD) {
+            // ONE BIG FILE → the chunked path.
+            const videoId = await uploadChunked(sectionId, files[0], {
+                progress: setProgress,
+                setCancel: (fn) => { window._cancelUpload = fn; },
+            });
+            window.location.href = '/video/' + videoId;
+        } else if (files.length === 1) {
+            // Single small file: regular endpoint, redirect to video page.
             const form = new FormData();
             form.append('file', files[0]);
             const resp = await postMultipart('/api/videos/upload/' + sectionId, form,
@@ -618,6 +807,10 @@ async function uploadVideo(sectionId, input) {
             }
         }
     } catch (err) {
+        if (/cancelled/i.test(err.message || '')) {
+            resetUi();
+            return;   // user pressed cancel — no scary alert
+        }
         alert('Upload failed: ' + (err.message || 'Network error'));
         resetUi();
     }

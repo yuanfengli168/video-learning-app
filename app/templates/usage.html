@@ -63,6 +63,89 @@
     </div>
     {% endif %}
 
+    {% if usage.storage %}
+    {# ── Storage card (13d-lite, 2026-09-21): the meter reads the SAME
+         function the quota check reads — check and display are one
+         number (registry §2). Counts completed videos + active
+         upload sessions at their declared size (the reservation). ── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Storage</h2>
+        <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
+            You're using
+            <span class="font-semibold text-indigo-600 dark:text-indigo-400">
+                {{ '%.1f' % (usage.storage.used_bytes / 1073741824) }} GB
+            </span>
+            of your
+            <span class="font-semibold">{{ '%.0f' % (usage.storage.quota_bytes / 1073741824) }} GB</span>
+            video storage.
+            {% if usage.storage.staging_bytes > 0 %}
+            <span class="text-xs text-gray-400">· includes
+                {{ '%.1f' % (usage.storage.staging_bytes / 1073741824) }} GB
+                reserved for an upload in progress</span>
+            {% endif %}
+        </p>
+        {% set pcts = (usage.storage.used_bytes / usage.storage.quota_bytes * 100) | round | int %}
+        <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+            <div class="h-3 rounded-full {{ 'bg-indigo-600' if pcts < 80 else ('bg-amber-500' if pcts < 100 else 'bg-red-500') }}"
+                 style="width: {{ [pcts, 100] | min }}%"></div>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">
+            {{ '%.1f' % (usage.storage.used_bytes / 1073741824) }} /
+            {{ '%.0f' % (usage.storage.quota_bytes / 1073741824) }} GB used
+            {% if pcts >= 100 %}· <strong>storage full — delete a video to upload more</strong>{% endif %}
+        </p>
+        <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
+            Transcripts, summaries, mindmaps, flashcards and quizzes are tiny (KBs) and never count —
+            only your video files do. Deleting a video frees its space immediately.
+        </p>
+    </div>
+    {% endif %}
+
+    {% if usage.limits %}
+    {# ── Your limits card (registry /usage plan): every number sourced
+         from the SAME settings the code enforces — this page can never
+         disagree with what actually limits you. ── #}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Your limits</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+            <div class="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                <div class="text-xs text-gray-400">Chat context</div>
+                <div class="font-semibold text-gray-900 dark:text-white">{{ usage.limits.chat_segments }} segments</div>
+                <div class="text-xs text-gray-400">of transcript the AI sees per question</div>
+            </div>
+            {% if usage.storage %}
+            <div class="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                <div class="text-xs text-gray-400">Upload size per video</div>
+                <div class="font-semibold text-gray-900 dark:text-white">
+                    {{ '%.0f' % (usage.limits.max_file_bytes / 1073741824) }} GB
+                </div>
+                <div class="text-xs text-gray-400">larger? compress or talk to us</div>
+            </div>
+            <div class="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                <div class="text-xs text-gray-400">Storage</div>
+                <div class="font-semibold text-gray-900 dark:text-white">
+                    {{ '%.0f' % (usage.limits.storage_quota_bytes / 1073741824) }} GB
+                </div>
+                <div class="text-xs text-gray-400">total video storage</div>
+            </div>
+            {% else %}
+            {# FREE: the upgrade-invitation numbers (owner decision
+               2026-09-21: welcoming — show what PAID unlocks). #}
+            <div class="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                <div class="text-xs text-gray-400">Daily AI requests</div>
+                <div class="font-semibold text-gray-900 dark:text-white">{{ usage.day.limit }}/day</div>
+                <div class="text-xs text-gray-400">resets midnight UTC</div>
+            </div>
+            <div class="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800">
+                <div class="text-xs text-indigo-400">Paid unlocks</div>
+                <div class="font-semibold text-indigo-700 dark:text-indigo-300">3,000-segment chat · uploads · 25GB</div>
+                <div class="text-xs text-indigo-400">plus priority AI and flashcards</div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
     <p class="text-xs text-gray-400 dark:text-gray-500">
         Usage counts completed AI requests (transcript-based material generation and chat). Failed requests don't count against you.
         Questions about your usage? Reach out on our Discord.

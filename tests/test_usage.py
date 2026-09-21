@@ -195,3 +195,99 @@ def test_usage_page_paid_renders_bars(paid_client: TestClient):
     assert "Last 7 hours" in resp.text
     assert "This week" in resp.text
     assert "Monday through Sunday" in resp.text
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Storage + limits cards (13a/13d-lite, 2026-09-21)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_paid_usage_includes_storage_and_limits(paid_client: TestClient, db_session):
+    """The PAID usage shape carries the storage meter (the same
+    function the quota check reads) + the limits card data."""
+    with _mock_auth():
+        # Ensure the user row exists so the resolver can read overrides.
+        db_session.execute(text(
+            "INSERT OR IGNORE INTO users (user_id, email, role) "
+            "VALUES ('test-user-uid', 'test@example.com', 1)"
+        ))
+        db_session.commit()
+        usage = get_user_usage(db_session, "test-user-uid", role=1)
+
+    assert usage["storage"] is not None
+    assert usage["storage"]["quota_bytes"] == 25 * 1024**3
+    assert usage["storage"]["max_file_bytes"] == 1 * 1024**3
+    assert usage["storage"]["used_bytes"] >= 0
+
+    assert usage["limits"]["chat_segments"] == 3000       # PAID tier
+    assert usage["limits"]["max_file_bytes"] == 1 * 1024**3
+    assert usage["limits"]["storage_quota_bytes"] == 25 * 1024**3
+    assert usage["limits"]["paid_7h"] == PAID_LIMIT_7H
+    assert usage["limits"]["paid_week"] == PAID_LIMIT_WEEK
+
+
+def test_admin_usage_storage_uses_admin_tier(admin_client: TestClient, db_session):
+    """ADMIN tier: 100GB quota + 20GB file cap from the env defaults."""
+    with _mock_auth():
+        db_session.execute(text(
+            "INSERT OR IGNORE INTO users (user_id, email, role) "
+            "VALUES ('test-user-uid', 'test@example.com', 0)"
+        ))
+        db_session.execute(text(
+            "UPDATE users SET role=0 WHERE user_id='test-user-uid'"
+        ))
+        db_session.commit()
+        from app.auth.admin import clear_role_cache
+        clear_role_cache()
+        usage = get_user_usage(db_session, "test-user-uid", role=0)
+
+    assert usage["storage"]["quota_bytes"] == 100 * 1024**3
+    assert usage["storage"]["max_file_bytes"] == 20 * 1024**3
+    # Admin's chat segments cap
+    assert usage["limits"]["chat_segments"] == 8000
+
+
+def test_free_usage_has_limits_card_no_storage(paid_client: TestClient, db_session):
+    """FREE: no storage row (can't upload), but the limits card data
+    exists (their real numbers + what PAID unlocks)."""
+    usage = get_user_usage(db_session, "test-user-uid", role=2)
+    assert usage["storage"] is None
+    assert usage["limits"]["chat_segments"] == 600   # FREE
+    assert usage["limits"]["free_daily_chat"] == 15
+
+
+def test_usage_page_paid_shows_storage_card(paid_client: TestClient, db_session):
+    """The /usage page renders the storage card + limits card for PAID."""
+    with _mock_auth():
+        db_session.execute(text(
+            "INSERT OR IGNORE INTO users (user_id, email, role) "
+            "VALUES ('test-user-uid', 'test@example.com', 1)"
+        ))
+        db_session.commit()
+        resp = paid_client.get("/usage", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert "Storage" in resp.text
+    assert "Your limits" in resp.text
+    assert "25 GB" in resp.text          # the quota default
+    assert "Chat context" in resp.text   # the limits grid
+    assert "3,000 segments" in resp.text.replace(",", "") or "3000 segments" in resp.text.replace(",", "")
+
+
+def test_usage_page_free_shows_upgrade_card(paid_client: TestClient, db_session):
+    """FREE users see the welcoming limits card with the upgrade
+    numbers (owner decision: make them want to upgrade)."""
+    # The base client fixture is FREE by default.
+    from app.auth.admin import clear_role_cache
+    clear_role_cache()
+    with _mock_auth():
+        db_session.execute(text(
+            "INSERT OR IGNORE INTO users (user_id, email, role) "
+            "VALUES ('test-user-uid', 'test@example.com', 2)"
+        ))
+        db_session.execute(text(
+            "UPDATE users SET role=2 WHERE user_id='test-user-uid'"
+        ))
+        db_session.commit()
+        clear_role_cache()
+        resp = paid_client.get("/usage", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert "Paid unlocks" in resp.text
+    assert "Your limits" in resp.text

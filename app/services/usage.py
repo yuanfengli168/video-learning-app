@@ -139,6 +139,14 @@ def get_user_usage(
         return {
             "tier": "free",
             "day": {"used": used_day, "limit": _FREE_LIMIT_PER_DAY},
+            # 2026-09-21 (13a/13d-lite): the limits card data — from
+            # the SAME settings/enums the code enforces so this page
+            # can never disagree with reality (the registry's
+            # anti-drift rule). FREE users see their real numbers +
+            # what PAID unlocks (owner decision: welcoming, not
+            # walling).
+            "storage": None,  # FREE can't upload — no storage row
+            "limits": _limits_card_data(db, uid, role),
         }
 
     # PAID / ADMIN — the two bars.
@@ -153,6 +161,16 @@ def get_user_usage(
     week_end = week_end.replace(tzinfo=None)
     used_week = _count_llm_calls(db, uid, since=week_start, until=week_end)
 
+    from app.services.upload_limits import (
+        get_user_storage_usage,
+        storage_quota_for_role,
+        max_file_size_for_role,
+    )
+    from app.models import User
+    user_row = db.get(User, uid)
+    storage = get_user_storage_usage(db, uid)
+    quota = storage_quota_for_role(user_row)
+
     return {
         "tier": "paid" if role == UserRole.PAID else "admin",
         "last7h": {"used": used_7h, "limit": PAID_LIMIT_7H},
@@ -162,4 +180,38 @@ def get_user_usage(
             "starts": week_start.isoformat(sep=" "),
             "ends": week_end.isoformat(sep=" "),
         },
+        # 2026-09-21 (13d-lite): the storage card — the meter reads
+        # the same function the QUOTA CHECK reads (registry §2:
+        # check and display are one number).
+        "storage": {
+            "used_bytes": storage["used_bytes"],
+            "quota_bytes": quota,
+            "staging_bytes": storage["staging_bytes"],
+            "max_file_bytes": max_file_size_for_role(user_row),
+        },
+        "limits": _limits_card_data(db, uid, role),
+    }
+
+
+def _limits_card_data(db: Session, uid: str, role: int) -> dict:
+    """The 'Your limits' card (registry §/usage plan): every number
+    sourced from the enforcing code — segment caps from the chat
+    service, upload limits from the resolver, LLM rates from this
+    module's constants. If a limit changes, the card changes with
+    it in the same commit (the registry's own rule)."""
+    from app.services.chat import segment_cap_for_role
+    from app.services.upload_limits import (
+        max_file_size_for_role,
+        storage_quota_for_role,
+    )
+    from app.models import User
+    user_row = db.get(User, uid)
+
+    return {
+        "chat_segments": segment_cap_for_role(role),
+        "max_file_bytes": max_file_size_for_role(user_row),
+        "storage_quota_bytes": storage_quota_for_role(user_row),
+        "free_daily_chat": _FREE_LIMIT_PER_DAY,
+        "paid_7h": PAID_LIMIT_7H,
+        "paid_week": PAID_LIMIT_WEEK,
     }
