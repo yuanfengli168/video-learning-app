@@ -490,6 +490,32 @@ favor of the two never-run launch tests (crash-recovery + reboot).
 
 ---
 
+## 15. Unplayable-container reminder on the video page (2026-09-21, beta-blocking)
+
+**Idea:** videos whose container browsers can't play (mpeg4-in-AVI —
+Zoom's screen-recorder default; possibly others) show a friendly notice
+instead of a dead player: "This format can't play in your browser —
+the transcript, chat, and study materials all still work. Convert the
+file to MP4 (e.g. HandBrake) and re-upload if you need playback."
+
+**Why (doc/known-issues-2026-09-21.md §2):** the first real 1GB+ uploads
+were 4K Zoom AVIs; browsers never supported this container, so beta
+users WILL hit a dead player. Owner decision: NO transcode-on-upload
+for now (adds wait time) — the notice + user-side conversion instead.
+Transcode-on-upload stays on the relaunch-polish list.
+
+**Rough shape:** in the video page template, detect
+extension-in-{.avi, .mkv, .mov, .m4v} (mp4/webm always play; keep the
+list server-driven) → render the notice card above the player area +
+keep the download link prominent (the file IS fine — VLC/QuickTime
+play it).
+
+**Effort:** ~1–2 h (template + a small mapping helper + tests).
+
+**Status:** beta-blocking per known-issues §2; not started.
+
+---
+
 ## 13. Chunked uploads + paid add-on ladder (planned 2026-09-20)
 
 **Idea:** Remote PAID users can't upload >100MB through the Cloudflare
