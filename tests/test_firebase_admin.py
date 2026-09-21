@@ -80,6 +80,30 @@ def test_verify_token_success(reset_firebase):
             assert result["uid"] == "test-uid"
 
 
+def test_verify_token_clock_skew_tolerance(reset_firebase):
+    """REGRESSION (2026-09-21 live incident): verify_token must pass
+    clock_skew_seconds to Firebase's verifier.
+
+    Live failure at 17:03:57: "Token used too early, 1789981437 <
+    1789981438" — the server's NTP-synced clock (0.66s offset) read
+    one second behind Google's signing clock and Firebase's DEFAULT
+    ZERO skew tolerance rejected the token → random login failures.
+    This test pins the call shape: check_revoked=True AND
+    clock_skew_seconds=10 (the documented fix). If a future refactor
+    drops the skew argument, the race returns — and this fails loudly.
+    """
+    with patch("app.auth.firebase_admin.init_firebase_admin"):
+        with patch(
+            "app.auth.firebase_admin.firebase_auth.verify_id_token",
+            return_value={"uid": "u"},
+        ) as mock_verify:
+            verify_token("skewed-token")
+
+    mock_verify.assert_called_once_with(
+        "skewed-token", check_revoked=True, clock_skew_seconds=10
+    )
+
+
 def test_verify_token_invalid(reset_firebase):
     """verify_token should raise ValueError for invalid tokens."""
     with patch("app.auth.firebase_admin.init_firebase_admin"):

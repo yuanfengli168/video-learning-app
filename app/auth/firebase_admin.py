@@ -45,9 +45,29 @@ def verify_token(id_token: str) -> dict[str, Any]:
 
     Raises:
         ValueError: If the token is invalid, expired, or revoked.
+
+    2026-09-21 (clock-skew fix): live-captured at 17:03:57 — a real
+    login failed with "Token used too early, 1789981437 < 1789981438.
+    Check that your computer's clock is set correctly." The server's
+    clock (NTP-synced, sntp offset ~0.66s) read one second behind
+    Google's signing clock at verification time, and Firebase's
+    default ZERO skew tolerance rejects any token whose `iat` is
+    ahead of the verifier's now(). The race window is sub-second and
+    intermittent — the documented flaky failure mode of
+    verify_id_token (Google's own docs recommend tolerance).
+
+    Fix: clock_skew_seconds=10 — the firebase-admin SDK's supported
+    knob. Accepts tokens whose start-of-validity is up to 10s in the
+    "future" relative to our clock; expiry/revocation checks are
+    unchanged. Zero security impact at our scale (10s grace on token
+    START only) and eliminates the random-login-failure class
+    (which also retroactively explains the earlier two-browser
+    login mystery — same race, different victim).
     """
     init_firebase_admin()
-    decoded = firebase_auth.verify_id_token(id_token, check_revoked=True)
+    decoded = firebase_auth.verify_id_token(
+        id_token, check_revoked=True, clock_skew_seconds=10
+    )
     return decoded
 
 
