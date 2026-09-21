@@ -64,6 +64,31 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     storage_dir: str = "./storage"
 
+    # ── Chunked uploads (13a, 2026-09-21 — registry doc/limits-registry.md §1–3a) ──
+    # Per-file upload caps by tier. Env-driven so raising PAID from 1GB
+    # to 2GB/4GB is a config change, not code surgery. Per-user overrides
+    # (users.max_file_bytes) beat these tier defaults — the paid-add-on
+    # infrastructure ("they paid more → flip their override").
+    upload_max_file_paid_gb: float = 1.0      # UPLOAD_MAX_FILE_PAID_GB
+    upload_max_file_admin_gb: float = 20.0    # UPLOAD_MAX_FILE_ADMIN_GB
+
+    # Total storage quotas by tier (registry §2). ADMIN 100GB is a
+    # soft/documented cap — the owner holds the override column.
+    storage_quota_paid_gb: float = 25.0      # STORAGE_QUOTA_PAID_GB
+    storage_quota_admin_gb: float = 100.0    # STORAGE_QUOTA_ADMIN_GB
+
+    # Chunk transport (registry §3): 32MB is under the 100MB edge cap
+    # and completes in <~30s even on weak uplinks (a 1GB file = 32
+    # chunks).
+    upload_chunk_size_mb: int = 32           # UPLOAD_CHUNK_SIZE_MB
+
+    # Abandoned-session sweeper TTL (registry §3a, Round 2 ratified):
+    # 1h of NO chunk activity → staging deleted + row 'cancelled' +
+    # the interrupted-upload banner on the user's next upload-page
+    # visit. "Effectively immediate in human terms" while barely
+    # surviving a lunch-break lid-close.
+    upload_session_ttl_hours: float = 1.0    # UPLOAD_SESSION_TTL_HOURS
+
     # ── Language detection (MVP3.0 #2b, anti-drift) ────────────────────────
     # When auto-detecting the primary language of a video, sample the
     # first N windows of 30s (so N=20 = 10 min of audio) and pick the

@@ -253,6 +253,7 @@ def init_db() -> None:
         paid_waitlist,
         plugin_run,
         section,
+        upload_session,
         user,
         video,
     )
@@ -454,6 +455,21 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "videos",
         "view_count",
         "ALTER TABLE videos ADD COLUMN view_count INTEGER",
+    ),
+    # 2026-09-21 (13a) — per-user upload limit overrides. NULL = tier
+    # default (env var); a set value BEATS the tier default. This is
+    # the paid-add-on infrastructure (doc/limits-registry.md §1/§2):
+    # "they paid more → flip their override" via the flip-kit. Both
+    # nullable so legacy rows keep the tier defaults.
+    (
+        "users",
+        "max_file_bytes",
+        "ALTER TABLE users ADD COLUMN max_file_bytes BIGINT",
+    ),
+    (
+        "users",
+        "storage_quota_bytes",
+        "ALTER TABLE users ADD COLUMN storage_quota_bytes BIGINT",
     ),
 ]
 
