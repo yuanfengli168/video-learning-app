@@ -1,8 +1,8 @@
 # Roles & Tiers — Operational Cheatsheet
 
 > **Status**: Living reference — keep in sync with `app/auth/roles.py` + `app/config.py`.
-> **Related**: `mvp2-roles-and-access.md` (original design), `mlx-fork-crash-postmortem.md` (incident that exposed the role bug).
-> **Last updated**: 2026-09-05 (after the role-enrichment fix `e079356`)
+> **Related**: `mvp2-roles-and-access.md` (original design), `mlx-fork-crash-postmortem.md` (incident that exposed the role bug), **`limits-registry.md` (NEW 2026-09-21 — every numeric limit per tier, its env var, its enforcement point; the authoritative numbers live THERE)**.
+> **Last updated**: 2026-09-21 (link to the limits registry)
 
 This is the one-page answer to "who gets what", verified against the
 code — plus the failure modes we already hit so they don't recur.

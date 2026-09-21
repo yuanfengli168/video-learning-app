@@ -1,0 +1,156 @@
+# Limits Registry — The Single Source of Truth
+
+> **Status**: Living reference. Every numeric limit in CapySmart, one table,
+> per tier, with its env var, its enforcement point, and when it changed.
+> **Why this doc exists** (2026-09-21): limits lived in scattered code
+> constants and doc addenda; the 600-segment cap shipped with no central
+> record, and the upload-size decisions spanned three doc rounds (A1–A9).
+> This is the registry that prevents drift. **Rule**: when a limit changes,
+> update this doc in the same commit as the code.
+>
+> **Related**: `roles-tiers-cheatsheet.md` (who gets what capability — links
+> here for the numbers), `PriceAndCost/upload-size-architecture.md` (the
+> economics/decisions A1–A10 behind the upload/storage rows).
+>
+> **Last updated**: 2026-09-21 (registry created; 13a/13d rows are RATIFIED
+> but NOT yet implemented — see the Status column)
+
+---
+
+## The model (ratified 2026-09-21)
+
+Two resolution layers, same for every limit family:
+
+```
+effective_limit(user) = user override (if set)  →  else tier default (env var)
+```
+
+- **Tier defaults are env vars** (pydantic settings) — changeable without
+  code, per the "test at 1GB first, raise later" plan.
+- **Per-user overrides are DB columns** — the paid-add-on infrastructure
+  ("they paid more → flip them to 50GB/100GB/larger files" = one SQL update
+  via the flip-kit, no code). Ship nullable columns; NULL = tier default.
+- **Role ints never renumber** (see cheatsheet §1): 0=ADMIN, 1=PAID, 2=FREE.
+
+---
+
+## 1. Upload — max file size (13a, ratified, not yet shipped)
+
+| Tier | Default | Env var | Per-user override |
+|---|---|---|---|
+| ADMIN | 20 GB | `UPLOAD_MAX_FILE_ADMIN_GB` | `users.max_file_bytes` |
+| PAID | **1 GB** (start; raise to 2/4GB via env/override once 32MB chunks are proven) | `UPLOAD_MAX_FILE_PAID_GB` | `users.max_file_bytes` |
+| FREE | ❌ no upload capability at all (`UPLOAD_VIDEO` is PAID+) | — | — |
+
+**Enforced at**: chunked-upload `init` (fail-fast, before any bytes
+transfer — browser knows file size, so the UX is instant), AND the legacy
+single/bulk endpoints (same resolver — no dodging the limit via the old
+path). **The chunk-sum is what's checked, never per-chunk** (the trap noted
+in the upload-architecture doc).
+
+**Client+server**: the UI warns at file-pick ("This file is 1.8GB — your
+plan allows up to 1GB per video. Try compressing it, or ask us about larger
+uploads."); the server re-validates at init (the client can be lied to).
+
+**History**: 100MB tunnel cap (commit `12242e0`) → A8 ratified 4GB →
+2026-09-21 owner decision: **start at 1GB, infra ready to raise**.
+
+## 2. Storage — total quota (13d-lite, ratified, not yet shipped)
+
+| Tier | Default | Env var | Per-user override |
+|---|---|---|---|
+| ADMIN | **100 GB** (soft/documented cap — see note) | `STORAGE_QUOTA_ADMIN_GB` | `users.storage_quota_bytes` |
+| PAID | **25 GB** | `STORAGE_QUOTA_PAID_GB` | `users.storage_quota_bytes` |
+| FREE | ❌ n/a (no uploads) | — | — |
+
+**What counts** (ratified 2026-09-21): **completed videos + ACTIVE staging
+sessions** (chunked uploads in flight or abandoned-but-not-yet-swept).
+Why: without counting staging, a user could abandon-upload repeatedly and
+stack orphaned partial files while their meter reads under-quota — a milder
+version of the 9/20 fork-crash orphan-file incident. With counting: the
+meter always matches disk reality, enforcement fails fast at init (never at
+chunk 20 of 32), abandoned space returns automatically via the 24h sweeper,
+and a `DELETE /upload-sessions/{id}` endpoint (ships with 13a) gives
+instant space back. Transcripts/materials (~KBs each) are EXCLUDED from
+the count by design — the meter stays legible, and the learning value
+survives deletions.
+
+**ADMIN 100GB note** (owner-ratified with eyes open): admin owns the box
+and the override column — this is a soft/documented cap that reflects the
+~200GB "owner content" slice of the 1.8TB volume budget. If it ever blocks
+admin work, flip the override (practical difference ≈ nil).
+
+**Capacity math behind 25GB** (from the pricing doc): 50 paid users worst
+case = 1,250GB = 68% of the 1.8TB volume, with ~300GB headroom reserved
+and the admin's 100GB budgeted separately.
+
+## 3. Chunked uploads — transport limits (13a, ratified, not yet shipped)
+
+| Limit | Value | Env var |
+|---|---|---|
+| Chunk size | 32 MB (under the 100MB edge cap; ≤~30s/request even on weak uplinks; a 1GB file = 32 chunks) | `UPLOAD_CHUNK_SIZE_MB` |
+| Active sessions per user | 1 (uplink self-serializes; blocks quota gaming) | — (constant) |
+| Abandoned-session sweeper | 24h no-activity → staging deleted | — (constant) |
+
+## 4. Chat — transcript segments in context (SHIPPED, commit `498eb4e`)
+
+| Tier | Cap | Enforcement |
+|---|---|---|
+| ADMIN | 8,000 (~144K tok) | `segment_cap_for_role()` at session creation; over-cap keeps head+tail with an honest `[N segments omitted]` marker |
+| PAID | 3,000 (~54K tok) | same |
+| FREE | 600 (~11K tok) | same (Groq model's real context limit) |
+
+**History**: global 600 for everyone (MVP2 era) → tier-aware 2026-09-20.
+Numbers + economics: `PriceAndCost/chat-context-economics.md`.
+
+## 5. LLM — request rates (SHIPPED; display on /usage; per-worker in-memory enforcement)
+
+| Tier | Rate | Notes |
+|---|---|---|
+| FREE | 15/day (Groq) | display-only on /usage today; enforcement is the per-worker limiter (known 4x-loose gap, tracked) |
+| PAID | 50 / rolling 7h + 100 / fixed Mon–Sun week (Ollama chain) | display-only; 14d will review these numbers vs 100 users into finals |
+| ADMIN | same chain as PAID | quota shared: Ollama 800 req/5h, 3000/week shared across ALL paid+admin |
+
+**14d review note** (not yet done): 50 users × ~20 q/wk ≈ 1000/wk fits,
+but finals-season spikes breach the shared 3000/wk → spills to paid OpenAI
+fallback (est. S$20–50/mo). Review per-user limits BEFORE invitations.
+
+## 6. Upload count caps (SHIPPED, audit decision #9)
+
+15 uploads/day + 6 in-flight per user (single+bulk combined, projected
+per-file in bulk). These predate the storage quota; both stay — count caps
+bound *behavior*, quota bounds *bytes*.
+
+## 7. The 100MB tunnel cap (SHIPPED, commit `12242e0`) — PLATFORM, not product
+
+Cloudflare's free plan rejects >100MB request bodies at the edge — this is
+why chunked uploads (§3) exist. `TUNNEL_MAX_FILE_SIZE` remains as the
+per-request cap for the LEGACY direct path; per-FILE limits (§1) are the
+product promise enforced at init. Direct localhost/LAN admin path: 10GB
+per request, unchanged.
+
+## 8. Transcribe queue (SHIPPED): 2 global slots, 3s poll, 5s stagger
+
+Do not raise SLOTS without a live throughput test (audit decision #12).
+
+---
+
+## /usage page — what displays (ratified 2026-09-21; ships with 13a/13d)
+
+1. **Storage card** (PAID+ADMIN): "X.X GB of 25 GB used" bar; storage-full
+   state shows the honest math + the delete-to-free-space action.
+2. **"Your limits" summary card**: per-file upload limit, storage quota,
+   chat segments, LLM rates — **sourced from the same settings the code
+   enforces** (anti-drift: the page can never disagree with reality, the
+   same principle as the server-computed orphan badge).
+3. **FREE users see a friendly version** (owner decision 2026-09-21: "make
+   them feel welcomed, and even let them want to upgrade"): their real
+   numbers (600 segments, 15 chats/day), the FREE-tier value stated
+   warmly, and what PAID unlocks (uploads, bigger chat context) with the
+   upgrade link. No dark patterns — numbers that genuinely invite.
+
+## Change log
+
+| Date | Change |
+|---|---|
+| 2026-09-21 | Registry created. §1–3 ratified (not yet implemented): 1GB PAID file cap (env), 20GB ADMIN (env), 25GB/100GB quotas (env), per-user override columns, 32MB chunks, staging-counts-toward-quota. §4–8: existing shipped limits, recorded for completeness. |
