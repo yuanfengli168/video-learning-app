@@ -200,6 +200,25 @@ async def upload_video(
             status_code=400,
             detail="File is empty (0 bytes). The upload may have been cancelled or the source file is broken.",
         )
+    # 2026-09-21 (13a): the tier/override resolver — same limit logic
+    # as the chunked path, so nobody can dodge the per-file cap by
+    # choosing the legacy endpoint. Checked BEFORE the path-based
+    # tunnel/direct cap (the tier limit is the product promise; the
+    # 100MB tunnel cap is the platform constraint beneath it).
+    from app.models import User as _User
+    from app.services.upload_limits import (
+        UploadLimitError as _UploadLimitError,
+        check_file_size as _check_file_size,
+        check_quota_headroom as _check_quota_headroom,
+    )
+
+    _user_row = db.get(_User, user.get("uid", ""))
+    try:
+        _check_file_size(_user_row, file_size)
+        _check_quota_headroom(db, _user_row, file_size)
+    except _UploadLimitError as exc:
+        os.remove(file_path)
+        raise HTTPException(status_code=413, detail=exc.message)
     if file_size > _effective_max_file_size(request):
         os.remove(file_path)
         if request.headers.get("cf-connecting-ip") is not None:
@@ -314,6 +333,17 @@ async def upload_bulk_videos(
 
     caps = upload_caps_check(db, user.get("uid", ""))
 
+    # 2026-09-21 (13a): the resolver handles for the per-file tier
+    # checks inside the loop (skip-with-reason, same wording as the
+    # single + chunked paths).
+    from app.models import User as _User
+    from app.services.upload_limits import (
+        UploadLimitError as _UploadLimitError,
+        check_file_size as _check_file_size,
+    )
+
+    _user_row = db.get(_User, user.get("uid", ""))
+
     results: list[dict[str, Any]] = []
     queued = 0
     skipped = 0
@@ -386,6 +416,20 @@ async def upload_bulk_videos(
                 "filename": filename,
                 "status": "skipped",
                 "error": "File is empty (0 bytes). Upload may have been cancelled or the source file is broken.",
+            })
+            skipped += 1
+            continue
+        # 2026-09-21 (13a): the tier/override resolver on the bulk path
+        # too — skip-with-reason (the audit #9 pattern), same wording
+        # as every other path. Checked before the path-based cap.
+        try:
+            _check_file_size(_user_row, file_size)
+        except _UploadLimitError as exc:
+            os.remove(file_path)
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": exc.message,
             })
             skipped += 1
             continue

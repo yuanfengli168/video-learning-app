@@ -1037,26 +1037,33 @@ def test_upload_bulk_skips_file_exceeding_10gb(paid_client: TestClient):
     assert data["skipped"] == 2
     for r in data["results"]:
         assert r["status"] == "skipped"
-        assert "too large" in r["error"]
+        # 13a: the tier message (registry §1 wording) fires first
+        assert "your plan allows" in r["error"]
 
 
 def test_upload_accepts_exactly_10gb_file(paid_client: TestClient):
-    """A file of exactly 10 GB must be accepted (the cap is inclusive).
+    """An ADMIN user's file at 10 GB must be accepted (their tier is 20GB).
 
-    MVP3.0 item #1: user said '10 GB inclusive'. The check is
-    `file_size > MAX_FILE_SIZE`, so 10 GB == cap is OK and 10 GB + 1
-    byte is rejected. We mock getsize for both single + bulk paths.
+    2026-09-21 (13a): the tier resolver fires BEFORE the platform cap.
+    For an admin (20GB tier), a 10GB file passes the tier check and
+    then the direct-path platform check (10GB inclusive).
     """
     import os
     course_id, section_id = _create_course_and_section(paid_client)
 
-    # ── Single upload at exactly 10 GB — should succeed ──
+    from sqlalchemy import text as _text
+    from app.database import SessionLocal
+
     with _mock_auth():
-        # First check current cap value
-        from app.routers.videos import MAX_FILE_SIZE
-        assert MAX_FILE_SIZE == 10 * 1024 ** 3, (
-            f"cap should be 10 GB, got {MAX_FILE_SIZE / (1024**3)} GB"
-        )
+        # Promote the test user to ADMIN (role=0) so their tier limit
+        # is 20GB — the 10GB file fits both the tier and platform caps.
+        with SessionLocal() as s:
+            s.execute(_text(
+                "UPDATE users SET role=0 WHERE user_id='test-user-uid'"
+            ))
+            s.commit()
+        from app.auth.admin import clear_role_cache
+        clear_role_cache()
 
         with patch(
             "app.routers.videos.os.path.getsize",
@@ -1067,7 +1074,7 @@ def test_upload_accepts_exactly_10gb_file(paid_client: TestClient):
                 files={"file": ("exact10gb.mp4", io.BytesIO(b"x"), "video/mp4")},
                 headers=_auth_headers(),
             )
-        assert resp.status_code == 202, f"10 GB should be accepted, got {resp.status_code}: {resp.text}"
+        assert resp.status_code == 202, f"10 GB (admin tier) should be accepted, got {resp.status_code}: {resp.text}"
 
 
 def test_upload_rejects_just_over_10gb_file(paid_client: TestClient):
@@ -1091,7 +1098,9 @@ def test_upload_rejects_just_over_10gb_file(paid_client: TestClient):
             )
     assert resp.status_code == 413, f"10 GB + 1 byte should be rejected, got {resp.status_code}: {resp.text}"
     detail = resp.json()["detail"]
-    assert "10 GB" in detail, f"error message should mention 10 GB, got: {detail}"
+    # 13a: the TIER message names the user's OWN limit (the actionable
+    # number), not the old platform 10GB message
+    assert "your plan allows up to 1.0 GB" in detail, f"error should name the tier limit, got: {detail}"
 
 
 def test_upload_bulk_partial_success(paid_client: TestClient):

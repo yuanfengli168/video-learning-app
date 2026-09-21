@@ -123,29 +123,29 @@ def get_user_storage_usage(db: Session, uid: str) -> dict:
     """
     # Completed (non-staging) videos owned by this user, via the
     # section → course chain (the repo's ownership path everywhere).
+    # func.sum() in SQL — one round trip, no Python-side iteration
+    # (matters when a user has hundreds of videos).
+    from sqlalchemy import func as _func
     from app.models import Video, Section, Course
 
     videos_bytes = (
         db.execute(
-            select(Video.file_size)
+            select(_func.sum(Video.file_size))
             .join(Section, Video.section_id == Section.id)
             .join(Course, Section.course_id == Course.id)
             .where(Course.user_id == uid)
         )
-        .scalars()
-        .sum() or 0
+        .scalar() or 0
     )
 
     staging = (
         db.execute(
-            select(UploadSession.declared_size)
-            .where(
+            select(_func.sum(UploadSession.declared_size)).where(
                 UploadSession.user_id == uid,
                 UploadSession.status == "active",
             )
         )
-        .scalars()
-        .sum() or 0
+        .scalar() or 0
     )
     staging_sessions = (
         db.execute(

@@ -31,6 +31,7 @@ from app.routers import frontend as frontend_router
 from app.routers import generation as generation_router
 from app.routers import plugins as plugins_router
 from app.routers import telemetry as telemetry_router
+from app.routers import upload_sessions as upload_sessions_router
 from app.routers import videos as videos_router
 from app.auth.session import router as session_router
 
@@ -178,6 +179,7 @@ app.include_router(session_router)
 app.include_router(admin_router.router)
 app.include_router(courses_router.router)
 app.include_router(videos_router.router)
+app.include_router(upload_sessions_router.router)
 app.include_router(generation_router.router)
 app.include_router(chat_router.router)
 app.include_router(plugins_router.router)
