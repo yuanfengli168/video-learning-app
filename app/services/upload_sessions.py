@@ -135,7 +135,7 @@ def create_session(
     # more actionable error wins).
     check_quota_headroom(db, user, declared_size)
 
-    chunk_size = settings.upload_chunk_size_mb * 1024 * 1024
+    chunk_size = int(settings.upload_chunk_size_mb * 1024 * 1024)
     total_chunks = math.ceil(declared_size / chunk_size)
 
     session = UploadSession(
