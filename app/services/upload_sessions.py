@@ -362,6 +362,58 @@ def delete_session(db: Session, session: UploadSession) -> None:
 # ── sweeper support (commit C) ───────────────────────────────────────────────
 
 
+# ── sweeper thread (13a commit C, 2026-09-21) ──────────────────────────────
+
+_SWEEP_INTERVAL_SECONDS = 600  # pass every ~10 min (registry §3a)
+
+_sweeper_started = False
+_sweeper_lock = __import__("threading").Lock()
+
+
+def start_upload_sweeper() -> None:
+    """Start this process's sweeper thread (idempotent, per-process).
+
+    The transcribe-queue pattern (app/services/transcribe_queue.py):
+    one daemon thread per gunicorn worker, started from main.py's
+    lifespan. Cross-process safety is the sweeper's atomic claim
+    (sweep_expired_sessions commits the claim IMMEDIATELY — the
+    c827a7b lesson by construction), so N workers running N sweepers
+    is safe: the second claim of a row matches 0 rows.
+    """
+    global _sweeper_started
+    import logging
+    import threading
+
+    with _sweeper_lock:
+        if _sweeper_started:
+            return
+        _sweeper_started = True
+
+    log = logging.getLogger(__name__)
+
+    def _loop() -> None:
+        import time
+
+        while True:
+            time.sleep(_SWEEP_INTERVAL_SECONDS)
+            try:
+                with __import__("app.database", fromlist=["SessionLocal"]).SessionLocal() as db:
+                    sweep_expired_sessions(db)
+            except Exception:
+                # Never die — a sweeper crash must not take the worker
+                # (the same contract as the queue's scheduler loop).
+                log.exception("upload sweeper pass failed")
+
+    threading.Thread(
+        target=_loop, daemon=True, name="upload-sweeper"
+    ).start()
+    log.info(
+        "upload sweeper started (ttl=%.1fh, interval=%ds)",
+        float(settings.upload_session_ttl_hours),
+        _SWEEP_INTERVAL_SECONDS,
+    )
+
+
 def sweep_expired_sessions(db: Session, *, ttl_hours: float | None = None) -> dict:
     """One sweeper pass (registry §3a, the ratified Round-2 design).
 

@@ -55,6 +55,15 @@ async def lifespan(app: FastAPI):
     # ever consumes — the pre-9/12 behavior.
     from app.services.transcribe_queue import start_scheduler
     start_scheduler()
+    # 2026-09-21 (13a): the upload-session sweeper — one daemon
+    # thread per worker (same pattern as the scheduler). Sweeps
+    # abandoned chunked-upload staging after the 1h TTL
+    # (registry §3a): atomic claim → COMMIT immediately → idempotent
+    # staging-dir deletion → row 'cancelled' + events row. Without
+    # this, abandoned staging squats the user's storage quota
+    # forever (the quota counts active sessions at declared size).
+    from app.services.upload_sessions import start_upload_sweeper
+    start_upload_sweeper()
     yield
     # MVP2.1.0.1 — graceful shutdown. Waits up to 30s
     # for in-flight plugin jobs to finish before the
