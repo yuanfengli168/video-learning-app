@@ -75,14 +75,23 @@ def db_session() -> Generator[Session, None, None]:
     import app.routers.generation as generation_module
     import app.workers.plugin_pool as plugin_pool_module
     import app.services.youtube_captions_job as captions_job_module
+    # 2026-09-22 (model preference): llm_providers holds its own
+    # imported SessionLocal (used by _audit AND the new per-user
+    # model-pref lookup) — without this patch both hit the un-
+    # migrated app engine, silently missing every test-DB row (the
+    # "no such table: events" log_event warnings were this bug,
+    # pre-existing since _audit was written).
+    import app.services.llm_providers as llm_providers_module
     original_videos_session = videos_module.SessionLocal
     original_generation_session = generation_module.SessionLocal
     original_plugin_pool_session = plugin_pool_module.SessionLocal
     original_captions_job_session = captions_job_module.SessionLocal
+    original_llm_providers_session = llm_providers_module.SessionLocal
     videos_module.SessionLocal = testing_local
     generation_module.SessionLocal = testing_local
     plugin_pool_module.SessionLocal = testing_local
     captions_job_module.SessionLocal = testing_local
+    llm_providers_module.SessionLocal = testing_local
 
     def override_get_db():
         try:
@@ -103,6 +112,7 @@ def db_session() -> Generator[Session, None, None]:
         generation_module.SessionLocal = original_generation_session
         plugin_pool_module.SessionLocal = original_plugin_pool_session
         captions_job_module.SessionLocal = original_captions_job_session
+        llm_providers_module.SessionLocal = original_llm_providers_session
         # MVP2.1.0.1: drain the plugin worker pool so
         # the next test starts with a clean queue. The
         # pool is a module-level singleton; its worker
