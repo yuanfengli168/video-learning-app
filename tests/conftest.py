@@ -261,6 +261,24 @@ def paid_client(client: TestClient, db_session: Session) -> TestClient:
     return client
 
 
+@pytest.fixture(scope="function")
+def paid_and_admin_clients(
+    client: TestClient, db_session: Session
+) -> tuple[TestClient, TestClient]:
+    """One TestClient that can authenticate as PAID or ADMIN.
+
+    The path-disclosure tests (tests/test_path_disclosure.py) need to
+    hit the SAME endpoint twice with different roles on the SAME test
+    DB/rows. Rather than two fixtures thrashing the role cache between
+    them, this returns the shared client twice — the tests then patch
+    verify_token per-call with their own role dicts (the role check in
+    require_capability reads the users table, which the per-test
+    monkeypatching of verify_token's return value sidesteps via the
+    enriched `role` claim).
+    """
+    return client, client
+
+
 @pytest.fixture(autouse=True)
 def no_auto_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     """Globally mock _run_auto_pipeline to a no-op for all tests.
