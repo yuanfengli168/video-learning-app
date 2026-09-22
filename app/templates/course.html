@@ -186,7 +186,9 @@
                         <button
                             onclick="cancelQueuedVideo('{{ video.id }}', '{{ video.title|e }}', this)"
                             class="ml-2 flex-shrink-0 text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-400 hover:border-red-400 hover:text-red-500"
-                            title="取消排队（还没开始转写，删掉不浪费任何处理）"
+                            {# 2026-09-22: EN-first for the beta launch. Chinese original kept for future i18n:
+                               取消排队（还没开始转写，删掉不浪费任何处理） #}
+                            title="Remove from queue — it hasn't started transcribing yet, so deleting it wastes no processing"
                         >✕</button>
                         {% endif %}
                     </div>
@@ -1121,7 +1123,9 @@ async function retryStuckVideos(courseId, sectionId, btn) {
 // confirm dialog names the video — this is a destructive action on
 // user content, same pattern as the video-page delete.
 async function cancelQueuedVideo(videoId, title, btn) {
-    if (!confirm(`删除排队中的视频 "${title}"？\n它还没开始转写——现在删除不浪费任何处理资源，也会释放你的上传额度。`)) {
+    // 2026-09-22: EN-first for the beta launch. Chinese original kept for future i18n:
+    //   删除排队中的视频 "${title}"？\n它还没开始转写——现在删除不浪费任何处理资源，也会释放你的上传额度。
+    if (!confirm(`Remove the queued video "${title}" from the queue?\nIt hasn't started transcribing yet — deleting it now wastes no processing resources and frees up your upload allowance.`)) {
         return;
     }
     if (btn) {
@@ -1132,22 +1136,25 @@ async function cancelQueuedVideo(videoId, title, btn) {
         const resp = await fetch(`/api/videos/${videoId}`, { method: 'DELETE' });
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}));
-            showToast('删除失败: ' + (err.detail || resp.statusText), 'error');
+            showToast('Delete failed: ' + (err.detail || resp.statusText), 'error');
             if (btn) { btn.disabled = false; btn.textContent = '✕'; }
             return;
         }
         const data = await resp.json();
         const parts = [];
         const d = data.deleted || {};
-        if (d.files > 0) parts.push(`${d.files} 个文件`);
-        if (d.videos) parts.push('1 个视频');
-        showToast(`已取消排队${parts.length ? '（删除 ' + parts.join(' + ') + '）' : ''}`, 'success');
+        if (d.files > 0) parts.push(`${d.files} file${d.files > 1 ? 's' : ''}`);
+        if (d.videos) parts.push('1 video');
+        // 2026-09-22: EN-first for the beta launch. Chinese original kept for future i18n:
+        //   showToast(`已取消排队${parts.length ? '（删除 ' + parts.join(' + ') + '）' : ''}`, 'success');
+        showToast(`Removed from queue${parts.length ? ' (deleted ' + parts.join(' + ') + ')' : ''}`, 'success');
         // Remove the row without a full reload (the queue position of
         // siblings shifts server-side on the next poll).
         const row = btn.closest('.video-row');
         if (row) row.remove();
     } catch (e) {
-        showToast('网络错误: ' + e.message, 'error');
+        // 2026-09-22: EN-first. Chinese original: showToast('网络错误: ' + e.message, 'error');
+        showToast('Network error: ' + e.message, 'error');
         if (btn) { btn.disabled = false; btn.textContent = '✕'; }
     }
 }
