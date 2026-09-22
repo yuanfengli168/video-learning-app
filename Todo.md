@@ -10,6 +10,19 @@
 
 ---
 
+## 17. Model preference system — PAID=minimax-m3, ADMIN picks (RATIFIED 2026-09-22, not started)
+
+**Design complete + owner-ratified** — see **`doc/model-preference-design.md`**
+(the full record: env-driven catalog, two-layer override resolution,
+`/admin/settings` page, zero-code model additions). Not scheduled yet;
+implementation plan is in that doc's last section.
+
+**Related parked sub-item:** minimax topic-name normalization (the
+mindmap topic-jump mismatch from the A/B — 18/23 vs glm's 23/23 fully
+clean). Owner decision: fix later, separate batch, not bundled.
+
+---
+
 ## 1. Expose the backend as a reusable API for other AIs (MCP / OpenAPI)
 
 **Idea:** Make the transcript + mindmap + flashcards + chat backend consumable by external AI clients (Claude Desktop, Cursor, other agents), not just our own Jinja2 UI.
