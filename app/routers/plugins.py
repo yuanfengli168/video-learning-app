@@ -53,6 +53,54 @@ from app.services.plugins import (
 router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 
 
+# ── Path disclosure policy (2026-09-22) ────────────────────────────────────
+# A beta screenshot showed a PAID user the full server path of a
+# plugin output ("/Volumes/Storage-Medium-NVMe/video-app/uploads/…") —
+# absolute paths leak the volume layout, the upload-dir pattern and
+# the multi-disk topology of the server. They're also USELESS to a
+# remote user: "Open in Finder" opens Finder on the SERVER machine.
+# Policy: ADMIN keeps full paths (they administer this machine);
+# every other role gets filename + null. The sanitizer below is the
+# single choke-point all three path-bearing endpoints share, so the
+# UI hiding and the API truth can't drift apart.
+
+
+def _sanitize_run_for_role(run: PluginRun, user: dict) -> dict:
+    """Serialize a PluginRun for the caller's role.
+
+    ADMIN → full output_path + extra (paths inside).
+    Non-admin → output_path: null + a filename field instead; extra
+    omitted entirely (swap audit rows keep old_path/new_path inside
+    extra — scrubbing key-by-key per future schema changes is a
+    leak waiting to happen, so it goes out whole).
+    """
+    from pathlib import PurePath
+
+    out = {
+        "id": run.id,
+        "video_id": run.video_id,
+        "plugin_key": run.plugin_key,
+        "ok": run.ok,
+        "status": run.status,
+        "message": run.message,
+        "output_path": run.output_path,
+        "extra": run.extra_json,
+        "created_at": run.created_at.isoformat(),
+    }
+    if user.get("role") == 0:  # UserRole.ADMIN.value
+        return out
+    out["output_path"] = None
+    if run.output_path:
+        try:
+            out["filename"] = PurePath(run.output_path).name
+        except Exception:
+            out["filename"] = None
+    else:
+        out["filename"] = None
+    out["extra"] = None
+    return out
+
+
 @router.get("")
 async def list_plugins(
     _user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
@@ -191,17 +239,7 @@ async def get_plugin_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Plugin run not found.",
         )
-    return {
-        "id": run.id,
-        "video_id": run.video_id,
-        "plugin_key": run.plugin_key,
-        "ok": run.ok,
-        "status": run.status,
-        "message": run.message,
-        "output_path": run.output_path,
-        "extra": run.extra_json,
-        "created_at": run.created_at.isoformat(),
-    }
+    return _sanitize_run_for_role(run, _user)
 
 
 # ── 2.1.0.1: "Last run" + "Open in Finder" endpoints ───────────────────
@@ -250,27 +288,21 @@ async def get_most_recent_run_for_video(
     if run is None:
         return {"run": None}
 
-    return {
-        "run": {
-            "id": run.id,
-            "video_id": run.video_id,
-            "plugin_key": run.plugin_key,
-            "ok": run.ok,
-            "status": run.status,
-            "message": run.message,
-            "output_path": run.output_path,
-            "extra": run.extra_json,
-            "created_at": run.created_at.isoformat(),
-        }
-    }
+    return {"run": _sanitize_run_for_role(run, _user)}
 
 
 @router.post("/reveal")
 async def reveal_in_file_manager(
     body: RevealRequest,
-    _user: dict = Depends(require_capability(Capability.RUN_PLUGIN)),
+    _user: dict = Depends(require_capability(Capability.MANAGE_USERS)),
 ) -> dict:
     """Reveal a file in Finder / Explorer / file manager.
+
+    2026-09-22: ADMIN-ONLY (was RUN_PLUGIN). This endpoint pops a
+    Finder window on the SERVER machine — for a remote PAID user
+    it does literally nothing useful, while still confirming which
+    paths exist and handing out the allowed-roots list on a 403.
+    Administers the machine → they get the tool.
 
     Security:
       - The path MUST be inside settings.upload_dir (or
@@ -331,10 +363,11 @@ async def reveal_in_file_manager(
     if not is_allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Path is not in an allowed directory. "
-                f"Allowed roots: {[str(r) for r in allowed_roots]}"
-            ),
+            # 2026-09-22: generic message — the old wording echoed the
+            # allowed-roots list back to the caller, which leaked the
+            # server's volume layout ("/Volumes/Storage-Medium-NVMe/…")
+            # to ANY authenticated user who posted one out-of-root path.
+            detail="Path is not in an allowed directory.",
         )
 
     # Build the platform-specific command. We use a
@@ -389,9 +422,15 @@ async def reveal_in_file_manager(
 
 # ── MVP2.1.0.1: POST /api/plugins/swap-to-mp4 ──────────────────────────
 class SwapToMp4Request(BaseModel):
-    """Request body for POST /api/plugins/swap-to-mp4."""
+    """Request body for POST /api/plugins/swap-to-mp4.
+
+    2026-09-22: mp4_path is OPTIONAL and only honored for admin —
+    regular users' swap resolves server-side from the video's
+    latest successful webm_to_mp4 run (the path-disclosure fix:
+    PAID never needs to know an absolute path).
+    """
     video_id: str
-    mp4_path: str
+    mp4_path: str | None = None
 
 
 @router.post("/swap-to-mp4")
@@ -435,7 +474,39 @@ async def swap_to_mp4(
             detail="Video not found.",
         )
 
-    result = swap_video_file_to(video, body.mp4_path, db)
+    # 2026-09-22 (path-disclosure hardening): the client no longer
+    # sends mp4_path — it was the path round-trip that FORCED the
+    # UI to show absolute paths to PAID users (the button needed the
+    # path to send back). Now the server resolves the video's most
+    # recent successful webm_to_mp4 run itself. A stale client's
+    # mp4_path is ignored unless the caller is admin (their machine,
+    # their choice — and admin can already see every path anyway).
+    mp4_path = None
+    if _user.get("role") == 0 and body.mp4_path:
+        mp4_path = body.mp4_path
+    else:
+        latest = (
+            db.query(PluginRun)
+            .filter(
+                PluginRun.video_id == video.id,
+                PluginRun.plugin_key == "webm_to_mp4",
+                PluginRun.ok.is_(True),
+                PluginRun.output_path.isnot(None),
+            )
+            .order_by(PluginRun.created_at.desc())
+            .first()
+        )
+        if latest is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "No completed MP4 conversion found for this video "
+                    "yet. Run the WebM → MP4 conversion first."
+                ),
+            )
+        mp4_path = latest.output_path
+
+    result = swap_video_file_to(video, mp4_path, db)
     db.commit()
     db.refresh(video)
 
@@ -453,10 +524,15 @@ async def swap_to_mp4(
             detail=result.message,
         )
 
-    return {
+    # 2026-09-22: response shape is role-aware — non-admin gets the
+    # new filename only; admin keeps new_path (they administer the
+    # machine and may want the exact location).
+    resp: dict = {
         "ok": True,
         "video_id": video.id,
-        "new_path": video.file_path,
         "new_filename": video.filename,
         "message": result.message,
     }
+    if _user.get("role") == 0:
+        resp["new_path"] = video.file_path
+    return resp

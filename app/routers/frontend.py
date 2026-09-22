@@ -506,6 +506,16 @@ async def video_view(
     # up by plugin.key. The "last_run" can be None
     # (first-time user, no runs yet).
     from app.models.plugin_run import PluginRun
+    from pathlib import PurePath
+
+    # 2026-09-22 (path-disclosure hardening): non-admin NEVER gets
+    # output_path in the page source — the template renders a
+    # filename instead. Admin keeps the full path. This mirrors
+    # the API sanitizer in app/routers/plugins.py::_sanitize_run_for_role
+    # (SSR and the polling twin must agree, or the path would just
+    # re-appear when the JS refresh runs).
+    viewer_is_admin = bool(user and user.get("role") == 0)
+
     last_runs_by_plugin: dict[str, dict] = {}
     for run in (
         db.query(PluginRun)
@@ -519,6 +529,13 @@ async def video_view(
         # for this plugin (dedup).
         if run.plugin_key in last_runs_by_plugin:
             continue
+        output_path = run.output_path if viewer_is_admin else None
+        filename = None
+        if run.output_path:
+            try:
+                filename = PurePath(run.output_path).name
+            except Exception:
+                filename = None
         last_runs_by_plugin[run.plugin_key] = {
             "id": run.id,
             "ok": run.ok,
@@ -534,8 +551,9 @@ async def video_view(
             # on status first, then on ok.
             "status": run.status,
             "message": run.message,
-            "output_path": run.output_path,
-            "extra": run.extra_json,
+            "output_path": output_path,
+            "filename": filename,
+            "extra": run.extra_json if viewer_is_admin else None,
             "created_at": run.created_at.isoformat(),
         }
 

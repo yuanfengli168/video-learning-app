@@ -488,6 +488,16 @@
                                             <span class="flex-shrink-0">✅</span>
                                             <div class="flex-1 min-w-0">
                                                 <div class="font-medium">Last successful output:</div>
+                                                {# 2026-09-22 (path-disclosure hardening): ADMIN
+                                                   sees the absolute path (they administer this
+                                                   machine); non-admin sees the FILENAME only —
+                                                   absolute paths leak the server's volume
+                                                   layout and are useless to remote users
+                                                   (the file is on the server's disk, not
+                                                   theirs). output_path is nulled for
+                                                   non-admin in frontend.py, so the admin
+                                                   branch below can rely on it. #}
+                                                {% if last_run.output_path %}
                                                 <div class="font-mono text-xs mt-1 break-all"
                                                      data-output-path="{{ last_run.output_path }}">
                                                     {{ last_run.output_path }}
@@ -498,18 +508,10 @@
                                                             class="text-indigo-600 dark:text-indigo-400 hover:underline">
                                                         Open in Finder
                                                     </button>
-                                                    {# MVP2.1.0.1: "Re-Upload with MP4" button.
-                                                       Shown only on the webm_to_mp4 card (this
-                                                       loop body) AND when the video is
-                                                       fully processed. The button is
-                                                       enabled only when both preconditions
-                                                       are met; otherwise it's rendered
-                                                       as a disabled <span> with a tooltip
-                                                       explaining why. #}
                                                     {% if plugin.key == 'webm_to_mp4' %}
                                                     <button type="button"
                                                             id="swap-btn-{{ plugin.key }}"
-                                                            onclick="confirmSwapToMp4('{{ plugin.key }}', '{{ last_run.output_path | e }}')"
+                                                            onclick="confirmSwapToMp4('{{ plugin.key }}')"
                                                             {% if video.status != 'ready' %}
                                                             disabled
                                                             title="Cannot swap while video status is '{{ video.status }}'. Wait for the video to finish processing."
@@ -521,6 +523,33 @@
                                                     </button>
                                                     {% endif %}
                                                 </div>
+                                                {% else %}
+                                                <div class="font-mono text-xs mt-1 break-all"
+                                                     data-output-filename="{{ last_run.filename or 'output' }}">
+                                                    {{ last_run.filename or 'converted file' }}
+                                                </div>
+                                                <div class="mt-1 flex flex-wrap gap-3">
+                                                    {# Non-admin: no Finder button (it opens
+                                                       Finder on the SERVER — meaningless to a
+                                                       remote user) and no path-bearing swap
+                                                       button; the server resolves the swap
+                                                       itself. #}
+                                                    {% if plugin.key == 'webm_to_mp4' %}
+                                                    <button type="button"
+                                                            id="swap-btn-{{ plugin.key }}"
+                                                            onclick="confirmSwapToMp4('{{ plugin.key }}')"
+                                                            {% if video.status != 'ready' %}
+                                                            disabled
+                                                            title="Cannot swap while video status is '{{ video.status }}'. Wait for the video to finish processing."
+                                                            class="text-gray-400 dark:text-gray-500 cursor-not-allowed"
+                                                            {% else %}
+                                                            class="text-indigo-600 dark:text-indigo-400 hover:underline"
+                                                            {% endif %}>
+                                                        Re-Upload with MP4
+                                                    </button>
+                                                    {% endif %}
+                                                </div>
+                                                {% endif %}
                                             </div>
                                         </div>
                                     </div>
@@ -3026,7 +3055,24 @@ async function refreshLastRun(key) {
                         </div>
                     </div>
                 </div>`;
-        } else if (run.ok && run.output_path) {
+        } else if (run.ok && (run.output_path || run.filename)) {
+            // 2026-09-22 (path-disclosure hardening): run.output_path is
+            // null for non-admin (the API sanitizer nulled it); the
+            // filename branch renders instead. Admin keeps the full
+            // path + Finder button. Mirrors the server-rendered twin
+            // in the Jinja block exactly.
+            const isAdminViewer = !!run.output_path;
+            const nameOrPath = run.output_path || run.filename || 'converted file';
+            const finderBtn = run.output_path
+                ? `<button type="button"
+                        onclick="revealInFinder('${escapeJs(run.output_path)}')"
+                        class="text-indigo-600 dark:text-indigo-400 hover:underline">
+                    Open in Finder
+                </button>`
+                : '';
+            const swapBtn = run.plugin_key === 'webm_to_mp4'
+                ? renderSwapButton(run.filename)
+                : '';
             html = `
                 <div class="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800 rounded p-2">
                     <div class="flex items-start gap-2">
@@ -3034,16 +3080,12 @@ async function refreshLastRun(key) {
                         <div class="flex-1 min-w-0">
                             <div class="font-medium">Last successful output:</div>
                             <div class="font-mono text-xs mt-1 break-all"
-                                 data-output-path="${escapeHtml(run.output_path)}">
-                                ${escapeHtml(run.output_path)}
+                                 ${isAdminViewer ? `data-output-path="${escapeHtml(run.output_path)}"` : `data-output-filename="${escapeHtml(run.filename || 'output')}"`}>
+                                ${escapeHtml(nameOrPath)}
                             </div>
                             <div class="mt-1 flex flex-wrap gap-3">
-                                <button type="button"
-                                        onclick="revealInFinder('${escapeJs(run.output_path)}')"
-                                        class="text-indigo-600 dark:text-indigo-400 hover:underline">
-                                    Open in Finder
-                                </button>
-                                ${run.plugin_key === 'webm_to_mp4' ? renderSwapButton(run.output_path) : ''}
+                                ${finderBtn}
+                                ${swapBtn}
                             </div>
                         </div>
                     </div>
@@ -3202,10 +3244,16 @@ async function revealInFinder(path) {
 // video is in 'ready' state. Extracted as a helper
 // so refreshLastRun() and the server-rendered
 // template stay in lockstep.
-function renderSwapButton(mp4Path) {
+//
+// 2026-09-22 (path-disclosure hardening): takes the
+// FILENAME (display only) — the path never travels
+// client-side for non-admin. The swap endpoint
+// resolves the actual path server-side.
+function renderSwapButton(mp4Filename) {
+    const label = mp4Filename || 'the new MP4';
     if (videoStatus === 'ready') {
         return `<button type="button"
-                        onclick="confirmSwapToMp4('webm_to_mp4', '${escapeJs(mp4Path)}')"
+                        onclick="confirmSwapToMp4('webm_to_mp4')"
                         class="text-indigo-600 dark:text-indigo-400 hover:underline">
                     Re-Upload with MP4
                 </button>`;
@@ -3216,29 +3264,37 @@ function renderSwapButton(mp4Path) {
             </span>`;
 }
 
-// Module-level state for the swap modal. We need
-// to remember which MP4 path the user clicked
-// 'Swap' on so performSwap() can use it. Set in
-// confirmSwapToMp4(), read in performSwap().
-let _swapMp4Path = null;
+// Module-level state for the swap modal. 2026-09-22: no path is
+// stored anymore — the server resolves the swap source itself. We
+// keep a flag only to distinguish "modal genuinely opened" from a
+// stray confirm click.
+let _swapModalOpen = false;
 
-// confirmSwapToMp4 (MVP2.1.0.1) — opens the swap
-// confirmation modal with the MP4 path filled in.
-// Called from the "Re-Upload with MP4" button next
-// to "Open in Finder".
-function confirmSwapToMp4(pluginKey, mp4Path) {
-    _swapMp4Path = mp4Path;
+// confirmSwapToMp4 (MVP2.1.0.1; path-free since 2026-09-22) — opens
+// the swap confirmation modal. Called from the "Re-Upload with MP4"
+// button. No path argument: the filename shown in the modal comes
+// from the run row the server already sent (sanitized per-role),
+// and the POST carries only video_id.
+function confirmSwapToMp4(pluginKey) {
+    _swapModalOpen = true;
     const pathEl = document.getElementById('swap-mp4-path');
-    if (pathEl) pathEl.textContent = mp4Path;
+    if (pathEl) {
+        // Prefer the fresh JS-rendered filename; fall back to the
+        // SSR-rendered one, else a generic label.
+        const box = document.getElementById('last-run-webm_to_mp4');
+        const fname = (box && box.querySelector('[data-output-filename]')?.textContent)
+            || (box && box.querySelector('[data-output-path]')?.textContent)
+            || 'the converted MP4';
+        pathEl.textContent = fname;
+    }
     const modal = document.getElementById('swap-modal');
     if (modal) modal.classList.remove('hidden');
 }
 
-// hideSwapModal (MVP2.1.0.1) — close the modal and
-// clear the stored MP4 path. Called by the Cancel
-// button and on successful swap.
+// hideSwapModal (MVP2.1.0.1) — close the modal.
+// Called by the Cancel button and on successful swap.
 function hideSwapModal() {
-    _swapMp4Path = null;
+    _swapModalOpen = false;
     const modal = document.getElementById('swap-modal');
     if (modal) modal.classList.add('hidden');
     // Re-enable the confirm button in case it was
@@ -3250,14 +3306,15 @@ function hideSwapModal() {
     }
 }
 
-// performSwap (MVP2.1.0.1) — actually do the swap.
-// Called from the "Swap to MP4" button in the modal.
-// POSTs to /api/plugins/swap-to-mp4 with video_id
-// and mp4_path. On success, reloads the page (so
-// the new filename is reflected everywhere). On
-// failure, shows the error inline.
+// performSwap (MVP2.1.0.1; path-free since 2026-09-22) — actually do
+// the swap. Called from the "Swap to MP4" button in the modal.
+// POSTs only {video_id} — the server resolves the MP4 path from
+// the video's latest successful webm_to_mp4 run (path-disclosure
+// hardening: the path never travels client-side for non-admin).
+// On success, swaps the video element's src in place. On failure,
+// shows the error inline.
 async function performSwap() {
-    if (!_swapMp4Path) {
+    if (!_swapModalOpen) {
         hideSwapModal();
         return;
     }
@@ -3272,7 +3329,6 @@ async function performSwap() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 video_id: videoId,
-                mp4_path: _swapMp4Path,
             }),
             credentials: 'same-origin',
         });
@@ -3492,15 +3548,14 @@ if (window.YTPlayer) {
 {# MVP2.1.0.1: Swap to MP4 confirmation modal. Mirrors
    the delete-modal style. Opened by confirmSwapToMp4();
    closed by hideSwapModal(). The confirm button calls
-   performSwap(). The MP4 path is passed in via the
-   #swap-mp4-path hidden text element (set when the
-   modal is shown). #}
+   performSwap(). 2026-09-22: shows the FILENAME only
+   (role-sanitized upstream); the POST carries no path. #}
 <div id="swap-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
         <h2 class="text-lg font-semibold mb-2">🔁 Re-Upload with MP4?</h2>
         <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
             The app will point at the new MP4 file instead of the
-            original WebM. The transcript and learning materials
+            original. The transcript and learning materials
             are preserved (no re-processing needed — the content
             is the same video).
         </p>
@@ -3509,8 +3564,8 @@ if (window.YTPlayer) {
             <div id="swap-mp4-path" class="font-mono text-gray-600 dark:text-gray-400 mt-1 break-all"></div>
         </div>
         <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
-            The original WebM is NOT deleted — it's still on disk
-            in case you want to revert manually.
+            The original file is NOT deleted — it's still on the server
+            in case you want to revert.
         </p>
         <div class="flex justify-end gap-2">
             <button

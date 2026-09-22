@@ -387,12 +387,18 @@ def transcode_webm_to_mp4(video: "Video", db: Session) -> PluginResult:
 
     # Success — compute the new file size for the UI
     size_bytes = dst.stat().st_size if dst.exists() else 0
+    # 2026-09-22 (path-disclosure hardening): the path sentence is
+    # GONE from the message — it's baked into the stored row at run
+    # time, so role-based display would need runtime string surgery
+    # on every future format. The path still travels in output_path
+    # (sanitized per-role at the API layer) and the swap endpoint
+    # resolves it server-side. Message text is for humans; paths are
+    # for machines.
     return PluginResult(
         ok=True,
         message=(
             f"Transcoded to MP4 ({size_bytes / 1_000_000:.1f} MB). "
-            f"Original WebM is untouched. You can find the new file at: "
-            f"{dst}"
+            f"Original file is untouched."
         ),
         output_path=str(dst),
         extra={"size_bytes": size_bytes},

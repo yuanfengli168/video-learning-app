@@ -260,6 +260,9 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _apply_migrations()
+    # 2026-09-22: data scrub (idempotent — see its docstring). Runs
+    # after the schema pass so the table/columns always exist.
+    _scrub_plugin_run_message_paths()
 
 
 # ── Lightweight additive migrations ──────────────────────────────────────────
@@ -498,3 +501,34 @@ def _apply_migrations() -> None:
                 # Worst case the missing column will surface as a 500 on the
                 # first request, which the user can report.
                 print(f"[migrate] {table}.{column}: FAILED ({e})")
+
+
+def _scrub_plugin_run_message_paths() -> None:
+    """2026-09-22 one-time data scrub: strip absolute paths from
+    plugin_runs.message rows.
+
+    The old webm_to_mp4 success message embedded the output path
+    ("…You can find the new file at: /Volumes/…") and that message is
+    echoed to ANY role via the runs endpoints and the green box —
+    rows written before the fix keep leaking the server's volume
+    layout. This scrub removes the trailing path sentence, matching
+    what a fresh run now writes. Idempotent: the LIKE clause only
+    matches rows that still carry the sentence, so re-running on
+    every startup is a no-op after the first pass.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        updated = conn.execute(
+            text(
+                "UPDATE plugin_runs SET message = TRIM("
+                "  SUBSTR(message, 1, "
+                "    INSTR(message || ' You can find', ' You can find') - 1)) "
+                "WHERE message LIKE '% You can find the new file at:%'"
+            )
+        )
+        if updated.rowcount:
+            print(
+                f"[migrate] plugin_runs.message: scrubbed absolute "
+                f"paths from {updated.rowcount} row(s)"
+            )
