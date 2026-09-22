@@ -167,8 +167,52 @@ def call_llm_with_fallback(
 
     # Step 4: try each provider in order
     attempts: list[dict[str, Any]] = []
+    # 2026-09-22 (model preference, doc/model-preference-design.md):
+    # the ollama model is now per-user, two-layer resolved —
+    #   users.llm_model_pref override (if set AND in catalog)
+    #     → tier default (LLM_MODEL_PAID_DEFAULT / _ADMIN_DEFAULT)
+    #     → legacy fallback (llm_model_ollama)
+    # The override is re-validated against the catalog at READ time:
+    # a value removed from LLM_MODEL_CATALOG silently falls back to
+    # the tier default (graceful retirement). Non-ollama providers
+    # (groq/openai) are untouched. FREE never reaches this branch
+    # (groq-only chain).
+    from app.models.user import User
+
+    pref_model: str | None = None
+    if "ollama" in chain:
+        pref_row = None
+        _pref_db = None
+        try:
+            _pref_db = SessionLocal()
+            pref_row = _pref_db.query(User).filter(
+                User.user_id == user_id
+            ).first()
+        except Exception:
+            pref_row = None  # a DB hiccup falls back to the tier default
+        finally:
+            if _pref_db is not None:
+                try:
+                    _pref_db.close()
+                except Exception:
+                    pass
+        if pref_row is not None and pref_row.llm_model_pref:
+            if pref_row.llm_model_pref in settings.get_model_catalog():
+                pref_model = pref_row.llm_model_pref
+            else:
+                # Override not in catalog → fall back to tier default.
+                logger.warning(
+                    "user %s model_pref %r not in catalog; tier default applies",
+                    user_id, pref_row.llm_model_pref,
+                )
     for provider in chain:
-        model = settings.get_model_for_provider(provider)
+        if provider == "ollama":
+            model = (
+                pref_model
+                or settings.get_tier_default_model(int(user_role))
+            )
+        else:
+            model = settings.get_model_for_provider(provider)
         attempt: dict[str, Any] = {
             "provider": provider,
             "model": model,

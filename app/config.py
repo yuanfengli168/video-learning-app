@@ -149,6 +149,43 @@ class Settings(BaseSettings):
     llm_model_ollama: str = "glm-5.2:cloud"
     llm_model_openai: str = "gpt-4o-mini"
 
+    # ── Model preference system (2026-09-22, doc/model-preference-design.md) ──
+    # Catalog-driven model selection: PAID users get LLM_MODEL_PAID_DEFAULT
+    # (owner-set, no choice for now), ADMIN picks via /admin/settings.
+    # Adding glm-5.4 next month = `ollama pull` + append to the catalog +
+    # restart — ZERO code change (the settings page + the resolver both
+    # read this string). Resolution (the proven 13d-lite two-layer pattern):
+    #   user override (users.llm_model_pref, if set AND in catalog)
+    #     → tier default (PAID/ADMIN env below)
+    #     → legacy fallback (llm_model_ollama above)
+    # FREE is untouched (groq chain — no ollama branch at all).
+    llm_model_catalog: str = "glm-5.2:cloud,minimax-m3:cloud,glm-5.3:cloud"
+    llm_model_paid_default: str = "minimax-m3:cloud"
+    llm_model_admin_default: str = "glm-5.2:cloud"
+
+    def get_model_catalog(self) -> list[str]:
+        """The selectable model list, parsed from LLM_MODEL_CATALOG.
+
+        Comma-separated, whitespace-stripped, empty entries dropped —
+        forgiving for hand-edited .env values.
+        """
+        return [
+            m.strip() for m in self.llm_model_catalog.split(",") if m.strip()
+        ]
+
+    def get_tier_default_model(self, user_role: int) -> str:
+        """Tier default model (the layer between override and legacy).
+
+        Unknown roles get the FREE-adjacent behavior of the legacy
+        llm_model_ollama — the resolver's fail-safe (a role we can't
+        confirm never gets the paid-tier default silently).
+        """
+        if user_role == 0:  # ADMIN
+            return self.llm_model_admin_default
+        if user_role == 1:  # PAID
+            return self.llm_model_paid_default
+        return self.llm_model_ollama
+
     # ── Ollama Pro quota (Day 4) ─────────────────────────────────────
     # User's $20/month Ollama Pro account: 800 req/5h, 3000 req/week.
     # The quota tracker in `app/services/llm_quota.py` records every

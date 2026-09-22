@@ -1222,3 +1222,105 @@ async def admin_backups_run(
             ),
             status_code=500,
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /admin/settings  (2026-09-22 — model preference, doc/model-preference-design.md)
+# The ADMIN's own ollama-model picker. Radio options render from
+# LLM_MODEL_CATALOG (adding glm-5.4 = ollama pull + edit .env + restart —
+# zero code). Saves to the ADMIN's own users.llm_model_pref row; effective
+# on the next LLM call, no restart. PAID users get LLM_MODEL_PAID_DEFAULT
+# (owner-set; their picker is the MVP3 feature). FREE is untouched.
+# ─────────────────────────────────────────────────────────────────────────
+
+@router.get("/admin/settings", response_class=HTMLResponse)
+async def admin_settings_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+) -> HTMLResponse:
+    """Admin settings — model preference picker."""
+    from app.models.user import User
+
+    catalog = settings.get_model_catalog()
+    pref_row = db.query(User).filter(
+        User.user_id == user.get("uid", "")
+    ).first()
+    current = pref_row.llm_model_pref if pref_row else None
+    # The effective model = what the resolver would choose right now
+    # (override if valid, else the admin tier default).
+    effective = (
+        current if current in catalog else None
+    ) or settings.llm_model_admin_default
+
+    return templates.TemplateResponse(
+        request,
+        "admin_settings.html",
+        _ctx(
+            request,
+            user,
+            db=db,
+            catalog=catalog,
+            current_pref=current,
+            effective_model=effective,
+            paid_default=settings.llm_model_paid_default,
+            saved=request.query_params.get("saved") == "1",
+        ),
+    )
+
+
+@router.post("/admin/settings", response_class=HTMLResponse)
+async def admin_settings_save(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_admin_capability_dep),
+) -> HTMLResponse:
+    """Save the admin's model preference (own row only)."""
+    from app.models.user import User
+
+    form = await request.form()
+    choice = (form.get("llm_model_pref") or "").strip()
+    catalog = settings.get_model_catalog()
+
+    if choice and choice not in catalog:
+        # Reject unknown models with the catalog echoed (typo guard —
+        # the value must come from the rendered radios).
+        return templates.TemplateResponse(
+            request,
+            "admin_settings.html",
+            _ctx(
+                request,
+                user,
+                db=db,
+                catalog=catalog,
+                current_pref=None,
+                effective_model=settings.llm_model_admin_default,
+                paid_default=settings.llm_model_paid_default,
+                saved=False,
+                error=(
+                    f"Unknown model: {choice}. "
+                    f"Valid options: {', '.join(catalog)}"
+                ),
+            ),
+            status_code=400,
+        )
+
+    pref_row = db.query(User).filter(
+        User.user_id == user.get("uid", "")
+    ).first()
+    if pref_row is None:
+        # The users row should exist (ensure_user_row on first login),
+        # but never crash if it doesn't — create it as ADMIN.
+        from app.auth.admin import ensure_user_row
+
+        ensure_user_row(user.get("uid", ""), user.get("email"), db)
+        pref_row = db.query(User).filter(
+            User.user_id == user.get("uid", "")
+        ).first()
+
+    pref_row.llm_model_pref = choice or None  # empty → tier default
+    db.commit()
+
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse("/admin/settings?saved=1", status_code=303)

@@ -60,6 +60,19 @@ class User(Base):
         BigInteger, nullable=True, default=None,
         comment="per-user storage quota override (NULL = tier default)",
     )
+    # ── Model preference (2026-09-22, doc/model-preference-design.md) ──
+    # The user's ollama-model choice. NULL = tier default (PAID gets
+    # LLM_MODEL_PAID_DEFAULT, ADMIN gets LLM_MODEL_ADMIN_DEFAULT).
+    # Only the ADMIN's row is written today (via /admin/settings); when
+    # MVP3 exposes model choice to PAID it's this same column + the
+    # same resolver + one more capability-gated page. The value is
+    # validated against LLM_MODEL_CATALOG at write time AND re-checked
+    # at read time (an override removed from the catalog falls back to
+    # the tier default — graceful retirement, no migration).
+    llm_model_pref: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, default=None,
+        comment="per-user ollama model override (NULL = tier default)",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

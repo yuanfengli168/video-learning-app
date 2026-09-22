@@ -474,6 +474,18 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
         "storage_quota_bytes",
         "ALTER TABLE users ADD COLUMN storage_quota_bytes BIGINT",
     ),
+    # 2026-09-22 (model preference, doc/model-preference-design.md) —
+    # per-user ollama model override. NULL = tier default
+    # (LLM_MODEL_PAID_DEFAULT / LLM_MODEL_ADMIN_DEFAULT); a set value
+    # must ALSO be in LLM_MODEL_CATALOG at read time (removed-from-
+    # catalog values fall back gracefully). Only the ADMIN's row is
+    # written today (via /admin/settings); the MVP3 PAID picker is
+    # this same column.
+    (
+        "users",
+        "llm_model_pref",
+        "ALTER TABLE users ADD COLUMN llm_model_pref VARCHAR(128)",
+    ),
 ]
 
 

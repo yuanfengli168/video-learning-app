@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Settings — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-2">⚙️ Admin Settings</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+        Model preference for <strong>your account</strong>. Changes take effect on your next
+        AI request — no restart needed.
+    </p>
+
+    {# Saved confirmation (redirect back with ?saved=1) #}
+    {% if saved %}
+    <div class="mb-4 p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-sm text-green-700 dark:text-green-300">
+        ✓ Saved. Your next AI request (materials generation or chat) will use the new model.
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
+        ❌ {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+            Generation model
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            The model used for <strong>your</strong> learning-material generation and chat.
+            Options come from the server's configured catalog
+            (<code class="font-mono">LLM_MODEL_CATALOG</code>) — new models appear here
+            automatically once the admin pulls them on the server.
+        </p>
+
+        <form method="post" action="/admin/settings" class="space-y-3">
+            {% for m in catalog %}
+            <label class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer
+                {% if current_pref == m %}border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20{% endif %}">
+                <input type="radio"
+                       name="llm_model_pref"
+                       value="{{ m }}"
+                       {% if current_pref == m or (not current_pref and m == effective_model) %}checked{% endif %}
+                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500">
+                <div>
+                    <div class="text-sm font-medium text-gray-900 dark:text-white font-mono">{{ m }}</div>
+                    {% if m == paid_default %}
+                    <div class="text-xs text-gray-400 dark:text-gray-500">the current default for PAID users</div>
+                    {% endif %}
+                </div>
+            </label>
+            {% endfor %}
+
+            <div class="pt-2 flex items-center justify-between">
+                <p class="text-xs text-gray-400 dark:text-gray-500">
+                    Currently effective: <span class="font-mono">{{ effective_model }}</span>
+                </p>
+                <button type="submit"
+                        class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700">
+                    Save
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="mt-4 p-4 rounded-lg bg-gray-50 dark:bg-gray-900/30 text-xs text-gray-500 dark:text-gray-400">
+        <p class="mb-1"><strong>How other tiers are served:</strong></p>
+        <ul class="list-disc list-inside space-y-0.5">
+            <li>PAID users automatically use <span class="font-mono">{{ paid_default }}</span> (owner-set; per-user choice arrives in a later release).</li>
+            <li>FREE users use the Groq free chain (no Ollama).</li>
+        </ul>
+        <p class="mt-2 text-gray-400 dark:text-gray-500">
+            To add a new model server-side: <code class="font-mono">ollama pull &lt;model&gt;</code>,
+            append it to <code class="font-mono">LLM_MODEL_CATALOG</code> in <code class="font-mono">.env</code>, restart —
+            it appears here without code changes.
+        </p>
+    </div>
+</div>
+{% endblock %}
