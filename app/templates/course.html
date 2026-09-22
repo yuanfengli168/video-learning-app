@@ -563,6 +563,14 @@ async function loadInterruptedBanner() {
 
         document.querySelectorAll('[id^="upload-interrupted-"]').forEach(el => {
             el.classList.remove('hidden');
+            // 2026-09-22: stash the EXACT dismissal key on the element.
+            // The old dismiss handler re-derived its key from the
+            // detail span's DISPLAY text (" (name, X MB)"), which never
+            // matched this load-time key (filename:declared_size) —
+            // dismissals never stuck and the banner nagged on every
+            // course-page load (5 last-cancelled GETs in one morning's
+            // log alone).
+            el.dataset.dismissKey = key;
             const detail = el.querySelector('[id^="upload-interrupted-detail-"]');
             if (detail) {
                 const mb = (data.declared_size / 1048576).toFixed(0);
@@ -577,15 +585,14 @@ async function loadInterruptedBanner() {
 function dismissInterrupted() {
     document.querySelectorAll('[id^="upload-interrupted-"]').forEach(el => {
         el.classList.add('hidden');
-        // Persist the dismissal keyed on the CURRENT banner's data
-        // (re-read from the detail span — simplest reliable key).
-        const detail = el.querySelector('[id^="upload-interrupted-detail-"]');
-        if (detail && detail.textContent) {
-            try {
-                localStorage.setItem(
-                    'uploadBannerDismissed:' + detail.textContent, '1');
-            } catch (_) { /* blocked — re-shows next load, acceptable */ }
-        }
+        // Persist using the load-time key stashed on the element by
+        // loadInterruptedBanner — both sides now agree by construction
+        // (same string, same source), so a dismissal actually sticks.
+        try {
+            if (el.dataset.dismissKey) {
+                localStorage.setItem(el.dataset.dismissKey, '1');
+            }
+        } catch (_) { /* blocked — re-shows next load, acceptable */ }
     });
 }
 
@@ -606,6 +613,22 @@ async function createSection(e) {
     if (resp.ok) { location.reload(); }
     else { alert('Failed to create section'); }
 }
+// 2026-09-22: report a client-side upload failure to the server's
+// audit trail (events table via the telemetry beacon). The point:
+// failures that happen BEFORE the request reaches the server
+// (Cloudflare edge 413s on oversized bodies, mid-POST network drops)
+// previously left ZERO server-side trace — the user saw "some error"
+// while our logs stayed silent. The beacon body is tiny, so it always
+// fits the tunnel's 100MB edge cap. Best-effort only — telemetry
+// must never break the upload UI.
+function reportUploadError(path, ctx) {
+    try {
+        if (window.Telemetry && window.Telemetry.trackUploadError) {
+            window.Telemetry.trackUploadError(path, ctx);
+        }
+    } catch (_) { /* never break the upload UI */ }
+}
+
 async function uploadVideo(sectionId, input) {
     const files = Array.from(input.files || []);
     if (files.length === 0) return;
@@ -751,7 +774,7 @@ async function uploadVideo(sectionId, input) {
             if (lastErr) throw lastErr;
 
             ui.progress((i + 1) / total_chunks,
-                `Uploading ${describe}… chunk ${i + 1}/${total_chunks}`);
+                `Uploading ${ui.describe || describe}… chunk ${i + 1}/${total_chunks}`);
         }
 
         // 3. complete: assemble + queue handoff → navigate like the
@@ -786,31 +809,101 @@ async function uploadVideo(sectionId, input) {
                 setProgress(1, 'Finishing up…');
                 window.location.href = '/video/' + resp.data.video_id;
             } else {
-                alert('Upload failed: ' + (resp.data?.detail || `Server error (${resp.status})`));
+                const reason = resp.data?.detail || `Server error (${resp.status})`;
+                reportUploadError('single', { filename: files[0].name, error: reason, file_count: 1 });
+                alert('Upload failed: ' + reason);
                 resetUi();
             }
         } else {
-            // Multiple files: bulk endpoint + reload.
-            const form = new FormData();
-            for (const f of files) form.append('files', f);
-            const resp = await postMultipart('/api/videos/upload-bulk/' + sectionId, form,
-                (f) => setProgress(f * 0.98));
-            if (resp.ok) {
-                const d = resp.data || {};
-                const msg = `Queued: ${d.queued}, Skipped: ${d.skipped}.`
-                    + (d.skipped > 0 ? '\n\nSkipped files:\n' + (d.results || []).filter(r => r.status === 'skipped').map(r => `${r.filename}: ${r.error}`).join('\n') : '');
-                alert(msg);
-                location.reload();
-            } else {
-                alert('Bulk upload failed: ' + (resp.data?.detail || `Server error (${resp.status})`));
-                resetUi();
+            // Multiple files (2026-09-22 rewrite): per-file sequential
+            // uploads. The old code bundled every selected file into ONE
+            // bulk POST — through the Cloudflare tunnel the free plan's
+            // 100MB edge cap rejected the whole batch BEFORE it reached
+            // our server (two real incidents today: an 18-file ~18GB
+            // pick and an 8-file pick both "failed with some error"
+            // while the server log stayed perfectly clean — the request
+            // died at the edge, and no single file was over the per-file
+            // limit so nothing warned client-side). Now each file takes
+            // its own tunnel-safe path: >100MB → its own chunked
+            // session, ≤100MB → the single endpoint. One file failing
+            // never stops the rest; a 429 cap rejection stops the batch
+            // with the honest reason; every failure is beamed to the
+            // server (ui.upload telemetry) so edge/network failures
+            // finally leave a trace.
+            const results = [];
+            let aborted = null;   // a 429 cap reason stops the batch
+            for (let i = 0; i < files.length; i++) {
+                const f = files[i];
+                const base = i / files.length;      // this file's progress window
+                const span = 1 / files.length;
+                const label = `Uploading file ${i + 1}/${files.length}: ${f.name}`;
+                // The cancel affordance is per-file (chunked sessions
+                // only) — clear the previous file's before starting.
+                window._cancelUpload = null;
+                const prevCancel = document.getElementById('upload-cancel-' + sectionId);
+                if (prevCancel) prevCancel.classList.add('hidden');
+                try {
+                    if (f.size > CHUNK_THRESHOLD) {
+                        const videoId = await uploadChunked(sectionId, f, {
+                            progress: (frac, text) => setProgress(base + frac * span, text || label),
+                            setCancel: (fn) => { window._cancelUpload = fn; },
+                            describe: f.name,
+                        });
+                        results.push({ filename: f.name, ok: true, videoId });
+                    } else {
+                        const form = new FormData();
+                        form.append('file', f);
+                        const resp = await postMultipart('/api/videos/upload/' + sectionId, form,
+                            (frac) => setProgress(base + frac * span * 0.98, label));
+                        if (resp.ok) {
+                            setProgress(base + span, label);
+                            results.push({ filename: f.name, ok: true, videoId: resp.data.video_id });
+                        } else {
+                            const reason = resp.data?.detail || `Server error (${resp.status})`;
+                            results.push({ filename: f.name, ok: false, error: reason });
+                            reportUploadError('bulk', { filename: f.name, error: reason, file_count: files.length });
+                            // Daily/in-flight caps apply to the whole
+                            // batch — don't keep hammering; report why
+                            // and let the user retry the rest later.
+                            if (resp.status === 429) { aborted = reason; break; }
+                        }
+                    }
+                } catch (err) {
+                    if (/cancelled/i.test(err.message || '')) {
+                        resetUi();
+                        return;   // user pressed cancel — no scary alert;
+                                  // files already uploaded stay queued
+                    }
+                    const reason = err.message || 'Network error';
+                    results.push({ filename: f.name, ok: false, error: reason });
+                    reportUploadError('bulk', { filename: f.name, error: reason, file_count: files.length });
+                }
             }
+            const okCount = results.filter(r => r.ok).length;
+            const failed = results.filter(r => !r.ok);
+            let msg = `Uploaded ${okCount} of ${files.length} file(s).`;
+            if (aborted) {
+                const skipped = files.length - results.length;
+                msg += `\n\nStopped early: ${aborted}`
+                    + (skipped > 0 ? `\n(${skipped} file(s) not attempted — upload them again later.)` : '');
+            }
+            if (failed.length) {
+                msg += '\n\nFailed:\n' + failed.map(r => `${r.filename}: ${r.error}`).join('\n');
+            }
+            alert(msg);
+            if (okCount > 0) location.reload(); else resetUi();
         }
     } catch (err) {
         if (/cancelled/i.test(err.message || '')) {
             resetUi();
             return;   // user pressed cancel — no scary alert
         }
+        // The single-big-file chunked path (and any loop-level
+        // surprise) lands here; the multi-file loop reports per-file.
+        reportUploadError(
+            (files.length === 1 && files[0].size > CHUNK_THRESHOLD) ? 'chunked' : 'single',
+            { filename: files.length === 1 ? files[0].name : null,
+              error: err.message || 'Network error', file_count: files.length });
         alert('Upload failed: ' + (err.message || 'Network error'));
         resetUi();
     }

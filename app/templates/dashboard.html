@@ -365,10 +365,19 @@ function uploadToSection(sectionId, file) {
             setTimeout(() => { window.location.href = '/video/' + data.video_id; }, 1000);
         } else {
             if (status) {
-                status.textContent = `❌ Upload failed: ${data.detail || 'Unknown error'}`;
+                const reason = data.detail || 'Unknown error';
+                status.textContent = `❌ Upload failed: ${reason}`;
                 status.classList.remove('text-indigo-600', 'dark:text-indigo-400');
                 status.classList.add('text-red-500', 'dark:text-red-400');
             }
+            // 2026-09-22: failures the server DIDN'T see (edge cap,
+            // network) still reach the events table via the beacon.
+            try {
+                if (window.Telemetry && window.Telemetry.trackUploadError) {
+                    window.Telemetry.trackUploadError('single',
+                        { filename: file.name, error: data.detail || `Server error`, file_count: 1 });
+                }
+            } catch (_) { /* never break the UI */ }
         }
     })
     .catch(err => {
@@ -381,8 +390,18 @@ function uploadToSection(sectionId, file) {
 }
 
 function uploadMultipleToSection(sectionId, files) {
-    // MVP2.0 #3: bulk upload. Sends all files in one request and
-    // shows a per-file result list in the status area.
+    // MVP2.0 #3, rewritten 2026-09-22: multi-file upload. The old
+    // code bundled every file into ONE bulk POST — through the
+    // Cloudflare tunnel the free plan's 100MB edge cap rejected the
+    // whole batch BEFORE it reached the server (two real incidents
+    // today: an 18-file and an 8-file pick both "failed with some
+    // error" while the server log stayed clean — the request died
+    // at the edge, invisible to us). Now each file takes its own
+    // tunnel-safe request: >100MB → the chunked session API,
+    // ≤100MB → the single endpoint. Per-file status lines; a 429
+    // cap stops the batch with the honest reason; every failure is
+    // beamed to the server (ui.upload telemetry) so edge/network
+    // failures finally leave a trace.
     if (!sectionId) { alert('Please pick a section to upload to.'); return; }
     if (!files || files.length === 0) return;
     const status = document.getElementById('dashboard-upload-status');
@@ -390,38 +409,114 @@ function uploadMultipleToSection(sectionId, files) {
         status.textContent = `⏳ Uploading ${files.length} file(s)...`;
         status.className = 'mt-2 text-xs text-indigo-600 dark:text-indigo-400 min-h-[1rem]';
     }
-    const form = new FormData();
-    for (const f of files) form.append('files', f);
-    fetch('/api/videos/upload-bulk/' + sectionId, { method: 'POST', body: form })
-    .then(resp => safeJsonParse(resp))
-    .then(({ ok, data }) => {
+    const CHUNK_THRESHOLD = 100 * 1024 * 1024;  // the edge cap
+    const setFileStatus = (lines, cls) => {
         if (!status) return;
-        if (!ok) {
-            const detail = data && data.detail ? data.detail : 'Unknown error (no detail from server)';
-            status.textContent = `❌ Bulk upload failed (server): ${detail}`;
-            status.className = 'mt-2 text-xs text-red-500 dark:text-red-400 min-h-[1rem]';
-            return;
+        status.innerHTML = lines.map(l => `<div>${escapeHtml(l)}</div>`).join('');
+        status.className = 'mt-2 text-xs min-h-[1rem] ' + cls;
+    };
+    const beacon = (filename, reason) => {
+        try {
+            if (window.Telemetry && window.Telemetry.trackUploadError) {
+                window.Telemetry.trackUploadError('bulk',
+                    { filename, error: reason, file_count: files.length });
+            }
+        } catch (_) { /* never break the UI */ }
+    };
+    // The chunked-session uploader — mirrors course.html's
+    // uploadChunked (init → chunk×N → complete) but with this
+    // page's status-line progress instead of the progress bar.
+    const uploadOneChunked = async (file, label) => {
+        let resp = await fetch('/api/upload-sessions/init', {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                section_id: sectionId,
+                filename: file.name,
+                declared_size: file.size,
+            }),
+        });
+        const init = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            throw Object.assign(new Error(init.detail || `Server error (${resp.status})`),
+                                 { status: resp.status });
         }
-        // Show per-file results
-        const lines = data.results.map(r =>
-            r.status === 'queued'
-                ? `✅ ${r.filename} — queued`
-                : `⚠️ ${r.filename} — skipped: ${r.error}`
-        );
-        const summary = `${data.queued} queued, ${data.skipped} skipped`;
-        status.innerHTML = lines.map(l => `<div>${escapeHtml(l)}</div>`).join('') +
-            `<div class="font-medium mt-1">${escapeHtml(summary)}</div>`;
-        status.className = 'mt-2 text-xs min-h-[1rem] ' +
-            (data.skipped > 0 ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400');
+        const { session_id, chunk_size, total_chunks } = init;
+        for (let i = 0; i < total_chunks; i++) {
+            const blob = file.slice(i * chunk_size, (i === total_chunks - 1) ? file.size : (i + 1) * chunk_size);
+            let lastErr = null;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    const r = await fetch(`/api/upload-sessions/${session_id}/chunk/${i}`,
+                        { method: 'PUT', credentials: 'include', body: blob });
+                    if (r.ok) { lastErr = null; break; }
+                    const d = await r.json().catch(() => ({}));
+                    if (r.status === 409) throw Object.assign(
+                        new Error(d.detail || 'Session expired'), { fatal: true });
+                    lastErr = new Error(d.detail || `Chunk ${i + 1} failed (${r.status})`);
+                } catch (e) {
+                    if (e.fatal) throw e;
+                    lastErr = e;
+                }
+                if (attempt < 3) await new Promise(r2 => setTimeout(r2, 500 * attempt));
+            }
+            if (lastErr) throw lastErr;
+            setFileStatus([`${label} chunk ${i + 1}/${total_chunks}`],
+                'text-indigo-600 dark:text-indigo-400');
+        }
+        resp = await fetch(`/api/upload-sessions/${session_id}/complete`,
+            { method: 'POST', credentials: 'include' });
+        const done = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(done.detail || `Server error (${resp.status})`);
+        return done.video_id;
+    };
+    (async () => {
+        const lines = [];
+        let okCount = 0, capStopped = null;
+        for (let i = 0; i < files.length; i++) {
+            const f = files[i];
+            const label = `[${i + 1}/${files.length}] ${f.name}`;
+            try {
+                if (f.size > CHUNK_THRESHOLD) {
+                    const videoId = await uploadOneChunked(f, label);
+                    lines.push(`✅ ${f.name} — queued`);
+                    okCount++;
+                } else {
+                    const form = new FormData();
+                    form.append('file', f);
+                    const resp = await fetch('/api/videos/upload/' + sectionId, { method: 'POST', body: form });
+                    const { ok, data } = await safeJsonParse(resp);
+                    if (ok) {
+                        lines.push(`✅ ${f.name} — queued`);
+                        okCount++;
+                    } else {
+                        const reason = (data && data.detail) ? data.detail : `Server error (${resp.status})`;
+                        lines.push(`❌ ${f.name} — ${reason}`);
+                        beacon(f.name, reason);
+                        if (resp.status === 429) { capStopped = reason; break; }
+                    }
+                }
+            } catch (err) {
+                lines.push(`❌ ${f.name} — ${err.message || 'Network error'}`);
+                beacon(f.name, err.message || 'Network error');
+            }
+            setFileStatus(lines.concat([`⏳ ${label}`]), 'text-indigo-600 dark:text-indigo-400');
+        }
+        if (capStopped) {
+            const skipped = files.length - lines.length;
+            lines.push(`⚠️ Stopped early: ${capStopped}`
+                + (skipped > 0 ? ` (${skipped} file(s) not attempted)` : ''));
+        }
+        lines.push(`${okCount} queued, ${lines.length - okCount - (capStopped ? 1 : 0)} failed`);
+        setFileStatus(lines,
+            okCount === 0 ? 'text-red-500 dark:text-red-400'
+                : 'mt-2 text-xs min-h-[1rem] ' + (lines.length - okCount > 1 || capStopped
+                    ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400'));
         // Reload after a brief pause so the new videos appear in the list
-        if (data.queued > 0) setTimeout(() => location.reload(), 2500);
-    })
-    .catch(err => {
+        if (okCount > 0) setTimeout(() => location.reload(), 2500);
+    })().catch(err => {
         if (status) {
-            // Network error (server unreachable, CORS, etc.) — the
-            // request never even got a response. Show the network
-            // error so the user knows it's not the app's fault.
-            status.textContent = `❌ Bulk upload error (network): ${err.message}`;
+            status.textContent = `❌ Bulk upload error: ${err.message}`;
             status.className = 'mt-2 text-xs text-red-500 dark:text-red-400 min-h-[1rem]';
         }
     });

@@ -32,6 +32,16 @@ Event contract (matches doc/roles-tiers-cheatsheet.md §B):
   ui.materials   <video_id>    {tab: summary|mindmap|flashcards|...}
   ui.chat        <video_id>    —
   ui.actions     <video_id>    {action: transcribe|generate, model?}
+  ui.upload      —             {path: single|chunked|bulk,
+                                error: <reason>, filename?, file_count?}
+
+The ui.upload row is the 2026-09-22 observability fix for the
+"bulk upload failed with some error but the server log is clean"
+mystery: multi-file bulk bodies over Cloudflare's 100MB edge cap
+die BEFORE reaching the server, so the only witness was the
+browser's alert() — nothing to grep later. The beacon's own POST
+is tiny, so failure events reach the events table even when the
+upload itself never did. See the ui.upload note in telemetry.js.
 
 Usage counting: the PAID usage page counts `services.llm_providers`
 "LLM call succeeded" events per user (server-side truth), NOT these
@@ -73,6 +83,7 @@ UI_EVENT_SOURCES = frozenset({
     "ui.materials",
     "ui.chat",
     "ui.actions",
+    "ui.upload",
 })
 
 # Player actions (context.action when source == "ui.player").
@@ -80,6 +91,9 @@ UI_PLAYER_ACTIONS = frozenset({"play", "pause", "seek", "ended"})
 
 # Action clicks (context.action when source == "ui.actions").
 UI_ACTION_KINDS = frozenset({"transcribe", "generate"})
+
+# Upload-failure paths (context.path when source == "ui.upload").
+UI_UPLOAD_PATHS = frozenset({"single", "chunked", "bulk"})
 
 # Caps — see module docstring §security. 25 events is generous for a
 # 10s batch even with seek-debounce off; context strings stay small.
@@ -146,6 +160,29 @@ def _validate_action_context(event: UIEvent) -> None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"unknown action kind: {kind!r}",
+        )
+
+
+def _validate_upload_context(event: UIEvent) -> None:
+    """ui.upload failure beacons must carry a known path + a reason.
+
+    Bounded shapes (the 500-char context cap still applies upstream):
+    context.path ∈ single|chunked|bulk, context.error is a short
+    reason string (≤200 chars — written by our own client, the cap
+    just stops a hostile client using the column as free storage),
+    filename optional (bounded by the context cap anyway).
+    """
+    path = event.context.get("path")
+    if path not in UI_UPLOAD_PATHS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown upload path: {path!r}",
+        )
+    reason = event.context.get("error")
+    if not isinstance(reason, str) or not reason or len(reason) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ui.upload requires context.error (1-200 chars)",
         )
 
 
@@ -225,6 +262,8 @@ async def ingest_telemetry(
             _validate_action_context(event)
         elif event.source == "ui.materials":
             _validate_materials_context(event)
+        elif event.source == "ui.upload":
+            _validate_upload_context(event)
 
         # 3. video_id existence + tier-access check (also covers the
         #    catalog-probe oracle). ui.login has no video.
@@ -244,6 +283,15 @@ async def ingest_telemetry(
             message = "ui chat message sent"
         elif event.source == "ui.login":
             message = "ui user logged in"
+        elif event.source == "ui.upload":
+            # Grep-friendly failure line. Level stays INFO like the
+            # rest of the beacon (observational): a failure the SERVER
+            # saw would be its own server-side ERROR row — this row
+            # is only "the browser told us it failed".
+            message = (
+                f"ui upload failure via {event.context.get('path', '?')}: "
+                f"{event.context.get('error', '?')}"
+            )
 
         log_event(
             db,

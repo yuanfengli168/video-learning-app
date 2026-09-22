@@ -23,6 +23,19 @@
  *   ui.materials {tab: <name>}                        (video page tabs)
  *   ui.chat      {}                                   (chat message sent)
  *   ui.actions   {action: transcribe|generate, model?}
+ *   ui.upload    {path: single|chunked|bulk, error: <reason>,
+ *                filename?, file_count?}              (upload failure beacon)
+ *
+ *   ui.upload was added 2026-09-22 after the "bulk upload failed
+ *   with some error, but the server log is clean" mystery: two
+ *   real multi-file picks (~18GB and ~1.5GB) died at Cloudflare's
+ *   edge (the free plan's 100MB per-REQUEST cap — one multipart
+ *   body bundling all files) and never reached the server, so the
+ *   incidents left zero server-side trace. The beacon body is
+ *   tiny and always fits the tunnel, so upload failures now reach
+ *   the events table even when the upload itself didn't. Fired
+ *   from course.html (and any future uploader) on ANY client-side
+ *   upload failure — edge rejections, network drops, cap 429s.
  */
 
 (function (global) {
@@ -142,10 +155,20 @@
         });
     }
 
+    /**
+     * Report one client-side upload failure (see the ui.upload note
+     * in the header). Deliberately NOT debounced — failures are rare;
+     * dedup would lose retry-vs-repeat signal. Best-effort only.
+     */
+    function trackUploadError(path, context) {
+        track('ui.upload', null, context);
+    }
+
     // ── Exports ────────────────────────────────────────────────────────
     global.Telemetry = {
         track: track,
         flush: flush,
         wireVideoElement: wireVideoElement,
+        trackUploadError: trackUploadError,
     };
 })(window);
