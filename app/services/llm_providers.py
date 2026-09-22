@@ -232,12 +232,32 @@ def call_llm_with_fallback(
                "role": user_role,
                "attempts": attempts,
            })
-    return {
-        "status": "provider_unavailable",
-        "message": (
+    # 2026-09-22 (owner decision): FREE users get a friendly retry
+    # message with the YouTube-Ask workaround instead of the technical
+    # chain-debug text — Groq's free tier fails intermittently by
+    # nature, and "All 1 provider(s) in your tier's chain failed"
+    # reads like a bug report, not a "try again". The discriminator is
+    # the ROLE (the product contract), NOT len(chain): sponsored free
+    # providers may add a second free-tier provider someday, and a
+    # paying customer must NEVER see "The free AI service…". Unknown/
+    # missing role fails SAFE to the technical message.
+    from app.auth.roles import UserRole
+
+    if user_role == int(UserRole.FREE):
+        message = (
+            "The free AI service is temporarily unavailable. "
+            "This is intermittent. Please try again in a minute — or, "
+            "for a YouTube video like this one, use YouTube's own "
+            "\"Ask\" feature when logged on the source page."
+        )
+    else:
+        message = (
             f"All {len(attempts)} provider(s) in your tier's chain failed. "
             f"See 'attempts' for details."
-        ),
+        )
+    return {
+        "status": "provider_unavailable",
+        "message": message,
         "attempts": attempts,
     }
 
