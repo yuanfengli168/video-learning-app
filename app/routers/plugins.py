@@ -506,7 +506,14 @@ async def swap_to_mp4(
             )
         mp4_path = latest.output_path
 
-    result = swap_video_file_to(video, mp4_path, db)
+    result = swap_video_file_to(
+        video, mp4_path, db,
+        # 2026-09-22 (storage-doubling fix): non-admin swaps are
+        # atomic replaces — the original is deleted after the commit,
+        # keeping disk usage and the /usage meter honest (one video,
+        # one file). Admin keeps both (their machine, their choice).
+        delete_original=_user.get("role") != 0,
+    )
     db.commit()
     db.refresh(video)
 

@@ -569,9 +569,20 @@ def run_plugin(
 # (NOT by /api/plugins/{name}/run, since it doesn't
 # produce a sidecar file).
 def swap_video_file_to(
-    video: "Video", new_path: str, db: Session
+    video: "Video", new_path: str, db: Session, *, delete_original: bool = False
 ) -> "PluginResult":
     """Swap a video's file_path to a new file (e.g. WebM -> MP4).
+
+    2026-09-22 (storage-doubling fix, Todo Q5/Q6): the ORIGINAL file
+    is deleted after the swap when delete_original=True (the PAID/
+    FREE behavior — the /usage meter and disk stay honest: one video,
+    one file). Admin keeps both (delete_original=False, their machine
+    — and the meter-doubling gap is admin's own choice to make).
+
+    Deletion order: DB commit FIRST, then the file delete — if the
+    delete somehow fails, the row still points at the NEW file (the
+    orphaned original becomes a sweeper-class cleanup, never data
+    loss). A failure to delete does NOT fail the swap.
 
     The new file must:
       - Exist on disk
@@ -666,6 +677,22 @@ def swap_video_file_to(
     # sidecar plugin; we write the row directly.
     old_size_mb = old_size / 1_000_000 if old_size else 0
     new_size_mb = video.file_size / 1_000_000 if video.file_size else 0
+    # 2026-09-22: delete the original when the caller says so (PAID/
+    # FREE — the storage-doubling fix). Commit first so the row always
+    # points at the new file before the old bytes leave; a failed
+    # delete logs + lands in the audit row but never fails the swap.
+    original_deleted = False
+    if delete_original:
+        try:
+            db.commit()  # the Video-row update must be durable FIRST
+            # unlink() returns None on success — don't assign it
+            # (the 2026-09-22 first-cut bug: original_deleted = None
+            # made the audit row + message claim no deletion while
+            # the bytes were already gone).
+            Path(old_path).unlink(missing_ok=True)
+            original_deleted = True
+        except OSError as exc:
+            print(f"[swap_to_mp4] could not delete original {old_path}: {exc!r}")
     run_row = PluginRun(
         id=str(uuid.uuid4()),
         video_id=video.id,
@@ -674,7 +701,8 @@ def swap_video_file_to(
         message=(
             f"Swapped from {old_filename} ({old_size_mb:.1f} MB) "
             f"to {new_path_obj.name} ({new_size_mb:.1f} MB). "
-            f"Transcript and materials preserved."
+            + ("Original deleted (storage freed). " if original_deleted else "")
+            + "Transcript and materials preserved."
         ),
         output_path=str(new_path_obj),
         extra_json=json.dumps({
@@ -684,6 +712,8 @@ def swap_video_file_to(
             "new_path": str(new_path_obj),
             "new_filename": new_path_obj.name,
             "new_size_bytes": video.file_size,
+            "original_deleted": original_deleted,
+            "storage_freed_bytes": old_size if original_deleted else 0,
         }),
         created_at=datetime.now(timezone.utc),
     )
@@ -693,12 +723,15 @@ def swap_video_file_to(
         ok=True,
         message=(
             f"Video now points to {new_path_obj.name}. "
-            f"Transcript and materials preserved (no re-processing)."
+            + ("The original file was deleted to free storage. "
+               if original_deleted else "")
+            + "Transcript and materials preserved (no re-processing)."
         ),
         output_path=str(new_path_obj),
         extra={
             "old_path": old_path,
             "old_filename": old_filename,
             "new_filename": new_path_obj.name,
+            "original_deleted": original_deleted,
         },
     )

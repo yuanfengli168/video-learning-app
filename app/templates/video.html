@@ -401,7 +401,30 @@
                                         {{ plugin.label }}
                                     </h4>
                                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                        {# 2026-09-22 (storage-doubling fix): the
+                                           "original never modified" sentence is
+                                           role-conditional. The TRANSCODE step
+                                           always leaves the original alone (the
+                                           converted file is side-by-side) — but
+                                           for non-admin the subsequent "Re-Upload
+                                           with MP4" swap DELETES the original
+                                           (keeping disk + /usage meter honest).
+                                           Admin keeps both. #}
+                                        {% if plugin.key == 'webm_to_mp4' and user_role == 'ADMIN' %}
+                                        Convert to MP4 (H.264 + AAC) for broader
+                                        compatibility and smaller file size. The
+                                        new file is written next to the original —
+                                        your original is never modified.
+                                        {% elif plugin.key == 'webm_to_mp4' %}
+                                        Convert to MP4 (H.264 + AAC) for broader
+                                        compatibility and smaller file size. The
+                                        conversion writes a separate file; when you
+                                        then click "Re-Upload with MP4", the
+                                        original is deleted to keep your storage
+                                        usage honest.
+                                        {% else %}
                                         {{ plugin.description }}
+                                        {% endif %}
                                     </p>
                                 </div>
                                 <button
@@ -3549,7 +3572,11 @@ if (window.YTPlayer) {
    the delete-modal style. Opened by confirmSwapToMp4();
    closed by hideSwapModal(). The confirm button calls
    performSwap(). 2026-09-22: shows the FILENAME only
-   (role-sanitized upstream); the POST carries no path. #}
+   (role-sanitized upstream); the POST carries no path.
+   The original-file paragraph is ROLE-AWARE (2026-09-22
+   storage-doubling fix): non-admin swaps delete the
+   original immediately (meter + disk stay honest);
+   admin swaps keep both (their machine). #}
 <div id="swap-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
         <h2 class="text-lg font-semibold mb-2">🔁 Re-Upload with MP4?</h2>
@@ -3563,10 +3590,19 @@ if (window.YTPlayer) {
             <div class="font-medium text-gray-700 dark:text-gray-300">New file:</div>
             <div id="swap-mp4-path" class="font-mono text-gray-600 dark:text-gray-400 mt-1 break-all"></div>
         </div>
+        {% if user_role == 'ADMIN' %}
         <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
             The original file is NOT deleted — it's still on the server
             in case you want to revert.
         </p>
+        {% else %}
+        <p class="text-xs text-amber-600 dark:text-amber-400 mb-4">
+            <strong>The original file will be deleted immediately after
+            the swap</strong> — the new MP4 becomes the only copy, so
+            your storage usage reflects one file, not two. If you need
+            to keep the original, download it first.
+        </p>
+        {% endif %}
         <div class="flex justify-end gap-2">
             <button
                 onclick="hideSwapModal()"
