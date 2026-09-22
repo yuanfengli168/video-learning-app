@@ -592,8 +592,17 @@ pricing brainstorm in **doc/PriceAndCost/upload-size-architecture.md**
 (leaning per-file), 1GB vs 2GB cap (hinges on whether 3–4GB is
 customer-real), batch count cap (leaning drop), storage quota size.
 
-**Status:** design captured; awaiting sign-off on the open decisions
-before 13a starts.
+**Status (updated 2026-09-22):** 13a ✅ **SHIPPED** (commits
+`5ee1760`→`57534ee`, 2026-09-21, production-verified with 1.4GB +
+1.5GB browser uploads) — including 13b's per-file tier checks
+(resolver on all upload paths, teach-the-fix skip messages) and a
+client refinement beyond the plan: per-file SEQUENTIAL multi-file
+uploads (`ab31553`), since the old bundled bulk POST died at
+Cloudflare's 100MB per-REQUEST edge cap. 13d-lite ✅ **SHIPPED**
+(25GB PAID / 100GB ADMIN quotas, /usage meter, per-user override
+columns + flip-kit). 13c (Stripe) ✅ **deferred to relaunch** by A9
+(the shutdown-beta processes zero invoices). The authoritative
+status + numbers: `doc/limits-registry.md`.
 
 ---
 

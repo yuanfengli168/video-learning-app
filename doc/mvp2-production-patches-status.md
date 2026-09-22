@@ -2,16 +2,16 @@
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Goal**: Make this Mac Studio (`Yuanfengs-Mac-Studio.local`) a 24/7 production server for video-learning-app.
-> **Last updated**: 2026-09-12
+> **Last updated**: 2026-09-22
 
 ---
 
 ## 🎯 Current state
 
-- **Tests**: 1427 passing, 0 failing
-- **Branch**: ahead of `main` (pivot to admin-curated YouTube catalog)
-- **Feature status**: Day 1-9 shipped + post-Day-9 hardening/features batches (2026-09-03→06) + YouTube-embed unlock + playback analytics + go-live polish (2026-09-06→08) + go-live prep + course-management UX batch (2026-09-09→12, see #27) done. Launch target **2026-09-15**.
-- **Server**: gunicorn 4 workers × 2 threads (since Day 6)
+- **Tests**: 1617 passing, 19 skipped
+- **Branch**: ahead of `main`; production live at www.capysmart.com since 2026-09-17
+- **Feature status**: 2026-09-13→22 batch complete (queue + capacity + WAL + chunked uploads 13a + tier limits 13d-lite + re-run guards + clock-skew + per-file multi-upload + upload-failure beacon + path-disclosure hardening — see rows 28-37). **Beta-blocking remaining: Todo #15 (AVI notice) + 14d (LLM quota review) + 14c-lite (feedback infra).**
+- **Server**: gunicorn 4 workers × 8 threads (since `821c8e4`, capacity-verified for 32GB) + in-app upload sweeper + pool watchdog
 
 ---
 
@@ -51,6 +51,13 @@
 | 26 | **Day 11-13**: Invite 10-20 friends for soft launch, bug bash + load test, polish + docs | per go-live plan |
 | 20 | **Day 14**: LAUNCH | 🎯 |
 | 27 | **Go-live prep + course-management UX batch (done, 2026-09-09→12)**: dashboard Top Viewed / Our Loves / Newest tabs (`11e5b53`); offline model A/B shadow test glm-5.2 vs minimax-m3 (`276bb37` + `8cde153`); cookie Secure flag + trial-cohort grant script (`0e7c826`); GO-LIVE-INSTALL handover refresh (`3538694`); **course/section rename** — ✏️ buttons + `PUT /api/courses/{cid}/sections/{sid}` (`587ed58`); **section ordering iteration** — ↑/↓ arrows (`dfa4980`) then reverted per user feedback into a course-level asc/desc sort button + admin content-structure analytics table (`cbab93d`, `8e44720`); **materials port plan** staged for week-2 post-launch (`doc/materials-port-plan.md`); **admin sidebar fix** — Budget/Events/Backups pages lost the admin nav (missing `db=` in `_ctx`, `677e95e`); **LLM budget per-provider usage table** (`20735d0`); **Discuss tab 4 UX fixes** — auto-resize textarea, markdown rendering (DOM-safe, no CDN), session resume across logout/switch, typing-while-waiting (`2076a3f`). 1427 tests. | done |
+| 28 | **Queue + capacity + WAL batch (done, 2026-09-13→16)**: stuck-video 4-form taxonomy + retry-stuck/retry-failed endpoints (`19107cc`); SQLite WAL + busy_timeout (`eec1f36`); transcription mini-queue — 2-slot DB-backed scheduler replaces BackgroundTask dispatch (`0f1cb30`); upload dual gates + congestion notice + queued-video cancel (decision #9, `240b048`+`ed4f004`); model-cache check-and-load lock (`f605486`); gunicorn capacity rewrite for the verified 32GB machine (`821c8e4`); CapySmart rebrand (`23908fc`); doctor.sh full-stack health check (`de1880b`); path-aware upload size cap — 100MB via tunnel / 10GB direct (`12242e0`). | done |
+| 29 | **QueuePool outage series + postmortem (done, 2026-09-19/20)**: claim-rollback duplicate-dispatch storm fixed + pool watchdog (`c827a7b`); fork-crash SIGABRT hardened + watchdog status() bug fixed (`39a5ce5`); fork-safety env var moved pre-Python in start.sh (`16671f2`); postmortem doc (`984f7e2`). incident-capture.sh for live evidence before restart (`8580406`). | done |
+| 30 | **Chunked uploads 13a + tier limits 13d-lite (done, 2026-09-21, commits `5ee1760`→`57534ee`)**: init/chunk/complete/cancel endpoints + session service + sweeper thread (1h TTL, registry §3a Round 2) + resolver on all legacy paths + chunked client JS (>100MB auto-chunk) + /usage storage & limits cards + live smoke test (17 checks). Production-verified: 1.4GB + 1.5GB browser uploads byte-exact, sweeper freed 177MB on its first sweep. Limits registry created (`b82d360`+`f23b15a`). | done |
+| 31 | **Ops tooling (done, 2026-09-21)**: flip-kit runbook (`bda0d1a`) + promote-paid.sh — one-command PAID flip with per-user limit overrides (`c14059e`+`0eb540d`). YouTube /live/ URL support + ASR rolling-caption dedupe (`3d0f0c2`). Title autofill (`b95d8b6`). Orphan recovery one-click (`5349bca`). Tier-aware transcript caps FREE 600/PAID 3000/ADMIN 8000 (`498eb4e`). | done |
+| 32 | **Queue model dispatch + clock-skew + re-run guards (done, 2026-09-22 morning, `396e9bd`+`374ed57`+`49f47ef`)**: dispatch reads the STAMPED whisper model (known-issues §4 closed, prod-verified mlx-whisper); Firebase token verification clock_skew_seconds=10 (the "Token used too early" random-login-failure class); re-run protection A+B+C — server 409 while in-flight (>30min staleness escape) + in-flight progress strip + 3/day manual cap. | done |
+| 33 | **Per-file multi-upload + failure beacon (done, 2026-09-22, `ab31553`+`dd611ee`)**: the bundled bulk POST died at Cloudflare's edge (100MB per-REQUEST cap) with zero server-side trace (two real incidents: 18-file ~18GB + 8-file picks); now per-file sequential (>100MB → own chunked session, ≤100MB → single endpoint), 429 stops the batch honestly, every client-side failure beams a `ui.upload` events row. Banner dismissal-key fix (dismissals never stuck). Queued-cancel popups EN-first (`b19597a`). | done |
+| 34 | **Path-disclosure hardening (done, 2026-09-22, `3bd68ee`+`4982e50`)**: beta screenshot showed a PAID user the full server path + "Open in Finder". Now admin-only: runs/swap APIs return output_path:null + filename for non-admin (`_sanitize_run_for_role`), swap resolves server-side (no path round-trip), reveal endpoint gated to MANAGE_USERS, generic 403 (no allowed-roots echo), SSR context sanitized, one-time scrub of legacy message rows (0 rows carrying paths after the 13:32 restart). | done |
 
 ---
 

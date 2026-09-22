@@ -62,7 +62,14 @@ quota review**, now clearly beta-blocking: quota exhaustion mid-batch
 silently kills materials for everyone behind it. Review = per-user
 limits + the missing-fallback alerting + the retry UX.
 
-## 4. REAL BUG — the queue dispatch hardcodes model "base"
+## 4. REAL BUG — the queue dispatch hardcodes model "base" ✅ FIXED `396e9bd` (2026-09-22)
+
+**Fixed 2026-09-22 (`396e9bd`) + production-verified same day**: the
+upload of video `5d8b6d2d` (10:38) dispatched with
+`whisper_backend=mlx-whisper` — the stamped choice, not "base".
+`_staggered_transcribe_job` now reads `video.whisper_model` (stamped
+at upload), falling back to the default only when NULL. The
+original write-up is kept below for the incident trail.
 
 `_staggered_transcribe_job` (app/routers/courses.py, the mini-queue's
 dispatch target) calls:
@@ -119,10 +126,27 @@ cut it substantially.
 
 ## Resulting work items
 
-| # | Item | Priority |
-|---|---|---|
-| §4 | Queue dispatch reads the stamped `whisper_model` (one-line fix + test) | **next code batch** |
-| §3 | `OPENAI_API_KEY` in `.env` (owner, manual) | immediate |
-| §3 | 14d — LLM quota review (limits + fallback alerting + retry UX) | **beta-blocking** |
-| §2 | Todo #15 — unplayable-container reminder notice on the video page | **beta-blocking** (Zoom users will hit it) |
-| §2 | AVI/mp4 transcode-on-upload (option A) | relaunch polish (revisit if beta data demands) |
+| # | Item | Priority | Status |
+|---|---|---|---|
+| §4 | Queue dispatch reads the stamped `whisper_model` (one-line fix + test) | **next code batch** | ✅ **DONE** `396e9bd` (2026-09-22, prod-verified: `5d8b6d2d` ran mlx-whisper) |
+| §3 | `OPENAI_API_KEY` in `.env` (owner, manual) | immediate | ⏳ **owner decision: deliberately NOT set** (2026-09-21, "no need for now yet") — Ollama-exhaustion failures surface as "All 1 provider(s) failed" until 14d lands a real fallback |
+| §3 | 14d — LLM quota review (limits + fallback alerting + retry UX) | **beta-blocking** | ⏳ not started |
+| §2 | Todo #15 — unplayable-container reminder notice on the video page | **beta-blocking** (Zoom users will hit it) | ⏳ not started |
+| §2 | AVI/mp4 transcode-on-upload (option A) | relaunch polish (revisit if beta data demands) | ⏳ deferred |
+
+## Follow-ups discovered 2026-09-22 (logged while closing §4)
+
+1. **The bulk-upload "some error" popups (18-file and 8-file picks)
+were Cloudflare EDGE rejections, not app errors.** The old
+multi-file client bundled all files into ONE multipart POST; the
+free tunnel plan caps **each request body at 100MB**, so both
+batches died before reaching the server — which is also why
+NOTHING was logged. Fixed by per-file sequential uploads
+(`ab31553`/`dd611ee`): >100MB files take their own chunked
+session, ≤100MB the single endpoint. Any future client-side
+failure now leaves an `ui.upload` events row (the failure
+beacon) even when the request never reached us.
+2. **The interrupted-upload banner dismissal never stuck** —
+dismiss key derived from the banner's display text vs the load
+key derived from filename+size. Fixed in `ab31553` (the stash-
+key pattern); the banner now disappears until a NEW sweep occurs.

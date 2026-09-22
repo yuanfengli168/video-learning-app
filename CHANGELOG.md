@@ -3,6 +3,42 @@
 All notable changes to the Video Learning App are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0.10] - 2026-09-13/22 — Production hardening: queue + WAL + chunked uploads + tier limits + re-run guards + path-disclosure fix (56-commit batch)
+
+🔒 **The Mac Studio went 24/7 production live at www.capysmart.com, and the next 9 days of real traffic shaped the batch: a QueuePool outage series with postmortem, the 13a chunked-upload milestone, tier limits with a flip-kit, and — on launch day itself — a screenshot-driven path-disclosure fix.** Commits `19107cc` → `4982e50`, all on `mvp2-production-patches`. Tests 1427 → **1617 passing**.
+
+### 🚨 Incidents (root causes fixed + postmortemed)
+
+- **QueuePool outage series (2026-09-19/20)** — 3 root causes: (1) queue-claim rollback — `_claim_one` never committed, so 4 schedulers re-claimed the same rows every 3s → ~60 concurrent transcribes → 60 connections checked out against a 30-cap pool. Fixed claim-commit + `_dispatched_videos` guard + a pool watchdog (`c827a7b`). (2) macOS ObjC fork-safety SIGABRT killing workers — fix must precede Python's ObjC init: `export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` moved into start.sh, before gunicorn (`16671f2`). (3) The first watchdog shipped broken — `pool.status()` returns a STRING in SQLAlchemy 2.x; fixed to `checkedout()` (`39a5ce5`). Full postmortem: `doc/984f7e2`-committed postmortem doc + `incident-capture.sh` for live evidence BEFORE restarts (`8580406`).
+
+### ✨ Features
+
+- **`feat(upload)`: 13a — chunked/resumable uploads, complete** (`5ee1760`→`57534ee`, 6 commits) — `POST /api/upload-sessions/init` (tier + quota validation at declared size, before any bytes move; one-active-session rule) → `PUT /{id}/chunk/{n}` (raw body, idempotent, per-chunk retry client-side) → `POST /{id}/complete` (byte-verify → Video row) → `DELETE /{id}` (instant quota release). In-app sweeper thread: 1h no-activity TTL, julianday SQL claim, commit-immediately (the c827a7b pattern by construction). Client: files >100MB auto-chunk (32MB slices), per-chunk 3× retry, cancel button, interrupted-upload banner. Production-verified: 1.4GB + 1.5GB browser uploads byte-exact; the sweeper's first sweep freed 177MB.
+- **`feat(limits)`: 13d-lite — tier limits + per-user overrides** — the resolver (`effective_limit(user) = user override → tier default`), per-file + quota checks on ALL upload paths (chunked init AND legacy single/bulk — no dodging), /usage storage & limits cards. PAID 1GB/25GB, ADMIN 20GB/100GB (env-tunable). Plus **the flip-kit**: `scripts/promote-paid.sh` — one-command PAID flip with per-user limit overrides (`c14059e`), first production use the same day (2GB file override for a real user).
+- **`feat(queue)`: transcription mini-queue** (`0f1cb30`) — 2-slot DB-backed scheduler replaces BackgroundTask dispatch; uploads queue visibly with per-video status; `queued` videos cancel with honest "wastes nothing, frees your upload allowance" copy.
+- **`feat(guards)`: re-run protection A+B+C** (`49f47ef`) — owner report: users on queued/transcribing videos saw no loading indicator and re-clicked Transcribe/Generate 10× = 10 stacked pipelines. A: server 409 while in-flight (>30min staleness escape so orphan rows stay recoverable). B: in-flight progress strip + 2s polling on the video page. C: 3/day manual re-run cap via audit events.
+- **`feat(upload)`: per-file multi-upload + the upload-failure beacon** (`ab31553`+`dd611ee`) — the bundled multi-file POST died at Cloudflare's edge (the free plan's 100MB per-REQUEST cap) with ZERO server-side trace; two real incidents (18-file ~18GB, 8-file). Now per-file sequential: >100MB → own chunked session, ≤100MB → single endpoint; 429 stops the batch with the honest reason. New `ui.upload` telemetry source: every client-side upload failure lands in the events table even when the request never reached the server.
+- **`feat(caps)`: upload dual gates + congestion soft notice** (`240b048`) + **`feat(admin)`: queued-video cancel + Upload-activity analytics card** (`ed4f004`).
+- **`feat(recovery)`: one-click orphan recovery + fix silent job no-ops** (`5349bca`); **`feat(chat)`: tier-aware transcript caps FREE 600 / PAID 3000 / ADMIN 8000** (`498eb4e`); **`feat(youtube)`: /live/ URL support + ASR rolling-caption dedupe** (`3d0f0c2`); **`feat(admin)`: title autofill from YouTube** (`b95d8b6`); **`feat(brand)`: rebrand to CapySmart** (`23908fc`); **`feat(ops)`: doctor.sh** full-stack one-command health check (`de1880b`); **`feat(upload)`: path-aware size cap** — 100MB via tunnel / 10GB direct, detected via `Cf-Connecting-Ip` (`12242e0`).
+- **`perf(db)`: SQLite WAL + busy_timeout** (`eec1f36`) — readers stop stalling behind writers; **`ops(gunicorn)`: capacity rewrite** for the verified 32GB machine — 8 threads/worker (`821c8e4`).
+
+### 🐛 Bug fixes
+
+- **`fix(security)`: path-disclosure hardening** (`3bd68ee`+`4982e50`) — a beta screenshot showed a PAID user the full server path of a plugin output + an "Open in Finder" button (meaningless remotely — it pops Finder on the SERVER). Now: runs/swap APIs return `output_path: null` + `filename` for non-admin (`_sanitize_run_for_role` — the single choke-point), the swap endpoint resolves the MP4 server-side (no path round-trip; old-client body-path replays ignored for non-admin), reveal endpoint admin-only, the out-of-root 403 no longer echoes the allowed-roots list, SSR context sanitized, and a one-time scrub of legacy `plugin_runs.message` rows (0 rows carry paths after the restart). Also found+fixed during: `video.html` had TWO `performSwap` definitions — JS hoisting made the old one win; both unified path-free.
+- **`fix(queue)`: dispatch reads the STAMPED whisper model** (`396e9bd`) — hardcoded `"base"` meant every queue upload since 9/16 ran CPU faster-whisper instead of MLX turbo; explains the 7-minute transcribe on a 47-min video. Production-verified same day (mlx-whisper stamped + dispatched).
+- **`fix(auth)`: 10s clock-skew tolerance in Firebase token verification** (`374ed57`) — the "Token used too early" random-login-failure class; Firebase's zero-tolerance iat check vs 0.66s NTP skew.
+- **`fix(transcribe)`: model-cache check-and-load lock** (`f605486`); **`fix(ops)`: portable launchd templates + TCC fixes + plugin-sweep datetime bug** (`4a1ca3c`); **`fix(launchd)`** (`1d8cc23`); **`fix(community)`: env var name mismatch** (`efdef27`).
+- **Banner dismissal never stuck** (in `ab31553`) — the dismiss key derived from display text vs the load key from filename+size; never matched, so the interrupted-upload banner re-appeared on every course-page load.
+- **`fix(i18n)`: queued-cancel prompts EN-first** (`b19597a`) — the one Chinese string a beta user hits in the flow; originals kept as adjacent comments for future zh locale.
+
+### 📚 Docs
+
+- `doc/BlockersOrChallengers.md` queue postmortem (`984f7e2`); limits registry created (`b82d360`+`f23b15a`) — every numeric limit, its env var, its enforcement point, single source of truth; flip-kit runbook (`bda0d1a`); known-issues-2026-09-21 + Todo #15/#16; PriceAndCost addenda A1–A10 (upload-size economics, beta program A8, shutdown-beta plan A9); roles-tiers-cheatsheet §B telemetry contract + RUN_PLUGIN row fix (this batch's doc pass); mvp2-production-patches-status rows 28-34.
+
+### 🧪 Tests
+
+- Full suite **1617 passing, 19 skipped** (+190 since 2.1.0.9): chunked-upload battery (26) + live smoke (17 checks), tunnel-cap (5), re-run guards (13), path-disclosure (16), upload-error telemetry (10), per-file multi-upload template-source (11), usage (+5), sweeper/orphan-recovery, and the incident-driven fixes' regression pins.
+
 ## [2.1.0.9] - 2026-09-12 — Course management UX, Discuss tab overhaul & go-live polish (8-commit batch)
 
 ✨ **Launch-week polish driven by real usage: courses + sections became editable, the Discuss tab got a ChatGPT-grade input/markdown/session overhaul, and the admin pages gained structure + provider-usage observability.** Commits `587ed58` → `2076a3f`, all on `mvp2-production-patches`.

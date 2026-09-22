@@ -2,7 +2,7 @@
 
 > **Status**: Living reference — keep in sync with `app/auth/roles.py` + `app/config.py`.
 > **Related**: `mvp2-roles-and-access.md` (original design), `mlx-fork-crash-postmortem.md` (incident that exposed the role bug), **`limits-registry.md` (NEW 2026-09-21 — every numeric limit per tier, its env var, its enforcement point; the authoritative numbers live THERE)**.
-> **Last updated**: 2026-09-21 (link to the limits registry)
+> **Last updated**: 2026-09-22 (RUN_PLUGIN row fixed — PAID has it since 2026-09-08; reveal endpoint gate; §B telemetry event contract added — the section `app/routers/telemetry.py`'s docstring always referenced)
 
 This is the one-page answer to "who gets what", verified against the
 code — plus the failure modes we already hit so they don't recur.
@@ -31,12 +31,21 @@ append at the end — existing rows never renumber.
 | REGEN_MATERIALS (re-run LLM) | ✅ | ✅ *own videos only* (`e2f4aa8`) | ❌ |
 | MANAGE_OWN_COURSE | ✅ | ✅ | ❌ |
 | CURATE_CATALOG (global catalog) | ✅ | ❌ | ❌ |
-| RUN_PLUGIN (ffmpeg transcodes) | ✅ | ❌ | ❌ |
-| MANAGE_USERS (roles, audit log) | ✅ | ❌ | ❌ |
+| RUN_PLUGIN (ffmpeg transcodes, Tools tab) | ✅ | ✅ *(since 2026-09-08 — Tools tab for PAID; FREE still excluded, ffmpeg cost)* | ❌ |
+| MANAGE_USERS (roles, audit log, **reveal-in-Finder since 2026-09-22**) | ✅ | ❌ | ❌ |
 | VIEW_ADMIN_DASHBOARD (`/admin/*`) | ✅ | ❌ | ❌ |
 
 Enforcement: `@require_capability(Capability.X)` dependency (DB lookup,
 lru-cached, per-request).
+
+**2026-09-22 note — the Tools tab is NOT uniformly admin-only anymore**:
+PAID can run plugins (transcode WebM→MP4) and swap playback to the
+converted file, but **all path-bearing surfaces are admin-only**:
+`POST /api/plugins/reveal` (pops Finder on the *server* machine —
+useless to remote users) moved from `RUN_PLUGIN` to `MANAGE_USERS`;
+the runs/swap APIs return `output_path: null` + `filename` for
+non-admin (see `app/routers/plugins.py::_sanitize_run_for_role`);
+SSR sanitizes the same way in `frontend.py::video_view`.
 
 ## 3. Video visibility matrix (`videos.visibility`, "lower = more public")
 
@@ -150,3 +159,38 @@ sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db \
 Rule of thumb: `"All N provider(s) failed"` — check N. N=1 → FREE
 chain was used (should be 2 for PAID/ADMIN) → suspect role resolution,
 not the providers.
+
+---
+
+## §B. Telemetry event contract (the `ui.*` beacon sources)
+
+`app/routers/telemetry.py` references this section as the canonical
+shape list (the allowlist lives in the code; this table mirrors it).
+The browser beacon (`app/static/js/telemetry.js`) batches and POSTs
+these every ~10s / on page hide:
+
+| Source | video_id? | context | Fired when |
+|---|---|---|---|
+| `ui.login` | — | — | login completes (login.html) |
+| `ui.player` | ✅ | `{action: play\|pause\|seek\|ended, position_ms?, from_ms?, to_ms?}` | native player + YT-wrapper events |
+| `ui.materials` | ✅ | `{tab: <name>}` | video page tab click |
+| `ui.chat` | ✅ | — | chat message sent |
+| `ui.actions` | ✅ | `{action: transcribe\|generate, model?}` | transcribe/generate buttons |
+| `ui.upload` *(added 2026-09-22)* | — | `{path: single\|chunked\|bulk, error: 1–200 chars, filename?, file_count?}` | ANY client-side upload failure |
+
+**The `ui.upload` row is the observability fix** for the
+"bulk upload failed with some error but the server log is clean"
+mystery: multi-file bodies over Cloudflare's 100MB per-REQUEST edge
+cap die BEFORE reaching the server (the 2026-09-22 incidents: an
+18-file ~18GB pick and an 8-file pick, both invisible server-side).
+The beacon POST is tiny and always fits the tunnel, so failures land
+in the `events` table as `ui upload failure via <path>: <reason>`
+even when the upload itself never did. Level is always INFO (it's
+"the browser told us", observational); server-side failures write
+their own ERROR rows.
+
+**Security invariants** (enforced in `telemetry.py`): source allowlist
+(`services.*` never client-forgeable), level always INFO,
+per-batch cap 25, per-event context cap 500 chars, video_id validated
+against existence + tier visibility, `ui.upload` context shape-checked
+(path ∈ single|chunked|bulk, error 1–200 chars).

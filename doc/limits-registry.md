@@ -12,8 +12,7 @@
 > here for the numbers), `PriceAndCost/upload-size-architecture.md` (the
 > economics/decisions A1–A10 behind the upload/storage rows).
 >
-> **Last updated**: 2026-09-21 (registry created; 13a/13d rows are RATIFIED
-> but NOT yet implemented — see the Status column)
+> **Last updated**: 2026-09-22 (13a/13d-lite marked SHIPPED — they went live 2026-09-21; §3 notes the 2026-09-22 per-file multi-upload client change)
 
 ---
 
@@ -34,7 +33,7 @@ effective_limit(user) = user override (if set)  →  else tier default (env var)
 
 ---
 
-## 1. Upload — max file size (13a, ratified, not yet shipped)
+## 1. Upload — max file size (13a, **SHIPPED 2026-09-21**)
 
 | Tier | Default | Env var | Per-user override |
 |---|---|---|---|
@@ -55,7 +54,7 @@ uploads."); the server re-validates at init (the client can be lied to).
 **History**: 100MB tunnel cap (commit `12242e0`) → A8 ratified 4GB →
 2026-09-21 owner decision: **start at 1GB, infra ready to raise**.
 
-## 2. Storage — total quota (13d-lite, ratified, not yet shipped)
+## 2. Storage — total quota (13d-lite, **SHIPPED 2026-09-21**)
 
 | Tier | Default | Env var | Per-user override |
 |---|---|---|---|
@@ -84,13 +83,22 @@ admin work, flip the override (practical difference ≈ nil).
 case = 1,250GB = 68% of the 1.8TB volume, with ~300GB headroom reserved
 and the admin's 100GB budgeted separately.
 
-## 3. Chunked uploads — transport limits (13a, ratified, not yet shipped)
+## 3. Chunked uploads — transport limits (13a, **SHIPPED 2026-09-21**)
 
 | Limit | Value | Env var |
 |---|---|---|
 | Chunk size | 32 MB (under the 100MB edge cap; ≤~30s/request even on weak uplinks; a 1GB file = 32 chunks) | `UPLOAD_CHUNK_SIZE_MB` |
 | Active sessions per user | 1 (uplink self-serializes; blocks quota gaming) | — (constant) |
 | Abandoned-session sweeper | **1h no-activity → staging deleted** (2026-09-21 revision, see §3a) | `UPLOAD_SESSION_TTL_HOURS` (default 1) |
+
+**2026-09-22 client addendum — per-file multi-upload:** the course +
+dashboard pages no longer bundle multiple selected files into ONE
+bulk POST (the 100MB edge cap rejected the whole bundle — two real
+incidents that left ZERO server-side trace). Each file now takes its
+own tunnel-safe path: >100MB → its own chunked session, ≤100MB → the
+single endpoint. A 429 cap stops the batch with the honest reason;
+every client-side failure is beamed to the server (`ui.upload`
+telemetry — see roles-tiers-cheatsheet §B).
 
 ### §3a — The sweeper design (ratified 2026-09-21, after two full design rounds)
 
@@ -231,3 +239,4 @@ Do not raise SLOTS without a live throughput test (audit decision #12).
 |---|---|
 | 2026-09-21 | Registry created. §1–3 ratified (not yet implemented): 1GB PAID file cap (env), 20GB ADMIN (env), 25GB/100GB quotas (env), per-user override columns, 32MB chunks, per-user override infra. §4–8: existing shipped limits, recorded for completeness. |
 | 2026-09-21 (later) | **Sweeper revision after two design rounds** (§3a): TTL 24h → **1h** (env `UPLOAD_SESSION_TTL_HOURS`); resume-across-restart DROPPED for beta (re-upload from zero after a sweep — quantified trade, revisit at relaunch when limits pass 2GB); permanent interrupted-upload banner on the upload page (with dismiss ✕); in-app sweeper thread (not a LaunchDaemon); declared-size quota reservation; sweep claim-commits immediately (the c827a7b pattern by construction). Owner's key insight captured: shorter TTL *improves* scenario D (our own crash-orphans squat the user's quota for 1h, not 24h). |
+| 2026-09-22 | **Status flip: §1/§2/§3 are SHIPPED** — 13a (chunked uploads, commits `5ee1760`→`57534ee`) + 13d-lite (storage quota + /usage cards) went live 2026-09-21 and were production-verified (1.4GB + 1.5GB browser uploads byte-exact). §3 addendum: the multi-file client is per-file sequential since `ab31553` (the bundled bulk POST died at Cloudflare's edge — 100MB per-REQUEST cap — with zero server-side trace; two real incidents). **KNOWN GAP (owner decision pending): the swap-to-MP4 flow doubles on-disk usage** (original + converted file both stay) while the /usage meter counts one — see mvp2-storage note in session docs; delete-original-on-swap proposed. |
