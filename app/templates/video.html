@@ -1072,6 +1072,24 @@ async function transcribeVideo() {
             // Background job started. Poll for status.
             const data = await resp.json();
             await pollJobStatus('transcribe', data.job, () => location.reload());
+        } else if (resp.status === 409) {
+            // 2026-09-21 (Layer B): already processing — the honest
+            // state, not an error. Button stays processing; the page
+            // poll re-enables when the job completes.
+            const err = await resp.json().catch(() => ({}));
+            btn.textContent = '⏳ Processing…';
+            container.innerHTML =
+                '<p class="text-amber-500 py-4 text-center">' + (err.detail || 'Already processing — watch the progress above.') + '</p>';
+            watchInProgressJob();
+        } else if (resp.status === 429) {
+            // 2026-09-21 (Layer C): the 3/day cap — friendly quota
+            // message, button re-enabled (clicking again is pointless
+            // but not harmful; the server still enforces).
+            const err = await resp.json().catch(() => ({}));
+            btn.textContent = '🔁 Transcribe';
+            btn.disabled = false;
+            container.innerHTML =
+                '<p class="text-amber-500 py-4 text-center">' + (err.detail || 'Daily re-run limit reached — resets at midnight UTC.') + '</p>';
         } else {
             const err = await resp.json().catch(() => ({}));
             btn.textContent = '❌ Failed';
@@ -1125,6 +1143,16 @@ async function generateMaterials() {
                     loadSummary();
                 }
             });
+        } else if (resp.status === 409 || resp.status === 429) {
+            // 2026-09-21 (Layer B): in-flight or daily-cap — honest
+            // states, not failures. 409 keeps the processing state
+            // (the poll re-enables); 429 re-enables the button.
+            const err = await resp.json().catch(() => ({}));
+            btn.textContent = resp.status === 409 ? '⏳ Processing…' : '🔄 Regenerate';
+            if (resp.status === 429) btn.disabled = false;
+            showToast(err.detail || 'Already processing.', 'info');
+            const progress = document.getElementById('generate-progress');
+            if (progress) progress.remove();
         } else {
             const err = await resp.json().catch(() => ({}));
             btn.textContent = '❌ ' + (err.detail || 'Failed');
@@ -1163,6 +1191,65 @@ function renderProgressBar(jobType) {
             </div>
         </div>
     `;
+}
+
+// ── Layer B (2026-09-21): in-flight page state + live progress ──
+// On page load (and after a 409 "already processing"), if the video is
+// queued/transcribing/generating: disable the action buttons, show a
+// live progress strip fed by the /status poll, and RELOAD when the
+// job lands (the honest fix for "user sees no loading thing and
+// clicks transcribe" — the original report). The buttons stay visible
+// but inert; the server's 409 is the backstop either way.
+const IN_FLIGHT_STATUSES = ['queued', 'transcribing', 'generating'];
+const pageVideoStatus = '{{ video.status }}';
+
+async function watchInProgressJob() {
+    const tbtn = document.getElementById('transcribe-btn');
+    const gbtns = document.querySelectorAll('[onclick*="generateMaterials"]');
+    if (tbtn) { tbtn.disabled = true; tbtn.textContent = '⏳ Processing…'; tbtn.title = 'This video is still processing — progress updates live below.'; }
+    gbtns.forEach(b => { b.disabled = true; b.classList.add('opacity-50', 'cursor-not-allowed'); b.title = 'This video is still processing — buttons return when it finishes.'; });
+
+    let tries = 0;
+    const interval = setInterval(async () => {
+        tries++;
+        try {
+            const resp = await fetch(`/api/videos/${videoId}/status`);
+            if (!resp.ok) { if (tries > 400) clearInterval(interval); return; }
+            const data = await resp.json();
+            const status = data.status;
+            if (status === 'ready' || status === 'error') {
+                clearInterval(interval);
+                location.reload();   // buttons re-render enabled (or with Retry)
+            }
+            // Update the live strip if present
+            const strip = document.getElementById('inflight-progress-strip');
+            if (strip && data.transcribe_job) {
+                const job = data.transcribe_job;
+                strip.querySelector('.inflight-pct').textContent = (job.pct || 0) + '%';
+                strip.querySelector('.inflight-msg').textContent = job.message || status;
+                const bar = strip.querySelector('.inflight-bar');
+                if (bar) bar.style.width = (job.pct || 0) + '%';
+            }
+        } catch (e) { /* transient — keep polling */ }
+    }, 2000);
+}
+
+if (IN_FLIGHT_STATUSES.includes(pageVideoStatus)) {
+    // Render the strip + start watching
+    const anchor = document.getElementById('transcript-container');
+    if (anchor && !document.getElementById('inflight-progress-strip')) {
+        const strip = document.createElement('div');
+        strip.id = 'inflight-progress-strip';
+        strip.className = 'py-4';
+        strip.innerHTML =
+            '<p class="text-center text-sm text-gray-500 dark:text-gray-400 mb-2">' +
+            '⏳ <span class="inflight-msg">Processing…</span> — <span class="inflight-pct">0%</span></p>' +
+            '<div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">' +
+            '<div class="inflight-bar h-2 bg-indigo-500 rounded-full transition-all duration-300" style="width: 0%"></div></div>' +
+            '<p class="text-center text-xs text-gray-400 mt-1">This page updates live — no need to click anything.</p>';
+        anchor.insertBefore(strip, anchor.firstChild);
+    }
+    watchInProgressJob();
 }
 
 /**

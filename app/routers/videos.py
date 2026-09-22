@@ -531,6 +531,15 @@ async def transcribe(
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your video")
 
+    # 2026-09-21 (abuse prevention, layers A+C): the re-run guard —
+    # 409 while in-flight (with the >30min staleness escape so dead
+    # pipelines stay recoverable) + the 3/day manual cap. Single
+    # enforcement point shared with the generate endpoint
+    # (app/services/rerun_guards.py).
+    from app.services.rerun_guards import guard_rerun
+
+    guard_rerun(db, video, action="transcribe")
+
     # MVP3.0 #2: accept any of the new model-choice keys (manual
     # picks like "base" + smart picks like "local-best-and-fast").
     # The full registry is the single source of truth — see

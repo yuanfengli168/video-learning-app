@@ -46,7 +46,12 @@ def _create_course_and_section(paid_client: TestClient) -> tuple[str, str]:
 
 
 def _upload_video(paid_client: TestClient, section_id: str) -> str:
-    """Helper: upload a small fake video, return video_id."""
+    """Helper: upload a small fake video, return video_id.
+
+    2026-09-21 (re-run guards): parks at 'error' — these tests hit
+    the manual transcribe/generate endpoints, which correctly 409 a
+    freshly-queued upload. The retry semantic is the test's intent.
+    """
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
         fake = io.BytesIO(b"fake video content")
         resp = paid_client.post(
@@ -54,7 +59,14 @@ def _upload_video(paid_client: TestClient, section_id: str) -> str:
             files={"file": ("test.mp4", fake, "video/mp4")},
             headers={"Authorization": "Bearer fake"},
         )
-    return resp.json()["video_id"]
+    video_id = resp.json()["video_id"]
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        db.execute(text("UPDATE videos SET status='error' WHERE id=:v"),
+                   {"v": video_id})
+        db.commit()
+    return video_id
 
 
 @pytest.fixture(autouse=True)
@@ -171,9 +183,22 @@ def test_status_endpoint_returns_no_jobs_initially(paid_client: TestClient):
     so the UI can poll /status right away. The no_auto_pipeline fixture
     (conftest.py) prevents the actual Whisper/Ollama work from running,
     but the job record itself IS created in the upload handler.
+
+    2026-09-21 (re-run guards): uploads RAW (not the parked-retryable
+    helper) — this test asserts the FRESH-upload 'queued' state, which
+    is its whole point. The re-run guard's 409 doesn't apply here (the
+    test never transcribes; it only reads /status).
     """
     _, section_id = _create_course_and_section(paid_client)
-    video_id = _upload_video(paid_client, section_id)
+    # raw upload — no _park_retryable here (see docstring)
+    with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
+        fake = io.BytesIO(b"fake video content")
+        resp = paid_client.post(
+            f"/api/videos/upload/{section_id}",
+            files={"file": ("test.mp4", fake, "video/mp4")},
+            headers={"Authorization": "Bearer fake"},
+        )
+    video_id = resp.json()["video_id"]
 
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "u1", "email": "e@e.com"}):
         response = paid_client.get(

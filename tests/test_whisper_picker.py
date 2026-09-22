@@ -66,14 +66,28 @@ def _create_course_and_section(paid_client: TestClient):
 
 
 def _upload_video(paid_client: TestClient, section_id: str) -> str:
-    """Helper: upload a video, return its id."""
+    """Helper: upload a video, return its id.
+
+    2026-09-21 (re-run guards): parks the row at 'error' after upload.
+    A just-uploaded video is 'queued' with a fresh job record, which
+    the transcribe/generate re-run guard correctly 409s. These tests
+    exercise the manual re-run path (mocked worker), whose semantic
+    home is the retry flow — so the fixture mirrors that.
+    """
     with _mock_auth():
         upload_resp = paid_client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", io.BytesIO(b"x" * 100), "video/mp4")},
             headers=_auth_headers(),
         )
-    return upload_resp.json()["video_id"]
+    video_id = upload_resp.json()["video_id"]
+    from sqlalchemy import text as _t
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        db.execute(_t("UPDATE videos SET status='error' WHERE id=:v"),
+                   {"v": video_id})
+        db.commit()
+    return video_id
 
 
 def _get_session():

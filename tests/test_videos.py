@@ -25,6 +25,20 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
+def _park_retryable(video_id: str) -> None:
+    """2026-09-21 (re-run guards): park a just-uploaded video at
+    'error' so manual transcribe/generate calls reach the endpoint
+    under test (the guard 409s freshly-queued uploads — working as
+    designed). These tests exercise the retry path, whose semantic
+    home is exactly this park."""
+    from sqlalchemy import text
+    from app.database import SessionLocal
+    with SessionLocal() as db:
+        db.execute(text("UPDATE videos SET status='error' WHERE id=:v"),
+                   {"v": video_id})
+        db.commit()
+
+
 def _create_course_and_section(paid_client: TestClient):
     """Helper: create a course and section, return (course_id, section_id).
 
@@ -145,6 +159,7 @@ def test_transcribe_video(paid_client: TestClient):
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
+        _park_retryable(video_id)
 
         # Mock the background worker so we don't need real Whisper.
         # The worker writes the transcript asset + sets video status,
@@ -214,6 +229,7 @@ def test_get_transcript(paid_client: TestClient):
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
+        _park_retryable(video_id)
 
         fake_transcript = {
             "segments": [{"start": 0.0, "end": 2.0, "text": "Hello world"}],
@@ -306,6 +322,9 @@ def _create_video_with_transcript(
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
+        # 2026-09-21 (re-run guards): park at 'error' before the
+        # transcribe call below (freshly-queued uploads 409).
+        _park_retryable(video_id)
 
         def fake_worker(vid: str, model: str) -> None:
             from app.services.transcription import transcript_to_json
@@ -506,6 +525,7 @@ def test_transcribe_invalid_model(paid_client: TestClient):
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
+        _park_retryable(video_id)
         response = paid_client.post(
             f"/api/videos/{video_id}/transcribe?model_name=nonexistent",
             headers=_auth_headers(),
@@ -648,6 +668,7 @@ def test_transcribe_paid_on_own_video_succeeds(paid_client: TestClient):
             headers=_auth_headers(),
         )
     video_id = upload_resp.json()["video_id"]
+    _park_retryable(video_id)
 
     # Mock the worker (it's a BackgroundTask that would otherwise block).
     with patch(
@@ -694,6 +715,7 @@ def test_transcribe_admin_can_transcribe_any_video(paid_client: TestClient, admi
             headers=_auth_headers(),
         )
         admin_video_id = upload_resp.json()["video_id"]
+        _park_retryable(admin_video_id)
 
     # Now hit /transcribe as ADMIN (admin_client fixture, but we need to
     # re-mock verify_token so admin_client requests return ADMIN_FAKE).
@@ -721,6 +743,7 @@ def test_transcribe_failure_sets_error_status(paid_client: TestClient):
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
+        _park_retryable(video_id)
 
         def fake_worker_raises(vid: str, model: str) -> None:
             # Simulate the worker catching an exception from

@@ -82,6 +82,20 @@ def _setup_video_with_transcript(paid_client: TestClient) -> str:
                     v.status = "ready"
                     v.duration = fake_transcript["duration"]
                     db.commit()
+        # 2026-09-21 (re-run guards): the manual transcribe POST below
+        # 409s on a just-uploaded video (status='queued' + a fresh job
+        # record — the guard's Layer A working as designed). The
+        # fixture's intent is "a completed video re-run via the retry
+        # path", so park the row at 'error' first — the retry semantic
+        # the guard allows.
+        from app.database import SessionLocal
+        from app.models import Video as _V
+        from sqlalchemy import text as _t
+        with SessionLocal() as db:
+            db.execute(_t(
+                "UPDATE videos SET status='error' WHERE id=:v"
+            ), {"v": video_id})
+            db.commit()
         with patch(
             "app.routers.videos._run_transcribe_job",
             side_effect=fake_transcribe_worker,
@@ -214,6 +228,17 @@ def test_generate_no_transcript(paid_client: TestClient):
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
+
+        # 2026-09-21 (re-run guards): a just-uploaded video is 'queued'
+        # with a fresh job → the generate guard 409s before the
+        # transcript check. This test's intent is the transcript-missing
+        # 400, so park the row at 'error' first (the retry semantic).
+        from sqlalchemy import text as _t
+        from app.database import SessionLocal
+        with SessionLocal() as db:
+            db.execute(_t("UPDATE videos SET status='error' WHERE id=:v"),
+                       {"v": video_id})
+            db.commit()
 
         response = paid_client.post(
             f"/api/generate/{video_id}", headers=_auth_headers()
@@ -388,6 +413,13 @@ def test_generate_admin_can_generate_any_video(paid_client: TestClient, admin_cl
                 asset_type="transcript",
                 content='{"segments": [{"start": 0.0, "end": 1.0, "text": "Hi"}], "language": "en", "duration": 1.0}',
             ))
+            # 2026-09-21 (re-run guards): park at 'ready' — the just-
+            # uploaded row is 'queued' + fresh job, which the guard
+            # correctly 409s. This test's intent is the ADMIN
+            # cross-user permission, not the in-flight semantics.
+            from sqlalchemy import text as _t
+            db.execute(_t("UPDATE videos SET status='ready' WHERE id=:v"),
+                       {"v": admin_video_id})
             db.commit()
 
     # Now regenerate as ADMIN

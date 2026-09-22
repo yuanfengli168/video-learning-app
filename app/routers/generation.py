@@ -56,6 +56,13 @@ async def generate(
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your video")
 
+    # 2026-09-21 (abuse prevention, layers A+C): the shared re-run
+    # guard — 409 while in-flight (with the >30min staleness escape)
+    # + the 3/day manual cap. app/services/rerun_guards.py.
+    from app.services.rerun_guards import guard_rerun
+
+    guard_rerun(db, video, action="generate")
+
     # Get transcript
     transcript_asset = db.execute(
         select(Asset).where(
