@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-2">⚙️ Settings</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+        Choose the AI model used for <strong>your</strong> learning materials and chat.
+        Changes take effect on your next AI request — no waiting.
+    </p>
+
+    {# Saved confirmation (redirect back with ?saved=1) #}
+    {% if saved %}
+    <div class="mb-4 p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-sm text-green-700 dark:text-green-300">
+        ✓ Saved. Your next AI request will use the new model.
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
+        ❌ {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+            Generation model
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            New models appear here automatically once available on the server.
+        </p>
+
+        <form method="post" action="/settings" class="space-y-3">
+            {% for m in catalog %}
+            <label class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer
+                {% if current_pref == m or (not current_pref and m == effective_model) %}border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20{% endif %}">
+                <input type="radio"
+                       name="llm_model_pref"
+                       value="{{ m }}"
+                       {% if current_pref == m or (not current_pref and m == effective_model) %}checked{% endif %}
+                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500">
+                <div>
+                    <div class="text-sm font-medium text-gray-900 dark:text-white font-mono">{{ m }}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ model_labels.get(m, 'AI model') }}
+                        {% if not current_pref and m == effective_model %}· default{% endif %}
+                    </div>
+                </div>
+            </label>
+            {% endfor %}
+
+            <div class="pt-2 flex items-center justify-between">
+                <p class="text-xs text-gray-400 dark:text-gray-500">
+                    Currently effective: <span class="font-mono">{{ effective_model }}</span>
+                </p>
+                <button type="submit"
+                        class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700">
+                    Save
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="mt-4 p-4 rounded-lg bg-gray-50 dark:bg-gray-900/30 text-xs text-gray-500 dark:text-gray-400">
+        <p><strong>How the models differ:</strong> each option trades quality, speed, and
+        cost differently — the label under each name is the short version. Your choice
+        only affects your own account.</p>
+    </div>
+</div>
+{% endblock %}

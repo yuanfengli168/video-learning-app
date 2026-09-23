@@ -150,17 +150,25 @@ class Settings(BaseSettings):
     llm_model_openai: str = "gpt-4o-mini"
 
     # ── Model preference system (2026-09-22, doc/model-preference-design.md) ──
-    # Catalog-driven model selection: PAID users get LLM_MODEL_PAID_DEFAULT
-    # (owner-set, no choice for now), ADMIN picks via /admin/settings.
+    # Catalog-driven model selection. 2026-09-23 owner decisions:
+    #   - PAID default = glm-5.3-flash:cloud — the 50-video 4-model
+    #     comparison (doc/compare-ai-results-tool/scorecard-4model-2026-09-23.md
+    #     on the compare branch) found it BETTER than glm-5.2 on every
+    #     quality dimension at 1/9th the price. Supersedes minimax-m3
+    #     (was the 2026-09-22 default; refuted at 50 videos — 86% topic
+    #     exact rate, 120 broken mindmap clicks).
+    #   - PAID users now CHOOSE their model via /settings (the MVP3
+    #     feature pulled forward; capability-gated) — defaults to the
+    #     tier default above.
+    #   - Catalog: the owner-ratified label set (balanced / highest
+    #     quality-slower / high quality-faster / the old flagship).
     # Adding glm-5.4 next month = `ollama pull` + append to the catalog +
-    # restart — ZERO code change (the settings page + the resolver both
-    # read this string). Resolution (the proven 13d-lite two-layer pattern):
-    #   user override (users.llm_model_pref, if set AND in catalog)
-    #     → tier default (PAID/ADMIN env below)
-    #     → legacy fallback (llm_model_ollama above)
-    # FREE is untouched (groq chain — no ollama branch at all).
-    llm_model_catalog: str = "glm-5.2:cloud,minimax-m3:cloud,glm-5.3:cloud"
-    llm_model_paid_default: str = "minimax-m3:cloud"
+    # restart — ZERO code change (the settings pages + the resolver all
+    # read this string).
+    llm_model_catalog: str = (
+        "glm-5.3-flash:cloud,minimax-m3:cloud,deepseek-v4.1-flash:cloud,glm-5.2:cloud"
+    )
+    llm_model_paid_default: str = "glm-5.3-flash:cloud"
     llm_model_admin_default: str = "glm-5.2:cloud"
 
     def get_model_catalog(self) -> list[str]:

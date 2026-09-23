@@ -80,9 +80,14 @@ def test_catalog_parsing():
     from app.config import settings
 
     catalog = settings.get_model_catalog()
-    assert catalog == ["glm-5.2:cloud", "minimax-m3:cloud", "glm-5.3:cloud"]
-    # Ratified defaults
-    assert settings.llm_model_paid_default == "minimax-m3:cloud"
+    # 2026-09-23 ratified catalog (owner decisions: PAID default =
+    # glm-5.3-flash per the 50-video comparison; page labels are
+    # balanced / highest-quality-slower / high-quality-faster)
+    assert catalog == [
+        "glm-5.3-flash:cloud", "minimax-m3:cloud",
+        "deepseek-v4.1-flash:cloud", "glm-5.2:cloud",
+    ]
+    assert settings.llm_model_paid_default == "glm-5.3-flash:cloud"
     assert settings.llm_model_admin_default == "glm-5.2:cloud"
 
 
@@ -103,7 +108,7 @@ def test_tier_default_resolver():
     from app.config import settings
 
     assert settings.get_tier_default_model(0) == "glm-5.2:cloud"    # ADMIN
-    assert settings.get_tier_default_model(1) == "minimax-m3:cloud"  # PAID
+    assert settings.get_tier_default_model(1) == "glm-5.3-flash:cloud"  # PAID
     # Unknown role → the LEGACY model, fail-safe (never the paid default)
     assert settings.get_tier_default_model(99) == settings.llm_model_ollama
 
@@ -139,19 +144,20 @@ def _call_paid(db: Session) -> list[str]:
     return models
 
 
-def test_paid_default_is_minimax(client: TestClient, db_session):
+def test_paid_default_is_glm53_flash(client: TestClient, db_session):
     _seed_roles(db_session)
-    # No override → tier default
+    # No override → tier default (glm-5.3-flash, the 50-video winner,
+    # ratified 2026-09-23)
     _set_pref(db_session, "paid-uid", None)
     models = _call_paid(db_session)
-    assert models[0] == "ollama/minimax-m3:cloud"
+    assert models[0] == "ollama/glm-5.3-flash:cloud"
 
 
 def test_paid_override_in_catalog_wins(client: TestClient, db_session):
     _seed_roles(db_session)
-    _set_pref(db_session, "paid-uid", "glm-5.3:cloud")
+    _set_pref(db_session, "paid-uid", "deepseek-v4.1-flash:cloud")
     models = _call_paid(db_session)
-    assert models[0] == "ollama/glm-5.3:cloud"
+    assert models[0] == "ollama/deepseek-v4.1-flash:cloud"
 
 
 def test_override_not_in_catalog_falls_back(client: TestClient, db_session):
@@ -160,7 +166,7 @@ def test_override_not_in_catalog_falls_back(client: TestClient, db_session):
     _seed_roles(db_session)
     _set_pref(db_session, "paid-uid", "glm-4.0:retired")
     models = _call_paid(db_session)
-    assert models[0] == "ollama/minimax-m3:cloud"
+    assert models[0] == "ollama/glm-5.3-flash:cloud"
 
 
 def test_admin_default_is_glm52(client: TestClient, db_session):
@@ -241,11 +247,93 @@ def test_settings_page_renders_catalog(paid_and_admin_clients, db_session):
     with _admin_auth():
         r = admin_client.get("/admin/settings")
     assert r.status_code == 200
-    for m in ("glm-5.2:cloud", "minimax-m3:cloud", "glm-5.3:cloud"):
+    for m in ("glm-5.3-flash:cloud", "minimax-m3:cloud",
+              "deepseek-v4.1-flash:cloud", "glm-5.2:cloud"):
         assert m in r.text
     # The paid default is surfaced so the admin always knows what
     # non-admin users are getting
-    assert "minimax-m3:cloud" in r.text
+    assert "glm-5.3-flash:cloud" in r.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. The PAID settings page (2026-09-23 — the MVP3 feature, pulled forward)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_paid_settings_page_gate(paid_and_admin_clients, db_session):
+    """FREE → 403 (MANAGE_OWN_COURSE gate); the sidebar link is hidden
+    for them and the API independently 403s."""
+    paid_client, admin_client = paid_and_admin_clients
+    _seed_roles(db_session)
+
+    from sqlalchemy import text as _text
+    db_session.execute(_text(
+        "INSERT OR REPLACE INTO users (user_id, email, role) "
+        "VALUES ('free-uid', 'free@example.com', 2)"))
+    db_session.commit()
+    from app.auth.admin import clear_role_cache
+    clear_role_cache()
+
+    FAKE_FREE = {"uid": "free-uid", "email": "free@example.com", "role": 2}
+    with patch("app.auth.dependencies.verify_token",
+               return_value=FAKE_FREE):
+        r = paid_client.get("/settings")
+    assert r.status_code == 403
+
+
+def test_paid_settings_page_renders(paid_and_admin_clients, db_session):
+    """PAID sees the 4-model catalog with the owner-ratified labels,
+    and the tier default pre-checked (no override set)."""
+    paid_client, admin_client = paid_and_admin_clients
+    _seed_roles(db_session)
+
+    with _paid_auth():
+        r = paid_client.get("/settings")
+    assert r.status_code == 200
+    for m in ("glm-5.3-flash:cloud", "minimax-m3:cloud",
+              "deepseek-v4.1-flash:cloud", "glm-5.2:cloud"):
+        assert m in r.text
+    # The owner-ratified labels render
+    assert "Highest quality, slower" in r.text
+    assert "Balanced" in r.text
+    assert "High quality, faster" in r.text
+    # The tier default is pre-checked for a no-override user
+    import re as _re
+    assert _re.search(
+        r'value="glm-5.3-flash:cloud"[^>]*checked', r.text
+    ), "tier default must be the pre-checked radio"
+
+
+def test_paid_settings_save_round_trip(paid_and_admin_clients, db_session):
+    """PAID saves a choice → own row written → the RESOLVER actually
+    picks it on the next call (the end-to-end contract)."""
+    paid_client, admin_client = paid_and_admin_clients
+    _seed_roles(db_session)
+
+    with _paid_auth():
+        r = paid_client.post(
+            "/settings",
+            data={"llm_model_pref": "deepseek-v4.1-flash:cloud"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    from sqlalchemy import text as _text
+    row = db_session.execute(_text(
+        "SELECT llm_model_pref FROM users WHERE user_id = 'paid-uid'"
+    )).fetchone()
+    assert row[0] == "deepseek-v4.1-flash:cloud"
+
+    # The resolver now picks the override
+    models = _call_paid(db_session)
+    assert models[0] == "ollama/deepseek-v4.1-flash:cloud"
+
+
+def test_paid_settings_sidebar_link_visibility():
+    """Template-source: the Settings link is capability-gated on
+    manage_own_course (PAID+), same pattern as the Activity link."""
+    from pathlib import Path
+    src = Path("app/templates/base.html").read_text()
+    assert 'if "manage_own_course" in user_capabilities' in src
+    assert 'href="/settings"' in src
 
 
 def test_settings_save_round_trip(paid_and_admin_clients, db_session):

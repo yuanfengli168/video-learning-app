@@ -1324,3 +1324,115 @@ async def admin_settings_save(
     from fastapi.responses import RedirectResponse
 
     return RedirectResponse("/admin/settings?saved=1", status_code=303)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /settings  (2026-09-23 — PAID model preference; the MVP3 feature pulled
+# forward per owner decision). Same resolver/column as /admin/settings;
+# gated on MANAGE_OWN_COURSE (PAID+; FREE gets the upgrade prompt via the
+# 403 detail). The page defaults show the OWNER-RATIFIED labels so the
+# cost/quality tradeoffs are honest on the UI.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Owner-ratified display labels (2026-09-23). Keyed by model name; models
+# not in the map fall back to a neutral label.
+MODEL_LABELS: dict[str, str] = {
+    "glm-5.3-flash:cloud": "Highest quality, slower",
+    "minimax-m3:cloud": "Balanced",
+    "deepseek-v4.1-flash:cloud": "High quality, faster",
+    "glm-5.2:cloud": "Previous flagship",
+}
+
+_paid_capability_dep = require_capability(Capability.MANAGE_OWN_COURSE)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def user_settings_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_paid_capability_dep),
+) -> HTMLResponse:
+    """PAID settings — choose your generation/chat model.
+
+    Defaults to the tier default (glm-5.3-flash) — the radio pre-checks
+    the user's override if set, else the tier default. Saving writes the
+    user's own users.llm_model_pref; effective on the next LLM call.
+    """
+    from app.models.user import User
+
+    catalog = settings.get_model_catalog()
+    pref_row = db.query(User).filter(
+        User.user_id == user.get("uid", "")
+    ).first()
+    current = pref_row.llm_model_pref if pref_row else None
+    effective = (
+        current if current in catalog else None
+    ) or settings.llm_model_paid_default
+
+    return templates.TemplateResponse(
+        request,
+        "user_settings.html",
+        _ctx(
+            request,
+            user,
+            db=db,
+            catalog=catalog,
+            current_pref=current,
+            effective_model=effective,
+            model_labels=MODEL_LABELS,
+            saved=request.query_params.get("saved") == "1",
+        ),
+    )
+
+
+@router.post("/settings", response_class=HTMLResponse)
+async def user_settings_save(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: dict[str, Any] | None = Depends(_paid_capability_dep),
+) -> HTMLResponse:
+    """Save the PAID user's model choice (own row only)."""
+    from app.models.user import User
+
+    form = await request.form()
+    choice = (form.get("llm_model_pref") or "").strip()
+    catalog = settings.get_model_catalog()
+
+    if choice and choice not in catalog:
+        return templates.TemplateResponse(
+            request,
+            "user_settings.html",
+            _ctx(
+                request,
+                user,
+                db=db,
+                catalog=catalog,
+                current_pref=None,
+                effective_model=settings.llm_model_paid_default,
+                model_labels=MODEL_LABELS,
+                saved=False,
+                error=(
+                    f"Unknown model: {choice}. "
+                    f"Valid options: {', '.join(catalog)}"
+                ),
+            ),
+            status_code=400,
+        )
+
+    pref_row = db.query(User).filter(
+        User.user_id == user.get("uid", "")
+    ).first()
+    if pref_row is None:
+        from app.auth.admin import ensure_user_row
+
+        ensure_user_row(user.get("uid", ""), user.get("email"), db)
+        pref_row = db.query(User).filter(
+            User.user_id == user.get("uid", "")
+        ).first()
+
+    pref_row.llm_model_pref = choice or None
+    db.commit()
+
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse("/settings?saved=1", status_code=303)
