@@ -36,12 +36,23 @@ def check_models_available(models: list[str],
 
 def chat(model: str, system_prompt: str, user_content: str,
          base_url: str = DEFAULT_BASE_URL,
-         timeout: float = 300.0) -> tuple[str, float, str]:
+         timeout: float = 600.0,
+         retries: int = 2) -> tuple[str, float, str]:
     """Call Ollama chat. Returns (content, latency_s, thinking_field).
 
     thinking_field: the message's 'thinking' content if the model
     emitted one (separate field for thinking models — recorded for
-    the report; must never appear inside content for our parser)."""
+    the report; must never appear inside content for our parser).
+
+    2026-09-22 (round-2 lessons): cloud models throw transient 500s
+    (~1 in 170 generations) AND read-timeouts on the largest
+    transcripts (the 106k-char class — thinking models can exceed
+    a 300s cap mid-generation). Retry up to `retries` extra times
+    with a backoff on 5xx + timeout exceptions; timeout raised to
+    600s for the tail videos. The raw cache means even a hard
+    failure never loses completed work."""
+    import time
+
     body = {
         "model": model,
         "messages": [
@@ -50,11 +61,27 @@ def chat(model: str, system_prompt: str, user_content: str,
         ],
         "stream": False,
     }
-    import time
-    t0 = time.time()
-    r = httpx.post(f"{base_url}/api/chat", json=body, timeout=timeout)
-    dt = time.time() - t0
-    r.raise_for_status()
-    data = r.json()
-    msg = data.get("message", {})
-    return msg.get("content", ""), dt, msg.get("thinking", "") or ""
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        t0 = time.time()
+        try:
+            r = httpx.post(f"{base_url}/api/chat", json=body, timeout=timeout)
+        except httpx.TimeoutException as e:
+            if attempt < retries:
+                last_exc = e
+                time.sleep(3 * (attempt + 1))
+                continue
+            raise
+        dt = time.time() - t0
+        if r.status_code >= 500 and attempt < retries:
+            last_exc = httpx.HTTPStatusError(
+                f"Server error '{r.status_code}' (attempt {attempt + 1})",
+                request=r.request, response=r,
+            )
+            time.sleep(3 * (attempt + 1))  # backoff: 3s, 6s
+            continue
+        r.raise_for_status()
+        data = r.json()
+        msg = data.get("message", {})
+        return msg.get("content", ""), dt, msg.get("thinking", "") or ""
+    raise last_exc  # type: ignore[misc]

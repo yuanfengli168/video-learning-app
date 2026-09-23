@@ -63,6 +63,19 @@ def run(input_path: str | Path, out_root: str | Path | None = None) -> Path:
     print(f"[run] {len(transcripts)} video(s) × {len(models)} model(s)")
     print(f"[run] prompt: {'bundled ' + prompt_id if not raw.get('system_prompt') else 'override ' + prompt_id}")
 
+    # 2026-09-23 (the cache lesson, fixed): the cache is GLOBAL and
+    # keyed per the mvp1-spec — (video_id, model) — NOT per-run-dir.
+    # The per-run version silently regenerated every completed
+    # response on each restart (round-1 crash cost ~30 min, round-2
+    # cost ~40 min + $0.20 quota before I caught it). Now: a shared
+    # comparison-runs/_cache/<video_id>/<model>/ holds raw+meta, and
+    # every run (new timestamp dir) re-scores from it — zero LLM
+    # cost, zero re-generation, on ANY re-run. The prompt-id guards
+    # against stale raws if the bundled prompt ever changes: a
+    # different prompt invalidates the cache entry (regenerated).
+    cache_root = Path(out_root or "comparison-runs") / "_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+
     all_metrics: dict[str, list[dict]] = {m: [] for m in models}
     per_video_dir = run_dir / "per-video"
     per_video_dir.mkdir(exist_ok=True)
@@ -76,16 +89,26 @@ def run(input_path: str | Path, out_root: str | Path | None = None) -> Path:
             continue
         vdir = per_video_dir / vid
         vdir.mkdir(exist_ok=True)
+        cache_vdir = cache_root / vid
+        cache_vdir.mkdir(exist_ok=True)
 
         for model in models:
-            raw_path = vdir / f"{model.replace(':', '_')}.raw.txt"
-            # Cache: idempotent re-runs
-            if raw_path.exists():
+            stem = f"{model.replace(':', '_')}"
+            raw_path = cache_vdir / f"{stem}.raw.txt"
+            meta_path = cache_vdir / f"{stem}.meta.json"
+
+            # Prompt-provenance guard: cached raws from a different
+            # bundled prompt are invalid (cache key includes prompt_id).
+            prov_path = cache_vdir / f"{stem}.prompt.txt"
+            cache_valid = raw_path.exists() and (
+                prov_path.exists() and prov_path.read_text() == prompt_id
+            )
+            if cache_valid:
                 content = raw_path.read_text()
                 latency_s = None
                 thinking = ""
                 try:
-                    meta = json.loads((vdir / f"{model.replace(':', '_')}.meta.json").read_text())
+                    meta = json.loads(meta_path.read_text())
                     latency_s = meta.get("latency_s")
                     thinking = meta.get("thinking", "")
                 except Exception:
@@ -98,9 +121,10 @@ def run(input_path: str | Path, out_root: str | Path | None = None) -> Path:
                     model, system_prompt, user_content
                 )
                 raw_path.write_text(content)
-                (vdir / f"{model.replace(':', '_')}.meta.json").write_text(
+                meta_path.write_text(
                     json.dumps({"latency_s": latency_s, "thinking": thinking})
                 )
+                prov_path.write_text(prompt_id)
 
             # Score
             m: dict[str, Any] = {
