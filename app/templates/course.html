@@ -711,7 +711,73 @@ async function uploadVideo(sectionId, input) {
     const CHUNK_THRESHOLD = 100 * 1024 * 1024;  // the edge cap
     const CHUNK_RETRIES = 3;
 
+    // 2026-09-26: handle the structured 400 from init when the user
+    // has another upload in flight (known-issues §6, the 9/26 incident
+    // where a stale "active" session soft-blocked a fresh upload for
+    // the full 1h TTL). The server now returns
+    //   {code: "active_session_in_progress",
+    //    message: "...",
+    //    session: {id, filename, declared_size, total_chunks,
+    //              started_at, last_chunk_at, expires_at}}
+    // — we render a Clear-and-retry modal so the user can self-recover
+    // in one click instead of waiting for the sweeper.
+    function handleActiveSessionError(payload, onRetry) {
+        const sess = payload && payload.session;
+        const filename = sess ? sess.filename : 'another file';
+        const sizeMb = sess && sess.declared_size
+            ? (sess.declared_size / 1048576).toFixed(0) + ' MB'
+            : 'unknown size';
+        const ageMin = sess && sess.last_chunk_at
+            ? Math.max(0, Math.round((Date.now() - new Date(sess.last_chunk_at).getTime()) / 60000))
+            : null;
+        const ageText = ageMin === null
+            ? ''
+            : ageMin < 1
+                ? ' (started just now)'
+                : ageMin < 60
+                    ? ` (started ${ageMin} min ago)`
+                    : ` (started ${Math.round(ageMin / 60)} h ago)`;
+
+        const ok = window.confirm(
+            `Another upload is still in progress.\n\n` +
+            `File: ${filename} (${sizeMb})${ageText}\n\n` +
+            `Click OK to cancel that upload and start over.\n` +
+            `Click Cancel to keep it and try again later.`
+        );
+        if (!ok || !sess) {
+            throw new Error(payload.message || 'Another upload is in progress.');
+        }
+        // User chose OK — DELETE the stuck session, then retry init.
+        return fetch('/api/upload-sessions/' + encodeURIComponent(sess.id), {
+            method: 'DELETE', credentials: 'include',
+        }).then((r) => {
+            if (!r.ok) {
+                throw new Error('Could not cancel the previous upload (server said ' + r.status + ').');
+            }
+            return onRetry();
+        });
+    }
+
     async function uploadChunked(sectionId, file, ui) {
+        // 0. preflight: ask /me whether the user has a stuck upload
+        //    BEFORE firing init, so the banner surfaces the state at
+        //    the moment of decision (known-issues §6, 2026-09-26).
+        //    Best-effort — if /me is slow or 5xx, fall through to
+        //    the normal init (the structured-400 handler in step 1
+        //    is still the authoritative fallback).
+        try {
+            const pre = await fetch('/api/upload-sessions/me', { credentials: 'include' });
+            if (pre.ok) {
+                const preData = await pre.json().catch(() => ({}));
+                if (preData && preData.active_session) {
+                    return handleActiveSessionError(
+                        { code: 'active_session_in_progress', session: preData.active_session },
+                        () => uploadChunked(sectionId, file, ui)
+                    );
+                }
+            }
+        } catch (_) { /* preflight hiccup — fall through */ }
+
         // 1. init: declare → get the chunk plan (all validation
         //    server-side: tier limit, quota, one-session — BEFORE any
         //    bytes move; a 413 here is instant, not after minutes).
@@ -727,7 +793,13 @@ async function uploadVideo(sectionId, input) {
         });
         const init = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-            throw Object.assign(new Error(init.detail || `Server error (${resp.status})`), { status: resp.status });
+            // Structured 400 (one-active-session rule, known-issues §6).
+            if (resp.status === 400 && init && init.code === 'active_session_in_progress') {
+                // The handler does its own retry — don't fall through to
+                // the generic error throw below.
+                return handleActiveSessionError(init, () => uploadChunked(sectionId, file, ui));
+            }
+            throw Object.assign(new Error(init.detail || init.message || `Server error (${resp.status})`), { status: resp.status });
         }
         const { session_id, chunk_size, total_chunks } = init;
 

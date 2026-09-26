@@ -423,10 +423,64 @@ function uploadMultipleToSection(sectionId, files) {
             }
         } catch (_) { /* never break the UI */ }
     };
+    // 2026-09-26: handle the structured 400 from init when the user
+    // has another upload in flight (known-issues §6, the 9/26 incident).
+    // Mirrors course.html's handleActiveSessionError but returns a
+    // promise so the bulk-upload loop can await the cleanup before
+    // continuing to the next file (otherwise the loop would race
+    // against the DELETE and the next init would 400 again).
+    const handleActiveSessionError = async (payload) => {
+        const sess = payload && payload.session;
+        const filename = sess ? sess.filename : 'another file';
+        const sizeMb = sess && sess.declared_size
+            ? (sess.declared_size / 1048576).toFixed(0) + ' MB'
+            : 'unknown size';
+        const ageMin = sess && sess.last_chunk_at
+            ? Math.max(0, Math.round((Date.now() - new Date(sess.last_chunk_at).getTime()) / 60000))
+            : null;
+        const ageText = ageMin === null
+            ? ''
+            : ageMin < 1
+                ? ' (started just now)'
+                : ageMin < 60
+                    ? ` (started ${ageMin} min ago)`
+                    : ` (started ${Math.round(ageMin / 60)} h ago)`;
+        const ok = window.confirm(
+            `Another upload is still in progress.\n\n` +
+            `File: ${filename} (${sizeMb})${ageText}\n\n` +
+            `Click OK to cancel that upload and start over.\n` +
+            `Click Cancel to keep it and try again later.`
+        );
+        if (!ok || !sess) {
+            throw new Error(payload.message || 'Another upload is in progress.');
+        }
+        const r = await fetch('/api/upload-sessions/' + encodeURIComponent(sess.id), {
+            method: 'DELETE', credentials: 'include',
+        });
+        if (!r.ok) {
+            throw new Error('Could not cancel the previous upload (server said ' + r.status + ').');
+        }
+    };
     // The chunked-session uploader — mirrors course.html's
     // uploadChunked (init → chunk×N → complete) but with this
     // page's status-line progress instead of the progress bar.
     const uploadOneChunked = async (file, label) => {
+        // 0. preflight: same /me check as course.html (known-issues §6).
+        // Surfaces a stuck session before we waste a chunked upload
+        // on a doomed init round-trip.
+        try {
+            const pre = await fetch('/api/upload-sessions/me', { credentials: 'include' });
+            if (pre.ok) {
+                const preData = await pre.json().catch(() => ({}));
+                if (preData && preData.active_session) {
+                    await handleActiveSessionError({
+                        code: 'active_session_in_progress',
+                        session: preData.active_session,
+                    });
+                }
+            }
+        } catch (_) { /* preflight hiccup — fall through */ }
+
         let resp = await fetch('/api/upload-sessions/init', {
             method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
@@ -438,9 +492,33 @@ function uploadMultipleToSection(sectionId, files) {
         });
         const init = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-            throw Object.assign(new Error(init.detail || `Server error (${resp.status})`),
+            // Structured 400 (one-active-session rule, known-issues §6).
+            // Cancel the stuck session, then retry init once. If the
+            // retry also fails, fall through to the generic error.
+            if (resp.status === 400 && init && init.code === 'active_session_in_progress') {
+                await handleActiveSessionError(init);
+                resp = await fetch('/api/upload-sessions/init', {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        section_id: sectionId,
+                        filename: file.name,
+                        declared_size: file.size,
+                    }),
+                });
+                const init2 = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    throw Object.assign(new Error(init2.detail || init2.message || `Server error (${resp.status})`),
+                                         { status: resp.status });
+                }
+                return uploadOneChunkedFromInit(file, label, init2);
+            }
+            throw Object.assign(new Error(init.detail || init.message || `Server error (${resp.status})`),
                                  { status: resp.status });
         }
+        return uploadOneChunkedFromInit(file, label, init);
+    };
+    const uploadOneChunkedFromInit = async (file, label, init) => {
         const { session_id, chunk_size, total_chunks } = init;
         for (let i = 0; i < total_chunks; i++) {
             const blob = file.slice(i * chunk_size, (i === total_chunks - 1) ? file.size : (i + 1) * chunk_size);
