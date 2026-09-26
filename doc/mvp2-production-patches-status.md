@@ -2,7 +2,7 @@
 
 > **Branch**: `mvp2-production-patches` (based on `main`)
 > **Goal**: Make this Mac Studio (`Yuanfengs-Mac-Studio.local`) a 24/7 production server for video-learning-app.
-> **Last updated**: 2026-09-22
+> **Last updated**: 2026-09-26
 
 ---
 
@@ -58,6 +58,7 @@
 | 32 | **Queue model dispatch + clock-skew + re-run guards (done, 2026-09-22 morning, `396e9bd`+`374ed57`+`49f47ef`)**: dispatch reads the STAMPED whisper model (known-issues §4 closed, prod-verified mlx-whisper); Firebase token verification clock_skew_seconds=10 (the "Token used too early" random-login-failure class); re-run protection A+B+C — server 409 while in-flight (>30min staleness escape) + in-flight progress strip + 3/day manual cap. | done |
 | 33 | **Per-file multi-upload + failure beacon (done, 2026-09-22, `ab31553`+`dd611ee`)**: the bundled bulk POST died at Cloudflare's edge (100MB per-REQUEST cap) with zero server-side trace (two real incidents: 18-file ~18GB + 8-file picks); now per-file sequential (>100MB → own chunked session, ≤100MB → single endpoint), 429 stops the batch honestly, every client-side failure beams a `ui.upload` events row. Banner dismissal-key fix (dismissals never stuck). Queued-cancel popups EN-first (`b19597a`). | done |
 | 34 | **Path-disclosure hardening (done, 2026-09-22, `3bd68ee`+`4982e50`)**: beta screenshot showed a PAID user the full server path + "Open in Finder". Now admin-only: runs/swap APIs return output_path:null + filename for non-admin (`_sanitize_run_for_role`), swap resolves server-side (no path round-trip), reveal endpoint gated to MANAGE_USERS, generic 403 (no allowed-roots echo), SSR context sanitized, one-time scrub of legacy message rows (0 rows carrying paths after the 13:32 restart). | done |
+| 35 | **Chunked-upload abandonment recovery — A-safe + C + C+ (done, 2026-09-26/27, `c011833`+`f4cc494`)**: owner navigated away mid 6-chunk upload (session `b7737a0b`, ~456 MB); `ClientDisconnect` was unhandled → ERROR 500 → session stayed `active` for the full 1h TTL → one-active-session rule blocked every new `init` with 400 for ~1h. Three layered, zero-risk fixes ship together: **(A-safe)** the chunk PUT handler catches `ClientDisconnect` explicitly + cancels the session immediately + emits a `ui.upload` warning events row (the exception is a specific Starlette signal that ONLY fires on a confirmed severed connection — no risk of false cancels on Wifi blips); **(C)** the init 400 now returns a structured `{code, message, session: {...}}` envelope so the client can render a Clear-and-retry modal; **(C+)** new `GET /api/upload-sessions/me` + at-attempt preflight on course.html + dashboard.html — surfaces a stuck session at the moment of decision, not after the user has wasted a chunked upload on a doomed init round-trip. 5 new + 1 updated tests; full suite at 1651 passing. Full analysis + 4-option comparison table: [`doc/known-issues-2026-09-21.md` §6](known-issues-2026-09-21.md). CHANGELOG §[2.1.0.11]. | done |
 
 ---
 

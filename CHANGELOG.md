@@ -3,6 +3,37 @@
 All notable changes to the Video Learning App are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0.11] - 2026-09-26/27 — Chunked-upload abandonment recovery (A-safe + C + C+)
+
+🛟 **The 9/26 incident**: owner navigated away mid 6-chunk upload; Starlette `ClientDisconnect` was unhandled → session stayed `active` for the full 1h TTL → every new init returned 400 for an hour. Three layered, zero-risk fixes turn that scenario into a sub-second recovery with honest client visibility. Commits `c011833` (server) + `f4cc494` (client). Tests 1617 → **1651 passing**.
+
+### 🚨 Incident
+
+- **ClientDisconnect soft-block (~1h)** (`c011833`) — owner navigated away on chunk 5 of session `b7737a0b` (~456 MB). The exception surfaced as ERROR 500 (logged) but didn't cancel the session; the one-active-session rule then blocked every fresh init for the full 1h TTL. Full diagnosis: [`doc/known-issues-2026-09-21.md` §6](doc/known-issues-2026-09-21.md).
+
+### ✨ Features
+
+- **`feat(upload)`: A-safe — disconnect → cancel immediately** (`c011833`) — the chunk PUT handler catches `starlette.requests.ClientDisconnect` explicitly. On disconnect: cancel the session via `delete_session(reason="client_disconnect")`, commit, emit a `ui.upload` warning events row with the session id + chunk index + `chunks_uploaded` + `duration_since_first_chunk_s`, return 499. The exception is a specific Starlette signal that ONLY fires when the connection is GONE — not on slow uploads, idle keep-alives, or Wifi blips during a live upload. Zero behavior change to the happy path; zero risk of false cancels.
+- **`feat(upload)`: C — structured init-400** (`c011833`) — when the one-active-session rule fires, the 400 payload now carries `{code: "active_session_in_progress", message, session: {id, filename, declared_size, total_chunks, started_at, last_chunk_at, expires_at}}`. Single source of truth: `_serialize_session` helper, reused by both the structured-400 and the GET /me endpoint.
+- **`feat(upload)`: C+ — `GET /api/upload-sessions/me` + at-attempt preflight** (`c011833` server + `f4cc494` client) — new endpoint returns the calling user's active session (or `null`) with the TTL-derived `expires_at`. Both `course.html` and `dashboard.html` upload cards now call `/me` BEFORE firing init; if a stuck session is found, the Clear-and-retry modal surfaces the state at the moment of decision instead of forcing the user to attempt an upload first. Best-effort: `/me` slow or 5xx → fall through to the normal init (the structured-400 handler is still the authoritative fallback).
+
+### 🔧 Service + audit changes
+
+- `delete_session(db, session, *, reason="user_initiated_delete")` — new optional `reason` kwarg. A-safe passes `"client_disconnect"`; the existing DELETE endpoint still uses the default. The reason is logged + persisted so `/admin/events` can filter on it later (`source="ui.upload"`, message `"chunk PUT client_disconnect; session cancelled"`).
+- `get_active_session(db, user)` — new helper used by both the structured-400 path and `/me`. Single query, no fallback logic; returns `None` when there's nothing in flight.
+
+### 🧪 Tests
+
+- `test_init_one_active_session_rule` — updated to assert the full structured envelope (code, message, session: {...}, `expires_at=None` on init).
+- `test_chunk_client_disconnect_cancels_session` — A-safe end-to-end: after disconnect cleanup, a fresh init succeeds (the user-facing win — they were blocked, now they're unblocked).
+- `test_me_returns_null_when_no_active_session` — the common case.
+- `test_me_returns_active_session_with_expires_at` — `expires_at = last_activity_at + TTL hours` (the honest countdown).
+- `test_me_is_user_scoped` — user A's session is invisible to user B (no cross-user leak).
+
+### ⏸️ Deferred (not in this release)
+
+- **D — full resume-across-navigation UI** (parked): a real Resume card that re-uploads from chunk N. Discussion + product decision recorded in [`Todo.md` §18](Todo.md) and [`doc/known-issues-2026-09-21.md` §6](doc/known-issues-2026-09-21.md). Separate batch.
+
 ## [2.1.0.10] - 2026-09-13/22 — Production hardening: queue + WAL + chunked uploads + tier limits + re-run guards + path-disclosure fix (56-commit batch)
 
 🔒 **The Mac Studio went 24/7 production live at www.capysmart.com, and the next 9 days of real traffic shaped the batch: a QueuePool outage series with postmortem, the 13a chunked-upload milestone, tier limits with a flip-kit, and — on launch day itself — a screenshot-driven path-disclosure fix.** Commits `19107cc` → `4982e50`, all on `mvp2-production-patches`. Tests 1427 → **1617 passing**.

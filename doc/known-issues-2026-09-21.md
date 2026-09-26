@@ -150,3 +150,100 @@ beacon) even when the request never reached us.
 dismiss key derived from the banner's display text vs the load
 key derived from filename+size. Fixed in `ab31553` (the stash-
 key pattern); the banner now disappears until a NEW sweep occurs.
+
+---
+
+## §6 — `ClientDisconnect` on chunked upload leaves session stuck for full 1h TTL (DISCOVERED 2026-09-26, NOT YET FIXED)
+
+### What the user saw
+
+Owner navigated away from the course page mid-chunked-upload of a
+~456 MB / 6-chunk video (session `b7737a0b`). After returning:
+
+- Progress bar was gone (expected — the page was unloaded, the JS
+  context destroyed).
+- Every new `POST /api/upload-sessions/init` returned **400
+  "active session in progress"** for ~1 hour, even though no
+  client was still uploading.
+- Net result: the user was soft-blocked from any new upload until
+  the sweeper caught up.
+
+### Root cause
+
+1. Client opened session `b7737a0b` (`active`), 5 chunks PUT 200.
+2. Owner navigated away → Starlette raised
+   `starlette.requests.ClientDisconnect` on the 6th chunk PUT.
+   This exception is **unhandled** in the chunk handler — it
+   surfaces as ERROR 500 in the log. Nothing flips the session
+   to `cancelled`.
+3. The "one-active-session" rule (created during the 13a sweeper
+   design, 2026-09-21, intentionally blocks quota gaming) kept
+   every new `init` returning `UploadLimitError` ("active session
+   in progress").
+4. The session sat `active` for the full 1h TTL. The sweeper
+   flipped it to `cancelled` at 19:27 — after which new inits
+   succeeded.
+
+The exact "unhandled ClientDisconnect on chunk PUT" exception
+was **previously identified on 2026-09-21** as a known wart on
+the chunked-upload path; it was parked then because the
+manifestation was rare (the user usually stayed on the page).
+The 9/26 incident shows it manifests reliably **any time** the
+user navigates away mid-upload, which is the natural workflow
+on a slow connection.
+
+### Confirmed reproduction
+
+Direct faithful replay against the live DB with the owner's
+real `User` row, the real `upload_sessions.create_session()`
+service, and the actual `UploadLimitError` catch the router
+raises — `init` succeeds immediately after the sweeper runs,
+confirming the sweeper is the only release mechanism today.
+
+### Fix options (compared 2026-09-26, no decision yet)
+
+| | **A: Instant cleanup on `ClientDisconnect`** | **B: Client auto-retry on init 400** | **C: Better 400 + self-service cleanup** | **D: Full resume-across-navigation feature** |
+|---|---|---|---|---|
+| **What changes** | Catch `ClientDisconnect` in chunk PUT, cancel session immediately | On init 400, auto-`DELETE` the user's last active session, retry once | Improve init 400 text + add one-click "Clear and retry" button | New `GET /api/upload-sessions/me` + resume UI states (4-6 chunks visible, resume from chunk N) |
+| **Diff size** | ~10-20 LOC + 2 tests | ~30-50 LOC JS | ~30 LOC + 1 button | ~150-300 LOC + 4-6 tests + docs |
+| **Solves "blocking" (can't init new upload)** | ✅ Immediately | ✅ Automatically | ✅ Manually (1 click) | ✅ (also resumes) |
+| **Solves "progress gone"** | ❌ Still gone | ❌ Still gone | ❌ Still gone | ✅ Resumes from chunk N |
+| **Risk of false cancel** | ⚠️ **High** — every Wifi blip, sleep/wake, browser pause cancels | ✅ Low — only fires on actual init 400 | ✅ None — user-driven | ✅ None — session only ends on explicit cancel or TTL |
+| **Multi-client safety** | ✅ All clients benefit | ❌ Only the per-file UI; mobile/CLI unaffected | ✅ All clients see the better text | ✅ Server endpoint is universal |
+| **New support load?** | ⚠️ Yes — "why did my upload restart? I just refreshed!" | Low — silent recovery | None — user in control | Low — known UX pattern |
+| **Backwards compatible** | ✅ No server contract change | ✅ No server contract change | ✅ Additive only | ⚠️ Touches both init flow and chunk flow |
+
+### Owner direction (2026-09-26)
+
+User explicitly chose **C today, D next**: ship C (better 400
+text + one-click "Clear and retry") as the conservative, zero-
+behavior-change unblock; defer D (resume-across-navigation)
+to a separate batch as a real new feature, not a bug fix. A and
+B were discussed and rejected.
+
+### Status
+
+- **Diagnosis**: complete (2026-09-26, this section).
+- **Fix shipped (2026-09-26/27)**: commits `c011833` (server:
+  A-safe + structured 400 + GET /me) + `f4cc494` (client: Clear-and-
+  retry modal + at-attempt preflight). Production live after the
+  next restart. 5 new + 1 updated tests in `test_upload_sessions.py`;
+  full suite at 1651 passing. `CHANGELOG.md` §[2.1.0.11] captures
+  the release entry.
+- **Fix D (resume-across-navigation UI)**: parked in `Todo.md`
+  §18; not started — separate batch.
+
+### Topic 1 (recap for the trail): can progress bar come back if user returns?
+
+**Short answer: no — not today, not without feature D.**
+
+The progress bar lives in the now-unloaded page's JS context.
+The DOM node and its update code are destroyed the moment the
+user navigates away. A new page load starts from a clean JS
+state with no knowledge of the half-uploaded session.
+
+The **data is not lost** — chunks 0-4 (≈364 MB of the 456 MB)
+are still on disk in the session's staging dir, valid for 1h
+until the sweeper cancels. But the browser **doesn't ask the
+server** "do I have an unfinished upload?" — the page-load code
+only fetches courses/videos, not upload sessions.
