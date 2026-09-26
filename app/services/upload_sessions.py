@@ -166,6 +166,24 @@ def create_session(
 # ── chunks ──────────────────────────────────────────────────────────────────
 
 
+def get_active_session(db: Session, user: User) -> UploadSession | None:
+    """The user's currently-active session, if any. Used by:
+      - init (to surface the existing session in the structured 400)
+      - GET /me (the at-attempt banner)
+      - the chunked-upload sweeper (claim window)
+    Returns None if there's nothing in flight — the caller decides
+    whether to 400, 404, or render empty state."""
+    return (
+        db.execute(
+            select(UploadSession).where(
+                UploadSession.user_id == user.user_id,
+                UploadSession.status == STATUS_ACTIVE,
+            )
+        )
+        .scalar_one_or_none()
+    )
+
+
 def _get_owned_session(db: Session, session_id: str, uid: str) -> UploadSession:
     """Fetch a session the caller OWNS or raise ValueError (router maps
     to 404 — never leak another user's session existence)."""
@@ -344,9 +362,21 @@ def complete_session(
 # ── delete (user cancel / instant release) ──────────────────────────────────
 
 
-def delete_session(db: Session, session: UploadSession) -> None:
+def delete_session(
+    db: Session,
+    session: UploadSession,
+    *,
+    reason: str = "user_initiated_delete",
+) -> None:
     """The instant-release valve (registry §2): staging dir gone,
-    row 'cancelled' — quota space back immediately."""
+    row 'cancelled' — quota space back immediately.
+
+    `reason` is the audit-row contract: lets us distinguish a user's
+    deliberate cancel ('user_initiated_delete') from an auto-cancel
+    triggered by a severed connection ('client_disconnect', wired by
+    the chunk-PUT handler in app/routers/upload_sessions.py). The
+    reason is logged here AND persisted via the existing sweep /
+    events flow so /admin/events queries can filter on it later."""
     shutil.rmtree(_session_dir(session.id), ignore_errors=True)
     if session.status != STATUS_ACTIVE:
         # Completed sessions keep their Video row (deleting a video
@@ -356,7 +386,10 @@ def delete_session(db: Session, session: UploadSession) -> None:
     session.status = STATUS_CANCELLED
     session.cancelled_at = _now()
     db.commit()
-    logger.info("upload session %s cancelled by user", session.id[:8])
+    logger.info(
+        "upload session %s cancelled (reason=%s)",
+        session.id[:8], reason,
+    )
 
 
 # ── sweeper support (commit C) ───────────────────────────────────────────────

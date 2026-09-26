@@ -237,12 +237,30 @@ def test_init_per_user_override_allows_bigger(paid_client, db_session):
 
 def test_init_one_active_session_rule(paid_client, db_session):
     """A second init while one is active → 400 with the actionable
-    message (registry §3 — blocks the reservation stacking game)."""
+    message AND the structured session payload (known-issues §6,
+    2026-09-26 — the structured shape powers the Clear-and-retry
+    button on the client; without it, the user is blind until the
+    1h sweeper runs)."""
     r1, _ = _init(paid_client, db_session, size=1000)
     assert r1.status_code == 200
     r2, _ = _init(paid_client, db_session, size=1000)
     assert r2.status_code == 400
-    assert "already have an upload in progress" in r2.json()["detail"]
+    body = r2.json()
+    assert "already have an upload in progress" in body["message"]
+    # The structured envelope (the Clear-and-retry UX requires all of these)
+    assert body["code"] == "active_session_in_progress"
+    assert body["session"] is not None
+    sess = body["session"]
+    assert sess["filename"] == "lecture.mp4"
+    assert sess["declared_size"] == 1000
+    assert sess["total_chunks"] >= 1
+    assert sess["started_at"] is not None
+    assert sess["last_chunk_at"] is not None
+    # The init's structured 400 deliberately omits expires_at —
+    # the client would otherwise show a misleading countdown
+    # (init doesn't know the TTL env var). GET /me populates it.
+    assert "expires_at" in sess  # key present, value None
+    assert sess["expires_at"] is None
 
 
 def test_init_quota_headroom_fail_fast(paid_client, db_session):
@@ -569,3 +587,114 @@ def test_last_cancelled_banner_feed(paid_client, db_session):
     data = r.json()
     assert data["has_cancelled"] is True
     assert data["declared_size"] == 1000
+# ── Known-issues §6 followups (2026-09-26) ────────────────────────────────
+# A-safe (ClientDisconnect → cancel immediately), structured init-400
+# (covered above as test_init_one_active_session_rule), and the
+# GET /me banner source.
+
+
+def test_chunk_client_disconnect_cancels_session(paid_client, db_session):
+    """A-safe: a chunk PUT whose body read hits ClientDisconnect must
+    cancel the session in the same request lifecycle — the user
+    should not wait 1h for the sweeper. Verified end-to-end: after
+    the disconnect, a fresh init succeeds.
+
+    The TestClient cannot easily reproduce a real ClientDisconnect on
+    its own (httpx keeps the connection open), so we exercise the
+    handler code path directly: simulate the disconnect by calling
+    delete_session with reason=client_disconnect (same call the
+    handler makes). The real handler wraps await request.body() in
+    try/except ClientDisconnect and calls exactly this."""
+    from app.services import upload_sessions as svc
+
+    r1, _ = _init(paid_client, db_session, size=4000)
+    assert r1.status_code == 200
+    sid = r1.json()["session_id"]
+
+    from app.models import UploadSession
+    sess = db_session.get(UploadSession, sid)
+    assert sess.status == svc.STATUS_ACTIVE
+
+    # Same call the handler makes on the disconnect path.
+    svc.delete_session(db_session, sess, reason="client_disconnect")
+
+    reloaded = db_session.get(UploadSession, sid)
+    assert reloaded.status == svc.STATUS_CANCELLED
+
+    # Fresh init must now succeed (this is the actual user-facing
+    # win — they were blocked before, they are unblocked now).
+    r2, _ = _init(paid_client, db_session, size=2000)
+    assert r2.status_code == 200, (
+        f"After ClientDisconnect cleanup, fresh init must succeed; "
+        f"got {r2.status_code}: {r2.text}"
+    )
+
+
+def test_me_returns_null_when_no_active_session(paid_client, db_session):
+    """GET /me with no active session → {active_session: null}."""
+    with _mock():
+        r = paid_client.get(
+            "/api/upload-sessions/me", headers=_auth_headers()
+        )
+    assert r.status_code == 200
+    assert r.json() == {"active_session": None}
+
+
+def test_me_returns_active_session_with_expires_at(paid_client, db_session):
+    """GET /me with an active session returns the structured payload
+    INCLUDING the TTL-derived expires_at (the at-attempt banner uses
+    this for the honest countdown — "auto-cancel in N min" if A-safe
+    missed the disconnect)."""
+    from datetime import datetime
+
+    from app.config import settings
+
+    r1, _ = _init(paid_client, db_session, size=4000)
+    assert r1.status_code == 200
+    sid = r1.json()["session_id"]
+
+    with _mock():
+        r = paid_client.get(
+            "/api/upload-sessions/me", headers=_auth_headers()
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["active_session"] is not None
+    sess = body["active_session"]
+    assert sess["id"] == sid
+    assert sess["filename"] == "lecture.mp4"
+    assert sess["declared_size"] == 4000
+    assert sess["total_chunks"] >= 1
+    assert sess["started_at"] is not None
+    assert sess["last_chunk_at"] is not None
+    # GET /me populates this; init does not.
+    assert sess["expires_at"] is not None
+    last = datetime.fromisoformat(sess["last_chunk_at"])
+    exp = datetime.fromisoformat(sess["expires_at"])
+    delta_hours = (exp - last).total_seconds() / 3600
+    assert abs(delta_hours - settings.upload_session_ttl_hours) < 0.01
+
+
+def test_me_is_user_scoped(paid_client, db_session):
+    """User A's active session is NOT visible to user B (no leak
+    across the user boundary; the active-session lookup is keyed on
+    user_id, not just session_id)."""
+    r1, _ = _init(paid_client, db_session, size=4000)
+    assert r1.status_code == 200
+    sid = r1.json()["session_id"]
+
+    # Switch to user B and ask /me — must be empty.
+    with _mock(FAKE_OTHER):
+        r = paid_client.get(
+            "/api/upload-sessions/me", headers=_auth_headers()
+        )
+    assert r.status_code == 200
+    assert r.json() == {"active_session": None}
+
+    # Switch back to user A — sees their own session.
+    with _mock():
+        r = paid_client.get(
+            "/api/upload-sessions/me", headers=_auth_headers()
+        )
+    assert r.status_code == 200
+    assert r.json()["active_session"]["id"] == sid

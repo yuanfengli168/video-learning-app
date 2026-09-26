@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.requests import ClientDisconnect
 
 from app.auth.admin import require_capability
 from app.auth.dependencies import get_current_user
@@ -35,6 +36,7 @@ from app.database import get_db
 from app.models import UploadSession
 from app.services import upload_sessions
 from app.services.upload_limits import UploadLimitError
+from app.utils.events import log_event
 
 router = APIRouter(prefix="/api/upload-sessions", tags=["upload-sessions"])
 
@@ -94,7 +96,24 @@ async def init_session(
         # numbers are specific and actionable, never a raw 500).
         return JSONResponse(status_code=413, content={"detail": exc.message})
     except ValueError as exc:
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        # The one-active-session rule raises ValueError with this
+        # exact prefix; if matched, surface the existing session
+        # metadata so the client can render a Clear-and-retry button
+        # instead of a generic "you have something in progress" wall
+        # of silence (known-issues §6, the 9/26 incident).
+        msg = str(exc)
+        if msg.startswith("You already have an upload in progress"):
+            existing = upload_sessions.get_active_session(db, user_row)
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "code": "active_session_in_progress",
+                    "message": msg,
+                    "session": _serialize_session(existing)
+                    if existing is not None else None,
+                },
+            )
+        return JSONResponse(status_code=400, content={"detail": msg})
 
     return {
         "session_id": session.id,
@@ -102,6 +121,35 @@ async def init_session(
         "total_chunks": session.total_chunks,
         "received_chunks": [],  # fresh session: nothing staged yet
     }
+
+
+@router.get("/me")
+async def my_active_session(
+    user: dict[str, Any] = Depends(_upload_cap),
+    db: Session = Depends(get_db),
+):
+    """The C+ at-attempt banner source (known-issues §6, 2026-09-26).
+
+    Returns the calling user's ACTIVE session (if any), with the TTL-
+    derived expires_at so the client can show an honest countdown.
+    Used by the upload-card JS on course.html / dashboard.html to
+    render a banner ABOVE the file picker before the user clicks
+    Upload — surfaces the stuck session at the moment of decision
+    instead of forcing them to attempt an upload first.
+
+    Path is /me (not /active) so it can never collide with the
+    {session_id} routes below — FastAPI's literal-segment matching
+    prefers /me over /{session_id}."""
+    from app.models import User
+
+    uid = user.get("uid", "")
+    user_row = db.get(User, uid)
+    if user_row is None:
+        return {"active_session": None}
+    session = upload_sessions.get_active_session(db, user_row)
+    if session is None:
+        return {"active_session": None}
+    return {"active_session": _serialize_session_with_ttl(session)}
 
 
 async def _owned_or_404(
@@ -115,6 +163,42 @@ async def _owned_or_404(
         return JSONResponse(
             status_code=404, content={"detail": "Upload session not found."}
         )
+
+
+def _serialize_session(session: UploadSession) -> dict:
+    """The structured shape the client renders for the Clear-and-retry
+    modal AND the GET /me banner payload. Single source of truth so
+    both surfaces can never disagree (known-issues §6 followup)."""
+    return {
+        "id": session.id,
+        "filename": session.original_filename,
+        "declared_size": session.declared_size,
+        "total_chunks": session.total_chunks,
+        "started_at": session.created_at.isoformat()
+        if session.created_at else None,
+        "last_chunk_at": session.last_activity_at.isoformat()
+        if session.last_activity_at else None,
+        "expires_at": None,  # populated by GET /me which has access
+                             # to the TTL env var; init returns None
+                             # so the client doesn't show a misleading
+                             # countdown.
+    }
+
+
+def _serialize_session_with_ttl(session: UploadSession) -> dict:
+    """The GET /me payload variant: includes the TTL-derived
+    expires_at so the client can show an honest countdown ("will
+    auto-cancel in N minutes" if A-safe missed it)."""
+    payload = _serialize_session(session)
+    if session.last_activity_at is not None:
+        from app.config import settings
+        from datetime import timedelta
+
+        expires_at = session.last_activity_at + timedelta(
+            hours=settings.upload_session_ttl_hours
+        )
+        payload["expires_at"] = expires_at.isoformat()
+    return payload
 
 
 @router.put("/{session_id}/chunk/{index}")
@@ -140,7 +224,51 @@ async def put_chunk(
             status_code=413,
             content={"detail": "Chunk body exceeds the chunk size plan."},
         )
-    data = await request.body()
+    try:
+        data = await request.body()
+    except ClientDisconnect:
+        # A-safe: the connection was severed mid-read (user navigated
+        # away, browser closed, WiFi dropped, etc). Cancel the session
+        # immediately so the user isn't blocked from starting a fresh
+        # upload for the full 1h TTL. The exception is a specific
+        # Starlette signal — it only fires when the connection is
+        # GONE, not on slow uploads or idle keep-alives, so this is
+        # safe to wire without risk of false cancels. Logged as a
+        # warning (expected behavior, not a fault).
+        first_chunk_at = owned.created_at
+        duration_s = (
+            (owned.last_activity_at - first_chunk_at).total_seconds()
+            if owned.last_activity_at and first_chunk_at
+            else 0.0
+        )
+        chunks_uploaded = len(upload_sessions.received_chunks(owned.id))
+        uid = user.get("uid", "")
+        if owned.status == upload_sessions.STATUS_ACTIVE:
+            upload_sessions.delete_session(
+                db, owned, reason="client_disconnect"
+            )
+        log_event(
+            db,
+            level="WARNING",
+            source="ui.upload",
+            message="chunk PUT client_disconnect; session cancelled",
+            user_id=uid or None,
+            context={
+                "session_id": owned.id,
+                "chunk_index": index,
+                "declared_size": owned.declared_size,
+                "chunks_uploaded": chunks_uploaded,
+                "duration_since_first_chunk_s": round(duration_s, 1),
+            },
+        )
+        db.commit()
+        # Return an empty 499 (Client Closed Request) so the client
+        # doesn't see a generic 500 — the response body is discarded
+        # anyway since the connection is gone.
+        return JSONResponse(
+            status_code=499,
+            content={"detail": "Client disconnected; session cancelled."},
+        )
     if len(data) > max_body:
         return JSONResponse(
             status_code=413,
