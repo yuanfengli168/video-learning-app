@@ -23,74 +23,23 @@ clean). Owner decision: fix later, separate batch, not bundled.
 
 ---
 
-## 18. Chunked-upload ClientDisconnect hardening (DISCOVERED 2026-09-26, **shipped** 2026-09-26/27 — D remains parked)
+## 18. Chunked-upload background-completion + Resume card (2026-09-26/27 — **SHIPPED, chunks-are-sacred model**)
 
-### Today's fix (C + A-safe + C+ banner): shipped as `c011833` + `f4cc494`
+The 9/26 incident (navigate-away mid-upload → unhandled `ClientDisconnect` → session stuck active → 1h soft-block) went through two design rounds. **Round 2 is the owner-ratified model, now live:**
 
-User navigated away mid chunked-upload of a ~456 MB / 6-chunk video
-on 2026-09-26 → `starlette.requests.ClientDisconnect` on chunk 5 PUT
-is unhandled → session stays `active` for full 1h TTL → every new
-`POST /api/upload-sessions/init` returns 400 "active session in
-progress" the whole time.
+- **Background completion is the contract.** Navigate anywhere in the same tab while a >100MB upload flies — chunks keep arriving, the Video row lands in the section, no interruption.
+- **Disconnects preserve the session** (log + 499, no cancel). The 1h inactivity TTL + sweeper stays the only automatic cleaner.
+- **Resume card** (course page): GET /me reports filename + chunks received + TTL countdown; re-select the same file (name+size verified) → continue from the first missing chunk. Includes the honest note: uploads continue while the browser is open; closing the tab/laptop pauses but preserves for 1h.
+- **Two-choice modal** on new-upload attempts: keep waiting (previous upload still receiving) / cancel previous (frees space, new file starts).
+- **No failed-session state needed**: hopelessly-invalid files (over tier limit, bad extension) fail at INIT fail-fast — inline error, nothing to clean up later.
 
-**What shipped (3 commits / 2 actual commits, split server + client):**
+Shipped via `c011833` + `f4cc494` + the 9/28 batch. Tests 1617 → 1652.
+CHANGELOG §[2.1.0.11]; full trail: `doc/known-issues-2026-09-21.md` §6.
 
-- **(A-safe)** server: chunk PUT handler catches `ClientDisconnect`
-  explicitly + cancels the session immediately via
-  `delete_session(reason="client_disconnect")` + emits a `ui.upload`
-  warning events row (with session id + chunk index + chunks_uploaded
-  + duration_since_first_chunk_s). Returns 499. **Zero behavior
-  change on happy path** — `ClientDisconnect` only fires when the
-  connection is genuinely gone (not on slow uploads, not on
-  keep-alives, not on Wifi blips during a live upload).
-- **(C)** server: init 400 now returns a structured
-  `{code: "active_session_in_progress", message, session: {...}}`
-  envelope. Client renders a Clear-and-retry modal (window.confirm
-  naming the stuck file + size + age). On OK → DELETE + retry init.
-- **(C+ banner)** server + client: new
-  `GET /api/upload-sessions/me` returns the active session (or
-  null) with the TTL-derived `expires_at`. Both upload surfaces
-  (course.html + dashboard.html) call `/me` BEFORE firing init so
-  the banner surfaces the stuck session at the moment of decision.
+### Possible future polish (NOT scheduled)
 
-**Released as `CHANGELOG.md` §[2.1.0.11].** Tests 1617 → **1651**.
-
-### Future feature (D): resume-across-navigation — STILL PARKED
-
-`GET /api/upload-sessions/me` is already in place (the C+ step
-above); what's missing is the **Resume card UI** that wires it up
-to the chunk PUT loop. D would render a "Resume (4/6 chunks
-uploaded, ~364 MB so far)" card instead of a fresh "Select file"
-card when the user has an in-flight session, with one click to
-re-PUT chunks N+1 onward.
-
-**This is a feature, not a fix.** It changes the contract from
-"navigate away = abandoned" to "navigate away = resumable for the
-next 1h". The infrastructure (GET /me + idempotent PUT chunks +
-the structured session metadata) is now in place; the JS render
-work is what remains.
-
-**Effort:** ~2-3 hours + 4-6 tests + docs update. Worth doing as
-a separate batch when there's evidence users want true resume
-(both the A-safe automatic cleanup AND the Clear-and-retry modal
-already solve the blocking + the lost-progress visibility).
-
-### Rejected options (A and B) — also shipped as a safer A
-
-- **A** — instant cancel on `ClientDisconnect` in the chunk PUT
-  handler. ~10-20 LOC. **Originally rejected:** high false-cancel
-  risk — every Wifi blip, sleep/wake, browser pause would cancel
-  mid-upload. **Reconsidered + shipped as A-safe** (the same idea,
-  but constrained to the SPECIFIC `ClientDisconnect` exception —
-  Starlette only raises it when the connection is truly severed, not
-  on general blips). The original concern was about ANY cancellation
-  trigger; the actual `ClientDisconnect` signal is precise.
-- **B** — client-side auto-retry on init 400 (silently DELETE + retry
-  once). ~30-50 LOC JS. **Rejected:** band-aid that hides the symptom
-  without addressing the cause; only helps the per-file UI (mobile /
-  curl users still stuck). The preflight `/me` check (C+) achieves the
-  same UX outcome (auto-cleanup before the user sees an error) but
-  with the user's awareness — better than silent retry.
+- **Cross-device live resume awareness**: if the user is uploading from device A and opens device B, B's card can't tell "actively receiving" from "stalled". A tiny heartbeat endpoint (last PUT within 30s) would let the card show "still receiving on another device". Small, only matters with real multi-device use.
+- **Failed-upload persistence beyond TTL**: only if real users ever hit a mid-upload failure that the 1h window is too short for. No evidence yet.
 
 ---s (MCP / OpenAPI)
 

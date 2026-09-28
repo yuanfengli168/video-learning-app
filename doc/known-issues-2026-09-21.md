@@ -224,14 +224,24 @@ B were discussed and rejected.
 ### Status
 
 - **Diagnosis**: complete (2026-09-26, this section).
-- **Fix shipped (2026-09-26/27)**: commits `c011833` (server:
-  A-safe + structured 400 + GET /me) + `f4cc494` (client: Clear-and-
-  retry modal + at-attempt preflight). Production live after the
-  next restart. 5 new + 1 updated tests in `test_upload_sessions.py`;
-  full suite at 1651 passing. `CHANGELOG.md` §[2.1.0.11] captures
-  the release entry.
-- **Fix D (resume-across-navigation UI)**: parked in `Todo.md`
-  §18; not started — separate batch.
+- **Fix shipped + model REVISED (2026-09-27)**: the 9/26 batch
+  (`c011833`+`f4cc494`) shipped A-safe (disconnect → instant
+  cancel). The owner rejected that model 9/27 — **chunks are
+  sacred**: a disconnect must PRESERVE the session so the upload
+  can continue (same tab in the background, or resume later from
+  another device). Final design:
+  - disconnect → log + 499, session stays `active` (A-safe
+    reverted)
+  - 1h inactivity TTL + sweeper = the only automatic cleaner
+  - **Resume card** on the course page (GET /me → filename,
+    chunks received, TTL countdown; re-select the same file →
+    continue from the first missing chunk)
+  - **two-choice modal** on new-upload attempt (keep waiting /
+    cancel previous)
+  - hopelessly-invalid files still fail at INIT (fail-fast before
+    bytes) — no failed-session state needed
+- 1652 tests passing. `CHANGELOG.md` §[2.1.0.11] has the full
+  entry.
 
 ### Topic 1 (recap for the trail): can progress bar come back if user returns?
 

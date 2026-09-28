@@ -3,36 +3,30 @@
 All notable changes to the Video Learning App are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [2.1.0.11] - 2026-09-26/27 — Chunked-upload abandonment recovery (A-safe + C + C+)
+## [2.1.0.11] - 2026-09-26/27 — Chunked-upload background-completion + Resume card (chunks-are-sacred)
 
-🛟 **The 9/26 incident**: owner navigated away mid 6-chunk upload; Starlette `ClientDisconnect` was unhandled → session stayed `active` for the full 1h TTL → every new init returned 400 for an hour. Three layered, zero-risk fixes turn that scenario into a sub-second recovery with honest client visibility. Commits `c011833` (server) + `f4cc494` (client). Tests 1617 → **1651 passing**.
+🛟 **The 9/26 incident**: owner navigated away mid 6-chunk upload; Starlette `ClientDisconnect` was unhandled → ERROR 500 → session stayed `active` for the 1h TTL → every new init returned 400 for an hour. **Owner-ratified model (9/27): uploads run in the background while the browser tab is open; chunks are sacred — a disconnect PRESERVES the session; the 1h TTL is the abandonment net; the Resume card is the recovery path.** Commits `c011833` + `f4cc494` + this batch. Tests 1617 → **1652 passing**.
 
-### 🚨 Incident
+### 🚨 Incident + model shift
 
-- **ClientDisconnect soft-block (~1h)** (`c011833`) — owner navigated away on chunk 5 of session `b7737a0b` (~456 MB). The exception surfaced as ERROR 500 (logged) but didn't cancel the session; the one-active-session rule then blocked every fresh init for the full 1h TTL. Full diagnosis: [`doc/known-issues-2026-09-21.md` §6](doc/known-issues-2026-09-21.md).
+- **ClientDisconnect soft-block (~1h)** — the original A-safe fix (instant cancel on disconnect) was shipped 9/26 and **reverted 9/27**: canceling contradicted the background-upload model (a refresh/lid-close shouldn't throw away 10/32 chunks). The handler now catches `ClientDisconnect`, **preserves the session**, logs a `ui.upload` warning events row (chunks_uploaded + duration), and returns 499 instead of an unhandled 500. Full diagnosis + decision trail: [`doc/known-issues-2026-09-21.md` §6](doc/known-issues-2026-09-21.md).
 
 ### ✨ Features
 
-- **`feat(upload)`: A-safe — disconnect → cancel immediately** (`c011833`) — the chunk PUT handler catches `starlette.requests.ClientDisconnect` explicitly. On disconnect: cancel the session via `delete_session(reason="client_disconnect")`, commit, emit a `ui.upload` warning events row with the session id + chunk index + `chunks_uploaded` + `duration_since_first_chunk_s`, return 499. The exception is a specific Starlette signal that ONLY fires when the connection is GONE — not on slow uploads, idle keep-alives, or Wifi blips during a live upload. Zero behavior change to the happy path; zero risk of false cancels.
-- **`feat(upload)`: C — structured init-400** (`c011833`) — when the one-active-session rule fires, the 400 payload now carries `{code: "active_session_in_progress", message, session: {id, filename, declared_size, total_chunks, started_at, last_chunk_at, expires_at}}`. Single source of truth: `_serialize_session` helper, reused by both the structured-400 and the GET /me endpoint.
-- **`feat(upload)`: C+ — `GET /api/upload-sessions/me` + at-attempt preflight** (`c011833` server + `f4cc494` client) — new endpoint returns the calling user's active session (or `null`) with the TTL-derived `expires_at`. Both `course.html` and `dashboard.html` upload cards now call `/me` BEFORE firing init; if a stuck session is found, the Clear-and-retry modal surfaces the state at the moment of decision instead of forcing the user to attempt an upload first. Best-effort: `/me` slow or 5xx → fall through to the normal init (the structured-400 handler is still the authoritative fallback).
-
-### 🔧 Service + audit changes
-
-- `delete_session(db, session, *, reason="user_initiated_delete")` — new optional `reason` kwarg. A-safe passes `"client_disconnect"`; the existing DELETE endpoint still uses the default. The reason is logged + persisted so `/admin/events` can filter on it later (`source="ui.upload"`, message `"chunk PUT client_disconnect; session cancelled"`).
-- `get_active_session(db, user)` — new helper used by both the structured-400 path and `/me`. Single query, no fallback logic; returns `None` when there's nothing in flight.
+- **`feat(upload)`: Resume card (course page)** — on page load, `GET /me` reports the user's ACTIVE session (filename, chunks received, bytes, TTL countdown). If it targets a section on this page, the card renders above the picker: "⏳ lecture-04.mov — 10/32 chunks (~525 MB of 1.4 GB) · auto-cancels in ~17 min. [Resume] [Cancel and remove]" + the honest browser-open note. Resume re-opens the picker; re-selecting the SAME file (name+size verified) continues from the first missing chunk — **nothing re-uploads**. Cancel DELETEs the session and reloads fresh.
+- **`feat(upload)`: enriched `/me` + structured 400** — both payloads now carry `received_chunks`, `received_bytes`, `section_id` (read from the real staging dir — filesystem-as-truth, registry §3a), so the card and the modal can't disagree with reality.
+- **`feat(upload)`: two-choice active-session modal** — a new upload attempt while a session is active now asks the two honest questions: "It's still receiving — your progress is preserved. OK = cancel that upload and start this one. Cancel = keep waiting (this pick is discarded)" — with the file name, size, chunk progress, and last-activity age. On dashboard bulk, "keep waiting" skips the rest of the batch honestly instead of spamming the modal per file.
+- **Background completion is now the contract**: navigate to any page while a >100MB upload flies — chunks keep arriving (same tab), the Video row appears in the section, no interruption anywhere.
 
 ### 🧪 Tests
 
-- `test_init_one_active_session_rule` — updated to assert the full structured envelope (code, message, session: {...}, `expires_at=None` on init).
-- `test_chunk_client_disconnect_cancels_session` — A-safe end-to-end: after disconnect cleanup, a fresh init succeeds (the user-facing win — they were blocked, now they're unblocked).
-- `test_me_returns_null_when_no_active_session` — the common case.
-- `test_me_returns_active_session_with_expires_at` — `expires_at = last_activity_at + TTL hours` (the honest countdown).
-- `test_me_is_user_scoped` — user A's session is invisible to user B (no cross-user leak).
+- `test_chunk_client_disconnect_preserves_session` — the core assertion: disconnect → session STAYS active, chunks stay on disk, /me still reports it (drives the real handler with a stub request that raises `ClientDisconnect`).
+- `test_me_reports_chunk_progress_for_resume_card` — received_chunks/received_bytes/section_id reflect the real staging dir.
+- Plus the 5 from the 9/26 batch (structured 400 envelope, /me null, /me with TTL, user-scoping).
 
-### ⏸️ Deferred (not in this release)
+### 🗑️ Removed
 
-- **D — full resume-across-navigation UI** (parked): a real Resume card that re-uploads from chunk N. Discussion + product decision recorded in [`Todo.md` §18](Todo.md) and [`doc/known-issues-2026-09-21.md` §6](doc/known-issues-2026-09-21.md). Separate batch.
+- **A-safe auto-cancel** (shipped 9/26, reverted 9/27): disconnects preserve instead of cancel. The 1h inactivity sweeper remains the only automatic cleaner — that's by design.
 
 ## [2.1.0.10] - 2026-09-13/22 — Production hardening: queue + WAL + chunked uploads + tier limits + re-run guards + path-disclosure fix (56-commit batch)
 
