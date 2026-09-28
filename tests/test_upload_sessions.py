@@ -587,47 +587,106 @@ def test_last_cancelled_banner_feed(paid_client, db_session):
     data = r.json()
     assert data["has_cancelled"] is True
     assert data["declared_size"] == 1000
-# ── Known-issues §6 followups (2026-09-26) ────────────────────────────────
-# A-safe (ClientDisconnect → cancel immediately), structured init-400
-# (covered above as test_init_one_active_session_rule), and the
-# GET /me banner source.
+# ── Known-issues §6 followups (2026-09-26/27) ────────────────────────────
+# Chunks-are-sacred model: ClientDisconnect PRESERVES the session
+# (log + 499, no cancel — the 1h TTL is the abandonment net, the
+# Resume card is the recovery path). Structured init-400 covered
+# above as test_init_one_active_session_rule; GET /me feeds both
+# the Resume card and the new-upload modal.
 
 
-def test_chunk_client_disconnect_cancels_session(paid_client, db_session):
-    """A-safe: a chunk PUT whose body read hits ClientDisconnect must
-    cancel the session in the same request lifecycle — the user
-    should not wait 1h for the sweeper. Verified end-to-end: after
-    the disconnect, a fresh init succeeds.
+def test_chunk_client_disconnect_preserves_session(paid_client, db_session):
+    """Chunks are sacred (owner direction 2026-09-27): a disconnect
+    mid-chunk must NOT cancel the session. Everything received is
+    still on disk; the Resume card picks it up if the user returns
+    within the 1h TTL. The old A-safe behavior (instant cancel) is
+    reverted — it contradicted the background-upload model.
 
-    The TestClient cannot easily reproduce a real ClientDisconnect on
-    its own (httpx keeps the connection open), so we exercise the
-    handler code path directly: simulate the disconnect by calling
-    delete_session with reason=client_disconnect (same call the
-    handler makes). The real handler wraps await request.body() in
-    try/except ClientDisconnect and calls exactly this."""
+    TestClient can't reproduce a real ClientDisconnect (httpx keeps
+    the connection open), so we drive the handler directly with a
+    stub request whose body() raises — the exact exception path the
+    real handler runs."""
     from app.services import upload_sessions as svc
+    from starlette.requests import ClientDisconnect
 
+    r1, _ = _init(paid_client, db_session, size=4000)
+    assert r1.status_code == 200
+    sid = r1.json()["session_id"]
+
+    # Put 2 real chunks on disk before the "disconnect".
+    from app.models import UploadSession
+    sess = db_session.get(UploadSession, sid)
+    payload = b"x" * sess.chunk_size
+    for i in range(2):
+        with _mock():
+            r = paid_client.put(
+                f"/api/upload-sessions/{sid}/chunk/{i}",
+                content=payload, headers=_auth_headers(),
+            )
+        assert r.status_code == 200, r.text
+    assert len(svc.received_chunks(sid)) == 2
+
+    # Fire the handler with a request that disconnects mid-body.
+    class _DeadRequest:
+        headers = {"content-length": "1024"}
+        async def body(self):
+            raise ClientDisconnect()
+
+    from app.routers.upload_sessions import put_chunk
+
+    import asyncio
+
+    resp = None
+    with _mock():
+        resp = asyncio.run(put_chunk(
+            sid, 2, _DeadRequest(),
+            user={"uid": "test-user-uid"}, db=db_session,
+        ))
+    assert resp is not None
+    assert resp.status_code == 499
+
+    # THE assertion: the session survived, chunks intact.
+    reloaded = db_session.get(UploadSession, sid)
+    assert reloaded.status == svc.STATUS_ACTIVE
+    assert len(svc.received_chunks(sid)) == 2  # nothing deleted
+
+    # And the recovery story holds: /me still reports it, a fresh
+    # init is still blocked by the one-session rule (that's now the
+    # MODAL's job to resolve, not the sweeper's).
+    with _mock():
+        r = paid_client.get(
+            "/api/upload-sessions/me", headers=_auth_headers()
+        )
+    assert r.json()["active_session"]["id"] == sid
+
+
+def test_me_reports_chunk_progress_for_resume_card(paid_client, db_session):
+    """GET /me's received_chunks/received_bytes are what the Resume
+    card renders ("10/32 chunks, ~525 MB of 1.4 GB") — they must
+    reflect the REAL staging dir, not the declared plan."""
     r1, _ = _init(paid_client, db_session, size=4000)
     assert r1.status_code == 200
     sid = r1.json()["session_id"]
 
     from app.models import UploadSession
     sess = db_session.get(UploadSession, sid)
-    assert sess.status == svc.STATUS_ACTIVE
+    payload = b"x" * sess.chunk_size
+    for i in range(3):
+        with _mock():
+            r = paid_client.put(
+                f"/api/upload-sessions/{sid}/chunk/{i}",
+                content=payload, headers=_auth_headers(),
+            )
+        assert r.status_code == 200, r.text
 
-    # Same call the handler makes on the disconnect path.
-    svc.delete_session(db_session, sess, reason="client_disconnect")
-
-    reloaded = db_session.get(UploadSession, sid)
-    assert reloaded.status == svc.STATUS_CANCELLED
-
-    # Fresh init must now succeed (this is the actual user-facing
-    # win — they were blocked before, they are unblocked now).
-    r2, _ = _init(paid_client, db_session, size=2000)
-    assert r2.status_code == 200, (
-        f"After ClientDisconnect cleanup, fresh init must succeed; "
-        f"got {r2.status_code}: {r2.text}"
-    )
+    with _mock():
+        r = paid_client.get(
+            "/api/upload-sessions/me", headers=_auth_headers()
+        )
+    s = r.json()["active_session"]
+    assert s["received_chunks"] == [0, 1, 2]
+    assert s["received_bytes"] == 3 * sess.chunk_size
+    assert s["section_id"] == sess.section_id
 
 
 def test_me_returns_null_when_no_active_session(paid_client, db_session):
@@ -642,9 +701,8 @@ def test_me_returns_null_when_no_active_session(paid_client, db_session):
 
 def test_me_returns_active_session_with_expires_at(paid_client, db_session):
     """GET /me with an active session returns the structured payload
-    INCLUDING the TTL-derived expires_at (the at-attempt banner uses
-    this for the honest countdown — "auto-cancel in N min" if A-safe
-    missed the disconnect)."""
+    INCLUDING the TTL-derived expires_at (the Resume card shows the
+    honest countdown — "auto-cancels in N min if nothing arrives")."""
     from datetime import datetime
 
     from app.config import settings

@@ -166,29 +166,39 @@ async def _owned_or_404(
 
 
 def _serialize_session(session: UploadSession) -> dict:
-    """The structured shape the client renders for the Clear-and-retry
-    modal AND the GET /me banner payload. Single source of truth so
-    both surfaces can never disagree (known-issues §6 followup)."""
+    """The structured shape the client renders for the Resume card
+    AND the active-session modal. Single source of truth so both
+    surfaces can never disagree (known-issues §6 followup).
+
+    received_chunks / received_bytes are read from the filesystem —
+    the staging dir is the truth (registry §3a), the DB row only
+    holds declared metadata."""
+    got = upload_sessions.received_chunks(session.id)
     return {
         "id": session.id,
         "filename": session.original_filename,
         "declared_size": session.declared_size,
         "total_chunks": session.total_chunks,
+        "received_chunks": got,
+        "received_bytes": sum(
+            upload_sessions._chunk_path(session.id, i).stat().st_size
+            for i in got
+        ),
+        "section_id": session.section_id,
         "started_at": session.created_at.isoformat()
         if session.created_at else None,
         "last_chunk_at": session.last_activity_at.isoformat()
         if session.last_activity_at else None,
-        "expires_at": None,  # populated by GET /me which has access
-                             # to the TTL env var; init returns None
-                             # so the client doesn't show a misleading
-                             # countdown.
+        "expires_at": None,  # populated by GET /me; init returns None
+                             # so the client doesn't show a
+                             # misleading countdown.
     }
 
 
 def _serialize_session_with_ttl(session: UploadSession) -> dict:
     """The GET /me payload variant: includes the TTL-derived
     expires_at so the client can show an honest countdown ("will
-    auto-cancel in N minutes" if A-safe missed it)."""
+    auto-cancel in N minutes if nothing arrives")."""
     payload = _serialize_session(session)
     if session.last_activity_at is not None:
         from app.config import settings
@@ -227,47 +237,43 @@ async def put_chunk(
     try:
         data = await request.body()
     except ClientDisconnect:
-        # A-safe: the connection was severed mid-read (user navigated
-        # away, browser closed, WiFi dropped, etc). Cancel the session
-        # immediately so the user isn't blocked from starting a fresh
-        # upload for the full 1h TTL. The exception is a specific
-        # Starlette signal — it only fires when the connection is
-        # GONE, not on slow uploads or idle keep-alives, so this is
-        # safe to wire without risk of false cancels. Logged as a
-        # warning (expected behavior, not a fault).
-        first_chunk_at = owned.created_at
+        # Chunks are sacred (owner direction, 2026-09-27): the
+        # connection was severed (navigate away / close tab / laptop
+        # lid), but everything already received is on disk and valid.
+        # PRESERVE the session — do NOT cancel. The 1h inactivity TTL
+        # is the net for genuine abandonment; the Resume card on the
+        # course page picks this back up if the user returns within
+        # the window. This turns the 9/26 incident into: chunks kept,
+        # user resumes, upload finishes.
         duration_s = (
-            (owned.last_activity_at - first_chunk_at).total_seconds()
-            if owned.last_activity_at and first_chunk_at
+            (owned.last_activity_at - owned.created_at).total_seconds()
+            if owned.last_activity_at and owned.created_at
             else 0.0
         )
-        chunks_uploaded = len(upload_sessions.received_chunks(owned.id))
-        uid = user.get("uid", "")
-        if owned.status == upload_sessions.STATUS_ACTIVE:
-            upload_sessions.delete_session(
-                db, owned, reason="client_disconnect"
-            )
         log_event(
             db,
             level="WARNING",
             source="ui.upload",
-            message="chunk PUT client_disconnect; session cancelled",
-            user_id=uid or None,
+            message="chunk PUT client_disconnect; session preserved",
+            user_id=user.get("uid", "") or None,
             context={
                 "session_id": owned.id,
                 "chunk_index": index,
                 "declared_size": owned.declared_size,
-                "chunks_uploaded": chunks_uploaded,
+                "chunks_uploaded": len(
+                    upload_sessions.received_chunks(owned.id)
+                ),
                 "duration_since_first_chunk_s": round(duration_s, 1),
             },
         )
         db.commit()
-        # Return an empty 499 (Client Closed Request) so the client
-        # doesn't see a generic 500 — the response body is discarded
-        # anyway since the connection is gone.
+        # 499 (Client Closed Request) — the response never reaches the
+        # dead client, but a clean status beats an unhandled 500 in
+        # the logs (this exact 500 is what made the 9/26 diagnosis
+        # harder than it needed to be).
         return JSONResponse(
             status_code=499,
-            content={"detail": "Client disconnected; session cancelled."},
+            content={"detail": "Client disconnected; chunks preserved."},
         )
     if len(data) > max_body:
         return JSONResponse(
