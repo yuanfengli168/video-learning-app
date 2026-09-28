@@ -222,6 +222,15 @@
                             <div class="mt-1.5 h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                                 <div id="upload-progress-bar-{{ section.id }}" class="h-full bg-indigo-500 rounded-full transition-all duration-150" style="width: 0%"></div>
                             </div>
+                            {# 2026-09-29: the stay-on-tab hint — the upload runs from
+                               THIS tab's JS; navigating away (same tab) kills it.
+                               The beforeunload guard + this copy are the honest
+                               answer to "why did my upload stop?" (the 9/29
+                               incident: owner browsed to Dashboard mid-batch,
+                               loop died at 4/15 chunks). New tab = safe. #}
+                            <div id="upload-progress-hint-{{ section.id }}" class="hidden mt-1 text-[10px] text-gray-500 dark:text-gray-400">
+                                Keep this tab open — the upload runs from here. Want to browse other pages? Open them in a new tab.
+                            </div>
                         </div>
                         {# 2026-09-21 (13a, §3a): the interrupted-upload
                            banner — shows if the user's last upload session
@@ -769,6 +778,7 @@ async function uploadVideo(sectionId, input) {
     const label = document.getElementById('upload-progress-label-' + sectionId);
     const pct = document.getElementById('upload-progress-pct-' + sectionId);
     const bar = document.getElementById('upload-progress-bar-' + sectionId);
+    const hint = document.getElementById('upload-progress-hint-' + sectionId);
 
     const totalBytes = files.reduce((n, f) => n + f.size, 0);
     const describe = files.length === 1
@@ -784,11 +794,15 @@ async function uploadVideo(sectionId, input) {
     const startUi = () => {
         if (btn) { btn.disabled = true; btn.classList.add('opacity-50', 'cursor-not-allowed'); btn.textContent = '⏳ Uploading…'; }
         if (progressBox) progressBox.classList.remove('hidden');
+        if (hint) hint.classList.remove('hidden');
+        window._uploadInFlight = true;   // the beforeunload guard's flag
         setProgress(0, `Uploading ${describe}…`);
     };
     const resetUi = () => {
         if (btn) { btn.disabled = false; btn.classList.remove('opacity-50', 'cursor-not-allowed'); btn.textContent = '+ Upload Video'; }
         if (progressBox) progressBox.classList.add('hidden');
+        if (hint) hint.classList.add('hidden');
+        window._uploadInFlight = false;
         setProgress(0, '');
         input.value = '';
         const cancelBtn = document.getElementById('upload-cancel-' + sectionId);
@@ -1021,6 +1035,7 @@ async function uploadVideo(sectionId, input) {
                 progress: setProgress,
                 setCancel: (fn) => { window._cancelUpload = fn; },
             }, resume);
+            window._uploadInFlight = false;   // our own nav — don't fire the guard
             window.location.href = '/video/' + videoId;
         } else if (files.length === 1 && files[0].size > CHUNK_THRESHOLD) {
             // ONE BIG FILE → the chunked path.
@@ -1028,6 +1043,7 @@ async function uploadVideo(sectionId, input) {
                 progress: setProgress,
                 setCancel: (fn) => { window._cancelUpload = fn; },
             });
+            window._uploadInFlight = false;   // our own nav — don't fire the guard
             window.location.href = '/video/' + videoId;
         } else if (files.length === 1) {
             // Single small file: regular endpoint, redirect to video page.
@@ -1037,6 +1053,7 @@ async function uploadVideo(sectionId, input) {
                 (f) => setProgress(f * 0.98)); // hold 2% for server processing
             if (resp.ok) {
                 setProgress(1, 'Finishing up…');
+                window._uploadInFlight = false;   // our own nav — don't fire the guard
                 window.location.href = '/video/' + resp.data.video_id;
             } else {
                 const reason = resp.data?.detail || `Server error (${resp.status})`;
@@ -1121,6 +1138,7 @@ async function uploadVideo(sectionId, input) {
                 msg += '\n\nFailed:\n' + failed.map(r => `${r.filename}: ${r.error}`).join('\n');
             }
             alert(msg);
+            window._uploadInFlight = false;   // our own reload — don't fire the guard
             if (okCount > 0) location.reload(); else resetUi();
         }
     } catch (err) {
@@ -1579,6 +1597,21 @@ document.addEventListener('keydown', (e) => {
         if (modal && !modal.classList.contains('hidden')) {
             hideDeleteSectionModal();
         }
+    }
+});
+
+// ── beforeunload guard (2026-09-29) ────────────────────────────────────────
+// The chunked/bulk upload loops live in THIS page's JS. Navigating away
+// in the same tab kills them mid-flight (the 9/29 incident: the batch
+// died at 4/15 chunks because Dashboard was opened in the same tab).
+// While an upload is in flight, ask the browser to confirm navigation.
+// Our OWN success navigations clear the flag first (see the four
+// `window._uploadInFlight = false` sites above), so this only fires
+// for user-initiated navigation away.
+window.addEventListener('beforeunload', (e) => {
+    if (window._uploadInFlight) {
+        e.preventDefault();
+        e.returnValue = '';   // required by Chrome/Safari/Edge for the dialog
     }
 });
 </script>

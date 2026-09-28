@@ -524,8 +524,13 @@ function uploadMultipleToSection(sectionId, files) {
         return done.video_id;
     };
     (async () => {
+        // 2026-09-29: the stay-on-tab contract — the batch runs from THIS
+        // tab's JS; navigating away (same tab) kills it mid-file (the
+        // 9/29 incident). Set the beforeunload flag for the whole batch.
+        window._uploadInFlight = true;
         const lines = [];
         let okCount = 0, capStopped = null;
+        lines.push('Keep this tab open — the upload runs from here. Want to browse other pages? Open them in a new tab.');
         for (let i = 0; i < files.length; i++) {
             const f = files[i];
             const label = `[${i + 1}/${files.length}] ${f.name}`;
@@ -576,9 +581,11 @@ function uploadMultipleToSection(sectionId, files) {
             okCount === 0 ? 'text-red-500 dark:text-red-400'
                 : 'mt-2 text-xs min-h-[1rem] ' + (lines.length - okCount > 1 || capStopped
                     ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400'));
+        window._uploadInFlight = false;   // batch done — our own reload below must not fire the guard
         // Reload after a brief pause so the new videos appear in the list
         if (okCount > 0) setTimeout(() => location.reload(), 2500);
     })().catch(err => {
+        window._uploadInFlight = false;   // batch aborted — free the guard
         if (status) {
             status.textContent = `❌ Bulk upload error: ${err.message}`;
             status.className = 'mt-2 text-xs text-red-500 dark:text-red-400 min-h-[1rem]';
@@ -756,5 +763,17 @@ function dashTab(tab) {
         targetBtn.classList.remove('border-transparent', 'text-gray-500');
     }
 }
+
+// ── beforeunload guard (2026-09-29) ──────────────────────────────
+// Same contract as course.html: the bulk loop lives in this page's
+// JS; navigating away in the same tab kills it mid-file. The batch
+// IIFE sets window._uploadInFlight and clears it before its own
+// reload / on error — so this only fires for user navigation away.
+window.addEventListener('beforeunload', (e) => {
+    if (window._uploadInFlight) {
+        e.preventDefault();
+        e.returnValue = '';   // required by Chrome/Safari/Edge for the dialog
+    }
+});
 </script>
 {% endblock %}
