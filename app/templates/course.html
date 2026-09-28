@@ -240,6 +240,34 @@
                                     class="text-amber-500 hover:text-amber-700"
                                     title="Dismiss">✕</button>
                         </div>
+                        {# 2026-09-27 (known-issues §6): the RESUME card —
+                           shows on page load when /me reports an ACTIVE
+                           session targeting THIS section. The upload keeps
+                           running in the background while the tab is open
+                           (even on other pages); if it got interrupted
+                           (tab/laptop closed), re-selecting the same file
+                           continues from the first missing chunk — nothing
+                           re-uploads. Rendered by loadResumeCard() below. #}
+                        <div id="upload-resume-{{ section.id }}" class="hidden mt-2 p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 text-xs">
+                            <div class="flex items-start gap-2">
+                                <span class="text-indigo-500" aria-hidden="true">⏳</span>
+                                <div class="flex-1">
+                                    <strong id="upload-resume-title-{{ section.id }}"></strong>
+                                    <div id="upload-resume-detail-{{ section.id }}" class="mt-0.5 text-indigo-700 dark:text-indigo-300"></div>
+                                    <div class="mt-1.5 flex gap-2 flex-wrap">
+                                        <button id="upload-resume-btn-{{ section.id }}"
+                                                onclick="resumePick('{{ section.id }}')"
+                                                class="px-2.5 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-500">Resume</button>
+                                        <button id="upload-resume-other-{{ section.id }}"
+                                                onclick="resumeOtherDevice('{{ section.id }}')"
+                                                class="px-2.5 py-1 rounded border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 hidden">Continuing on another device</button>
+                                        <button onclick="resumeCancel('{{ section.id }}')"
+                                                class="px-2.5 py-1 rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20">Cancel and remove</button>
+                                    </div>
+                                    <div id="upload-resume-note-{{ section.id }}" class="mt-1.5 text-[10px] text-gray-500 dark:text-gray-400"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -598,6 +626,98 @@ function dismissInterrupted() {
     });
 }
 
+// ── Resume card (known-issues §6, 2026-09-27) ───────────────────────
+// The chunks-are-sacred recovery path: on page load, ask /me whether
+// the user has an ACTIVE session. If yes and it targets a section on
+// THIS page, render the card: filename, chunks received, TTL
+// countdown, and the honest browser-open note. "Resume" re-opens the
+// file picker; when the user re-selects the SAME file (name+size
+// match), only the missing chunks fly — nothing re-uploads.
+// If the session belongs to a section NOT on this page, we render a
+// pointer card instead (so the user can find it).
+let _resumeState = null;   // the /me payload, cached for resumePick()
+
+function _fmtMb(bytes) {
+    return (bytes / 1048576).toFixed(0) + ' MB';
+}
+
+function _ttlLeftText(expiresAt) {
+    if (!expiresAt) return '';
+    const mins = Math.round((new Date(expiresAt).getTime() - Date.now()) / 60000);
+    if (mins <= 0) return 'about to auto-cancel';
+    if (mins < 60) return `auto-cancels in ~${mins} min if nothing arrives`;
+    return `auto-cancels in ~${(mins / 60).toFixed(1)} h if nothing arrives`;
+}
+
+async function loadResumeCard() {
+    try {
+        const resp = await fetch('/api/upload-sessions/me', { credentials: 'include' });
+        if (!resp.ok) return;   // non-uploaders (FREE) → 403, ignore
+        const data = await resp.json();
+        if (!data || !data.active_session) return;
+        const s = data.active_session;
+        _resumeState = s;
+
+        // Find the card for THIS session's section (only the owning
+        // section shows the full card).
+        const card = document.getElementById('upload-resume-' + s.section_id);
+        if (card) {
+            const got = (s.received_chunks || []).length;
+            const done = got === s.total_chunks;
+            document.getElementById('upload-resume-title-' + s.section_id).textContent =
+                `${s.filename} — ${done ? 'all chunks received' : got + '/' + s.total_chunks + ' chunks'}`;
+            document.getElementById('upload-resume-detail-' + s.section_id).textContent =
+                `${_fmtMb(s.received_bytes || 0)} of ${_fmtMb(s.declared_size)} · ${_ttlLeftText(s.expires_at)}`;
+            document.getElementById('upload-resume-note-' + s.section_id).textContent =
+                'Uploads continue while your browser is open. Closing the tab or laptop pauses it — but your progress is preserved for 1 hour.';
+            card.classList.remove('hidden');
+        }
+        // Sessions for sections NOT on this page get no card (the
+        // course they belong to shows it). Nothing else to do here —
+        // the user's other course page is where the card renders.
+    } catch (_) { /* non-essential UX — never block page load */ }
+}
+
+// "Resume" on the card → open the file picker. The user re-selects
+// the SAME file; uploadVideo()'s chunked path + resumeState picks up
+// from the first missing chunk.
+function resumePick(sectionId) {
+    const input = document.getElementById('upload-' + sectionId);
+    if (input) {
+        input._resume = _resumeState;
+        input.click();
+    }
+}
+
+// "Cancel and remove" on the card → DELETE the session, hide the card.
+async function resumeCancel(sectionId) {
+    if (!_resumeState) return;
+    try {
+        await fetch('/api/upload-sessions/' + encodeURIComponent(_resumeState.id), {
+            method: 'DELETE', credentials: 'include',
+        });
+    } catch (_) { /* network — the card will just re-render on reload */ }
+    const card = document.getElementById('upload-resume-' + sectionId);
+    if (card) card.classList.add('hidden');
+    _resumeState = null;
+    location.reload();   // honest state: the picker is back to fresh
+}
+
+// Placeholder for the cross-device case: the session lives on, the
+// user might be uploading from another browser. We don't render an
+// active spinner for that (can't know), so this stays unused for
+// now but keeps the template's button contract honest.
+function resumeOtherDevice(sectionId) {
+    const card = document.getElementById('upload-resume-' + sectionId);
+    if (card) card.classList.add('hidden');
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadResumeCard);
+} else {
+    loadResumeCard();
+}
+
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', loadInterruptedBanner);
 } else {
@@ -719,35 +839,44 @@ async function uploadVideo(sectionId, input) {
     //    message: "...",
     //    session: {id, filename, declared_size, total_chunks,
     //              started_at, last_chunk_at, expires_at}}
-    // — we render a Clear-and-retry modal so the user can self-recover
-    // in one click instead of waiting for the sweeper.
+    // — we render the active-session modal with the two honest
+    // choices (owner-ratified 2026-09-27): KEEP WAITING (the upload
+    // continues in the background — it's still receiving, don't kill
+    // it) or CANCEL IT (frees the space, this new file starts).
+    // OK/Cancel map: OK = cancel the previous + upload the new one;
+    // Cancel = keep waiting (the new pick is discarded).
     function handleActiveSessionError(payload, onRetry) {
         const sess = payload && payload.session;
         const filename = sess ? sess.filename : 'another file';
         const sizeMb = sess && sess.declared_size
             ? (sess.declared_size / 1048576).toFixed(0) + ' MB'
             : 'unknown size';
+        const got = sess ? (sess.received_chunks || []).length : null;
+        const chunkText = sess && got !== null
+            ? ` — ${got}/${sess.total_chunks} chunks received`
+            : '';
         const ageMin = sess && sess.last_chunk_at
             ? Math.max(0, Math.round((Date.now() - new Date(sess.last_chunk_at).getTime()) / 60000))
             : null;
         const ageText = ageMin === null
             ? ''
             : ageMin < 1
-                ? ' (started just now)'
+                ? ' (active just now)'
                 : ageMin < 60
-                    ? ` (started ${ageMin} min ago)`
-                    : ` (started ${Math.round(ageMin / 60)} h ago)`;
+                    ? ` (last activity ${ageMin} min ago)`
+                    : ` (last activity ${Math.round(ageMin / 60)} h ago)`;
 
         const ok = window.confirm(
             `Another upload is still in progress.\n\n` +
-            `File: ${filename} (${sizeMb})${ageText}\n\n` +
-            `Click OK to cancel that upload and start over.\n` +
-            `Click Cancel to keep it and try again later.`
+            `File: ${filename} (${sizeMb})${chunkText}${ageText}\n\n` +
+            `It's still receiving — your progress is preserved.\n\n` +
+            `OK = cancel that upload and start this new one.\n` +
+            `Cancel = keep waiting (this new pick is discarded).`
         );
         if (!ok || !sess) {
-            throw new Error(payload.message || 'Another upload is in progress.');
+            throw new Error(payload.message || 'Another upload is in progress. Your new pick was not started.');
         }
-        // User chose OK — DELETE the stuck session, then retry init.
+        // User chose OK — DELETE the active session, then retry init.
         return fetch('/api/upload-sessions/' + encodeURIComponent(sess.id), {
             method: 'DELETE', credentials: 'include',
         }).then((r) => {
@@ -758,50 +887,35 @@ async function uploadVideo(sectionId, input) {
         });
     }
 
-    async function uploadChunked(sectionId, file, ui) {
-        // 0. preflight: ask /me whether the user has a stuck upload
-        //    BEFORE firing init, so the banner surfaces the state at
-        //    the moment of decision (known-issues §6, 2026-09-26).
-        //    Best-effort — if /me is slow or 5xx, fall through to
-        //    the normal init (the structured-400 handler in step 1
-        //    is still the authoritative fallback).
-        try {
-            const pre = await fetch('/api/upload-sessions/me', { credentials: 'include' });
-            if (pre.ok) {
-                const preData = await pre.json().catch(() => ({}));
-                if (preData && preData.active_session) {
-                    return handleActiveSessionError(
-                        { code: 'active_session_in_progress', session: preData.active_session },
-                        () => uploadChunked(sectionId, file, ui)
-                    );
+    async function uploadChunked(sectionId, file, ui, resume = null) {
+        // 1. init — UNLESS we're resuming an existing session (the
+        //    Resume card path: session already exists, we only need
+        //    to send the missing chunks). All init validation ran
+        //    when the session was created.
+        let session_id, chunk_size, total_chunks, received = [];
+        if (resume) {
+            ({ session_id, chunk_size, total_chunks, received_chunks: received } = resume);
+        } else {
+            let resp = await fetch('/api/upload-sessions/init', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    section_id: sectionId,
+                    filename: file.name,
+                    declared_size: file.size,
+                }),
+            });
+            const init = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                // Structured 400 (one-active-session rule, known-issues §6).
+                if (resp.status === 400 && init && init.code === 'active_session_in_progress') {
+                    return handleActiveSessionError(init, () => uploadChunked(sectionId, file, ui));
                 }
+                throw Object.assign(new Error(init.detail || init.message || `Server error (${resp.status})`), { status: resp.status });
             }
-        } catch (_) { /* preflight hiccup — fall through */ }
-
-        // 1. init: declare → get the chunk plan (all validation
-        //    server-side: tier limit, quota, one-session — BEFORE any
-        //    bytes move; a 413 here is instant, not after minutes).
-        let resp = await fetch('/api/upload-sessions/init', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                section_id: sectionId,
-                filename: file.name,
-                declared_size: file.size,
-            }),
-        });
-        const init = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-            // Structured 400 (one-active-session rule, known-issues §6).
-            if (resp.status === 400 && init && init.code === 'active_session_in_progress') {
-                // The handler does its own retry — don't fall through to
-                // the generic error throw below.
-                return handleActiveSessionError(init, () => uploadChunked(sectionId, file, ui));
-            }
-            throw Object.assign(new Error(init.detail || init.message || `Server error (${resp.status})`), { status: resp.status });
+            ({ session_id, chunk_size, total_chunks } = init);
         }
-        const { session_id, chunk_size, total_chunks } = init;
 
         // The cancel affordance while chunks fly.
         ui.setCancel(() => fetch('/api/upload-sessions/' + session_id, {
@@ -814,8 +928,12 @@ async function uploadVideo(sectionId, input) {
 
         // 2. chunks: slice + PUT. The LAST chunk is the remainder
         //    (matches the server's declared-size verification).
+        //    On RESUME (known-issues §6, 2026-09-27): skip chunks the
+        //    server already has — only the missing ones fly.
+        const already = new Set(received);
         for (let i = 0; i < total_chunks; i++) {
             if (cancelled) throw new Error('Upload cancelled');
+            if (already.has(i)) continue;  // resume: nothing to re-send
             const start = i * chunk_size;
             const end = (i === total_chunks - 1)
                 ? file.size
@@ -854,19 +972,45 @@ async function uploadVideo(sectionId, input) {
         // 3. complete: assemble + queue handoff → navigate like the
         //    legacy path does.
         ui.progress(1, 'Finishing up…');
-        resp = await fetch(`/api/upload-sessions/${session_id}/complete`, {
+        const respC = await fetch(`/api/upload-sessions/${session_id}/complete`, {
             method: 'POST', credentials: 'include',
         });
-        const done = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-            throw new Error(done.detail || `Server error (${resp.status})`);
+        const done = await respC.json().catch(() => ({}));
+        if (!respC.ok) {
+            throw new Error(done.detail || `Server error (${respC.status})`);
         }
         return done.video_id;
     }
 
     startUi();
     try {
-        if (files.length === 1 && files[0].size > CHUNK_THRESHOLD) {
+        // RESUME path (known-issues §6, 2026-09-27): the Resume card's
+        // picker sets input._resume. The user re-selected the same
+        // file — verify name+size match the session, then continue
+        // from the first missing chunk. Nothing re-uploads.
+        const resume = input._resume;
+        if (resume) {
+            const f = files[0];
+            const sameFile = f
+                && f.name === resume.filename
+                && f.size === resume.declared_size;
+            if (!sameFile) {
+                delete input._resume;
+                alert(
+                    `To resume "${resume.filename}", re-select that same file ` +
+                    `(${_fmtMb(resume.declared_size)}).\n\n` +
+                    (f ? `You picked "${f.name}" (${_fmtMb(f.size)}) instead.` : '')
+                );
+                resetUi();
+                return;
+            }
+            delete input._resume;
+            const videoId = await uploadChunked(sectionId, f, {
+                progress: setProgress,
+                setCancel: (fn) => { window._cancelUpload = fn; },
+            }, resume);
+            window.location.href = '/video/' + videoId;
+        } else if (files.length === 1 && files[0].size > CHUNK_THRESHOLD) {
             // ONE BIG FILE → the chunked path.
             const videoId = await uploadChunked(sectionId, files[0], {
                 progress: setProgress,

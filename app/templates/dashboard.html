@@ -423,36 +423,43 @@ function uploadMultipleToSection(sectionId, files) {
             }
         } catch (_) { /* never break the UI */ }
     };
-    // 2026-09-26: handle the structured 400 from init when the user
-    // has another upload in flight (known-issues §6, the 9/26 incident).
-    // Mirrors course.html's handleActiveSessionError but returns a
-    // promise so the bulk-upload loop can await the cleanup before
-    // continuing to the next file (otherwise the loop would race
-    // against the DELETE and the next init would 400 again).
+    // 2026-09-26/27: handle the structured 400 from init when the user
+    // has another upload in flight (known-issues §6). The two honest
+    // choices (owner-ratified): KEEP WAITING (the previous upload is
+    // still receiving — keep it, skip this batch) or CANCEL IT
+    // (frees the space, this file's init retries). Mirrors
+    // course.html's modal wording.
     const handleActiveSessionError = async (payload) => {
         const sess = payload && payload.session;
         const filename = sess ? sess.filename : 'another file';
         const sizeMb = sess && sess.declared_size
             ? (sess.declared_size / 1048576).toFixed(0) + ' MB'
             : 'unknown size';
+        const got = sess ? (sess.received_chunks || []).length : null;
+        const chunkText = sess && got !== null
+            ? ` — ${got}/${sess.total_chunks} chunks received`
+            : '';
         const ageMin = sess && sess.last_chunk_at
             ? Math.max(0, Math.round((Date.now() - new Date(sess.last_chunk_at).getTime()) / 60000))
             : null;
         const ageText = ageMin === null
             ? ''
             : ageMin < 1
-                ? ' (started just now)'
+                ? ' (active just now)'
                 : ageMin < 60
-                    ? ` (started ${ageMin} min ago)`
-                    : ` (started ${Math.round(ageMin / 60)} h ago)`;
+                    ? ` (last activity ${ageMin} min ago)`
+                    : ` (last activity ${Math.round(ageMin / 60)} h ago)`;
         const ok = window.confirm(
             `Another upload is still in progress.\n\n` +
-            `File: ${filename} (${sizeMb})${ageText}\n\n` +
-            `Click OK to cancel that upload and start over.\n` +
-            `Click Cancel to keep it and try again later.`
+            `File: ${filename} (${sizeMb})${chunkText}${ageText}\n\n` +
+            `It's still receiving — your progress is preserved.\n\n` +
+            `OK = cancel that upload and start this one.\n` +
+            `Cancel = keep waiting (this pick is skipped).`
         );
         if (!ok || !sess) {
-            throw new Error(payload.message || 'Another upload is in progress.');
+            const err = new Error(payload.message || 'Another upload is in progress.');
+            err.keepWaiting = true;   // the loop skips this file honestly
+            throw err;
         }
         const r = await fetch('/api/upload-sessions/' + encodeURIComponent(sess.id), {
             method: 'DELETE', credentials: 'include',
@@ -465,23 +472,7 @@ function uploadMultipleToSection(sectionId, files) {
     // uploadChunked (init → chunk×N → complete) but with this
     // page's status-line progress instead of the progress bar.
     const uploadOneChunked = async (file, label) => {
-        // 0. preflight: same /me check as course.html (known-issues §6).
-        // Surfaces a stuck session before we waste a chunked upload
-        // on a doomed init round-trip.
-        try {
-            const pre = await fetch('/api/upload-sessions/me', { credentials: 'include' });
-            if (pre.ok) {
-                const preData = await pre.json().catch(() => ({}));
-                if (preData && preData.active_session) {
-                    await handleActiveSessionError({
-                        code: 'active_session_in_progress',
-                        session: preData.active_session,
-                    });
-                }
-            }
-        } catch (_) { /* preflight hiccup — fall through */ }
-
-        let resp = await fetch('/api/upload-sessions/init', {
+        const doInit = () => fetch('/api/upload-sessions/init', {
             method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -490,35 +481,19 @@ function uploadMultipleToSection(sectionId, files) {
                 declared_size: file.size,
             }),
         });
-        const init = await resp.json().catch(() => ({}));
+        let resp = await doInit();
+        let init = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-            // Structured 400 (one-active-session rule, known-issues §6).
-            // Cancel the stuck session, then retry init once. If the
-            // retry also fails, fall through to the generic error.
             if (resp.status === 400 && init && init.code === 'active_session_in_progress') {
                 await handleActiveSessionError(init);
-                resp = await fetch('/api/upload-sessions/init', {
-                    method: 'POST', credentials: 'include',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        section_id: sectionId,
-                        filename: file.name,
-                        declared_size: file.size,
-                    }),
-                });
-                const init2 = await resp.json().catch(() => ({}));
-                if (!resp.ok) {
-                    throw Object.assign(new Error(init2.detail || init2.message || `Server error (${resp.status})`),
-                                         { status: resp.status });
-                }
-                return uploadOneChunkedFromInit(file, label, init2);
+                resp = await doInit();
+                init = await resp.json().catch(() => ({}));
             }
-            throw Object.assign(new Error(init.detail || init.message || `Server error (${resp.status})`),
-                                 { status: resp.status });
+            if (!resp.ok) {
+                throw Object.assign(new Error(init.detail || init.message || `Server error (${resp.status})`),
+                                     { status: resp.status });
+            }
         }
-        return uploadOneChunkedFromInit(file, label, init);
-    };
-    const uploadOneChunkedFromInit = async (file, label, init) => {
         const { session_id, chunk_size, total_chunks } = init;
         for (let i = 0; i < total_chunks; i++) {
             const blob = file.slice(i * chunk_size, (i === total_chunks - 1) ? file.size : (i + 1) * chunk_size);
@@ -542,10 +517,10 @@ function uploadMultipleToSection(sectionId, files) {
             setFileStatus([`${label} chunk ${i + 1}/${total_chunks}`],
                 'text-indigo-600 dark:text-indigo-400');
         }
-        resp = await fetch(`/api/upload-sessions/${session_id}/complete`,
+        const respC = await fetch(`/api/upload-sessions/${session_id}/complete`,
             { method: 'POST', credentials: 'include' });
-        const done = await resp.json().catch(() => ({}));
-        if (!resp.ok) throw new Error(done.detail || `Server error (${resp.status})`);
+        const done = await respC.json().catch(() => ({}));
+        if (!respC.ok) throw new Error(done.detail || `Server error (${respC.status})`);
         return done.video_id;
     };
     (async () => {
@@ -575,6 +550,17 @@ function uploadMultipleToSection(sectionId, files) {
                     }
                 }
             } catch (err) {
+                if (err.keepWaiting) {
+                    // Owner chose "keep waiting" in the active-session
+                    // modal (known-issues §6): the previous upload is
+                    // still receiving — skip the REST of the batch
+                    // honestly (every later file would hit the same
+                    // 400 and the same modal).
+                    lines.push(`⏸ ${f.name} — skipped (another upload in progress)`);
+                    const skipped = files.length - i - 1;
+                    if (skipped > 0) lines.push(`⏸ ${skipped} more file(s) skipped`);
+                    break;
+                }
                 lines.push(`❌ ${f.name} — ${err.message || 'Network error'}`);
                 beacon(f.name, err.message || 'Network error');
             }
