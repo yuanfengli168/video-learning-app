@@ -894,7 +894,19 @@ async function uploadVideo(sectionId, input) {
         //    when the session was created.
         let session_id, chunk_size, total_chunks, received = [];
         if (resume) {
-            ({ session_id, chunk_size, total_chunks, received_chunks: received } = resume);
+            // NOTE: the /me payload carries the id as `id` (not
+            // `session_id` — the 9/28 incident was destructuring
+            // `session_id` here → PUT .../undefined/... → 404
+            // "Upload session not found" on the first chunk).
+            ({
+                id: session_id,
+                chunk_size,
+                total_chunks,
+                received_chunks: received,
+            } = resume);
+            if (!session_id || !chunk_size) {
+                throw new Error('Resume failed — the session data is incomplete. Reload the page and try again.');
+            }
         } else {
             let resp = await fetch('/api/upload-sessions/init', {
                 method: 'POST',

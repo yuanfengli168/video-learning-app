@@ -172,12 +172,21 @@ def _serialize_session(session: UploadSession) -> dict:
 
     received_chunks / received_bytes are read from the filesystem —
     the staging dir is the truth (registry §3a), the DB row only
-    holds declared metadata."""
+    holds declared metadata.
+
+    chunk_size is REQUIRED by the client's resume path (it slices
+    the re-picked file into chunks — without it the first chunk
+    PUT computes a wrong slice). The 9/28 incident ("Upload session
+    not found" after clicking Resume) was exactly this gap: the
+    payload had `id` but the client destructured `session_id`, and
+    chunk_size was missing entirely → PUT .../undefined/... → 404.
+    """
     got = upload_sessions.received_chunks(session.id)
     return {
         "id": session.id,
         "filename": session.original_filename,
         "declared_size": session.declared_size,
+        "chunk_size": session.chunk_size,
         "total_chunks": session.total_chunks,
         "received_chunks": got,
         "received_bytes": sum(

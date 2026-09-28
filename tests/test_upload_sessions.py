@@ -687,6 +687,13 @@ def test_me_reports_chunk_progress_for_resume_card(paid_client, db_session):
     assert s["received_chunks"] == [0, 1, 2]
     assert s["received_bytes"] == 3 * sess.chunk_size
     assert s["section_id"] == sess.section_id
+    # The resume client slices the re-picked file by chunk_size and
+    # PUTs to `id` — the 9/28 incident was both missing from the
+    # payload (PUT .../undefined/... → 404). Assert the FULL resume
+    # contract so the JS destructure can never silently break again.
+    assert s["id"] == sid
+    assert s["chunk_size"] == sess.chunk_size
+    assert s["chunk_size"] > 0
 
 
 def test_me_returns_null_when_no_active_session(paid_client, db_session):
