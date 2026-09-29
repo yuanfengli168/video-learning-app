@@ -3,9 +3,9 @@
 All notable changes to the Video Learning App are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [2.1.0.11] - 2026-09-26/27 — Chunked-upload background-completion + Resume card (chunks-are-sacred)
+## [2.1.0.11] - 2026-09-26/29 — Chunked-upload background-completion + Resume card (chunks-are-sacred) + live-fix batch
 
-🛟 **The 9/26 incident**: owner navigated away mid 6-chunk upload; Starlette `ClientDisconnect` was unhandled → ERROR 500 → session stayed `active` for the 1h TTL → every new init returned 400 for an hour. **Owner-ratified model (9/27): uploads run in the background while the browser tab is open; chunks are sacred — a disconnect PRESERVES the session; the 1h TTL is the abandonment net; the Resume card is the recovery path.** Commits `c011833` + `f4cc494` + this batch. Tests 1617 → **1652 passing**.
+🛟 **The 9/26 incident**: owner navigated away mid 6-chunk upload; Starlette `ClientDisconnect` was unhandled → ERROR 500 → session stayed `active` for the 1h TTL → every new init returned 400 for an hour. **Owner-ratified model (9/27): uploads run in the background while the browser tab is open; chunks are sacred — a disconnect PRESERVES the session; the 1h TTL is the abandonment net; the Resume card is the recovery path.** Three real user hits (9/28–29) drove a live-fix batch: a serializer/JS shape drift, a JS timezone misparse, and a same-tab-navigation misunderstanding — all closed. **Live-proven 9/29**: a 5-file batch (628MB–1.64GB, incl. the session that sat at 4/15 chunks) completed → transcribed → `ready` through the resume path in production. Tests 1617 → **1653 passing**.
 
 ### 🚨 Incident + model shift
 
@@ -17,11 +17,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`feat(upload)`: enriched `/me` + structured 400** — both payloads now carry `received_chunks`, `received_bytes`, `section_id` (read from the real staging dir — filesystem-as-truth, registry §3a), so the card and the modal can't disagree with reality.
 - **`feat(upload)`: two-choice active-session modal** — a new upload attempt while a session is active now asks the two honest questions: "It's still receiving — your progress is preserved. OK = cancel that upload and start this one. Cancel = keep waiting (this pick is discarded)" — with the file name, size, chunk progress, and last-activity age. On dashboard bulk, "keep waiting" skips the rest of the batch honestly instead of spamming the modal per file.
 - **Background completion is now the contract**: navigate to any page while a >100MB upload flies — chunks keep arriving (same tab), the Video row appears in the section, no interruption anywhere.
+- **`feat(upload)`: stay-on-tab guidance** (`5da2b3c`, 9/29) — `beforeunload` guard (`window._uploadInFlight`) asks the browser to confirm same-tab navigation mid-upload; our own success navigations clear the flag first (4 sites on course.html, 2 on dashboard.html). "Keep this tab open — want to browse other pages? Open them in a new tab" copy on both upload surfaces. Born of the 9/29 incident: a same-tab Dashboard click killed a batch at 4/15 chunks.
+
+### 🐛 Live-fix batch (three real user hits, 9/28–29)
+
+- **`fix(upload)`: resume 404 — serializer/JS shape drift** (`8c288b0`) — `/me` sends `id`, the client destructured `session_id`, and `chunk_size` was missing from the payload entirely → the first resume PUT went to `/undefined/` → "Upload session not found" on a same-file re-pick. Fixed both sides; the test now pins the FULL client contract (`id` + `chunk_size` + `received_chunks`).
+- **`fix(upload)`: the TZ misparse — "about to auto-cancel" with 50 min left** (9/29) — the DB stores naive UTC; a timezone-less ISO string is parsed by JS `new Date()` as LOCAL time, so at UTC+8 the Resume card's countdown computed −8h and permanently read "about to auto-cancel" (the modal's "last activity X ago" ~8h off too). All client-facing datetimes (`started_at`, `last_chunk_at`, `expires_at`, `cancelled_at`) now carry the `+00:00` designator (`_utc_iso`, seconds precision — Safari-strict-safe); tests assert the suffix. **Display-only**: the sweeper's TTL is pure SQL and never misjudged — verified live (sweep pass claimed 0 with the session at +50 min real time left).
 
 ### 🧪 Tests
 
 - `test_chunk_client_disconnect_preserves_session` — the core assertion: disconnect → session STAYS active, chunks stay on disk, /me still reports it (drives the real handler with a stub request that raises `ClientDisconnect`).
-- `test_me_reports_chunk_progress_for_resume_card` — received_chunks/received_bytes/section_id reflect the real staging dir.
+- `test_me_reports_chunk_progress_for_resume_card` — received_chunks/received_bytes/section_id AND the full resume contract (`id`, `chunk_size`) reflect the real staging dir.
+- `test_me_returns_active_session_with_expires_at` — TTL delta + the UTC-designator assertions (`+00:00` suffix on all three datetimes — the TZ regression pin).
+- `test_last_cancelled_carries_utc_designator` — the interrupted-banner feed's `cancelled_at` pinned to the same JS-parse contract.
+- Plus: structured-400 envelope, `/me` null, `/me` user-scoping.
 - Plus the 5 from the 9/26 batch (structured 400 envelope, /me null, /me with TTL, user-scoping).
 
 ### 🗑️ Removed

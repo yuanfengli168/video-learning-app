@@ -165,6 +165,29 @@ async def _owned_or_404(
         )
 
 
+def _utc_iso(dt) -> str | None:
+    """ISO-8601 with an explicit UTC designator — the JS-parse
+    contract (the 9/29 incident).
+
+    The DB stores naive UTC everywhere (upload_sessions._now /
+    func.now()), but a timezone-less ISO string is parsed by JS
+    `new Date()` as LOCAL time: at UTC+8 the Resume card's countdown
+    computed −8h and permanently read 'about to auto-cancel' while
+    50 minutes actually remained (the modal's 'last activity X ago'
+    was ~8h off too). The '+00:00' suffix makes JS parse UTC.
+
+    Seconds precision: ECMA's date-time format only specifies 3
+    fractional digits, and older Safari is strict — microseconds
+    are noise the UI never needs."""
+    if dt is None:
+        return None
+    from datetime import timezone
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 def _serialize_session(session: UploadSession) -> dict:
     """The structured shape the client renders for the Resume card
     AND the active-session modal. Single source of truth so both
@@ -194,10 +217,8 @@ def _serialize_session(session: UploadSession) -> dict:
             for i in got
         ),
         "section_id": session.section_id,
-        "started_at": session.created_at.isoformat()
-        if session.created_at else None,
-        "last_chunk_at": session.last_activity_at.isoformat()
-        if session.last_activity_at else None,
+        "started_at": _utc_iso(session.created_at),
+        "last_chunk_at": _utc_iso(session.last_activity_at),
         "expires_at": None,  # populated by GET /me; init returns None
                              # so the client doesn't show a
                              # misleading countdown.
@@ -216,7 +237,7 @@ def _serialize_session_with_ttl(session: UploadSession) -> dict:
         expires_at = session.last_activity_at + timedelta(
             hours=settings.upload_session_ttl_hours
         )
-        payload["expires_at"] = expires_at.isoformat()
+        payload["expires_at"] = _utc_iso(expires_at)
     return payload
 
 
@@ -386,8 +407,6 @@ async def last_cancelled(
     return {
         "has_cancelled": True,
         "filename": row.original_filename,
-        "cancelled_at": row.cancelled_at.isoformat()
-        if row.cancelled_at
-        else None,
+        "cancelled_at": _utc_iso(row.cancelled_at),
         "declared_size": row.declared_size,
     }

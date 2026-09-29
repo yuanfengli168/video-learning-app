@@ -734,10 +734,41 @@ def test_me_returns_active_session_with_expires_at(paid_client, db_session):
     assert sess["last_chunk_at"] is not None
     # GET /me populates this; init does not.
     assert sess["expires_at"] is not None
+    # 2026-09-29 (the TZ incident): every client-facing datetime MUST
+    # carry an explicit UTC designator. The DB stores naive UTC; a
+    # timezone-less ISO string is parsed by JS new Date() as LOCAL
+    # time — at UTC+8 the Resume card showed "about to auto-cancel"
+    # with 50 real minutes left. Assert the suffix so this can never
+    # silently regress.
+    for k in ("started_at", "last_chunk_at", "expires_at"):
+        assert sess[k].endswith("+00:00"), (
+            f"{k} lacks the UTC designator — JS will misparse it "
+            f"as local time (got {sess[k]!r})"
+        )
     last = datetime.fromisoformat(sess["last_chunk_at"])
     exp = datetime.fromisoformat(sess["expires_at"])
     delta_hours = (exp - last).total_seconds() / 3600
     assert abs(delta_hours - settings.upload_session_ttl_hours) < 0.01
+
+
+def test_last_cancelled_carries_utc_designator(paid_client, db_session):
+    """The interrupted-banner feed's cancelled_at must also carry the
+    UTC designator — same JS-parse contract as /me (the banner does
+    no date math today, but the field is client-facing; pin it)."""
+    r1, _ = _init(paid_client, db_session, size=1000)
+    assert r1.status_code == 200
+    sid = r1.json()["session_id"]
+    with _mock():
+        paid_client.delete(
+            f"/api/upload-sessions/{sid}", headers=_auth_headers()
+        )
+        r = paid_client.get(
+            "/api/upload-sessions/last-cancelled", headers=_auth_headers()
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["has_cancelled"] is True
+    assert data["cancelled_at"].endswith("+00:00")
 
 
 def test_me_is_user_scoped(paid_client, db_session):
