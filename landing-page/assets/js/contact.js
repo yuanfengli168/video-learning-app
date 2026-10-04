@@ -85,7 +85,7 @@
 
     // Build the email body
     var topicLabel = TOPIC_LABELS[topic] || topic;
-    var subject = 'Video Learning App — ' + topicLabel;
+    var subject = 'CapySmart — ' + topicLabel;
     var bodyLines = [
       message,
       '',

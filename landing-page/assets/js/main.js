@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Video Learning App — Landing Page JS
+   CapySmart — Landing Page JS
    ~3KB. No dependencies. Theme toggle, mobile menu, lightbox, reveal-on-scroll.
    ========================================================================== */
 (function () {

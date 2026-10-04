@@ -871,6 +871,62 @@ section { padding: 6rem 0; }
   font-size: 0.9rem;
 }
 
+/* ---------- Demo grid (free + paid slots) ---------- */
+.demo__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+@media (max-width: 920px) {
+  .demo__grid { grid-template-columns: 1fr; }
+}
+
+.demo__slot-head {
+  margin-bottom: 1rem;
+}
+
+.demo__slot-head h3 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 1.15rem;
+  color: var(--text);
+}
+
+.demo__slot-sub {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.demo__slot-badge {
+  display: inline-block;
+  padding: 0.25em 0.75em;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.demo__slot-badge--free {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+
+.demo__slot-badge--paid {
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.cta__buttons--centered {
+  justify-content: center;
+  margin-top: 2rem;
+  text-align: center;
+}
+
 /* ---------- Screenshots ---------- */
 .screenshots__grid {
   display: grid;
