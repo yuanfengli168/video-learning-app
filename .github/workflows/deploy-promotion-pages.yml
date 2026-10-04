@@ -1,0 +1,62 @@
+# Deploys the CapySmart promotion site (landing-page/) to GitHub Pages.
+#
+# How it works — every push to the promotion-pages branch:
+#   1. This workflow checks out the repo
+#   2. Copies landing-page/ contents to a staging folder (as the site root)
+#   3. Uploads it as a Pages artifact and publishes it
+#
+# The result is live at: https://yuanfengli168.github.io/video-learning-app/
+#
+# One-time setup (only needed ONCE, in the browser):
+#   GitHub → Settings → Pages → Build and deployment → Source:
+#   select "GitHub Actions" (not "Deploy from a branch")
+#
+# After that, every push to mvp2-production-patches-promotion-pages
+# auto-deploys. No manual steps ever again.
+
+name: Deploy CapySmart promotion site to GitHub Pages
+
+on:
+  push:
+    branches:
+      - mvp2-production-patches-promotion-pages
+    paths:
+      - 'landing-page/**'
+  workflow_dispatch: # allows manual runs from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push cancels an in-flight deploy of older code
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stage the landing page as site root
+        run: |
+          mkdir -p _site
+          cp -r landing-page/. _site/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
