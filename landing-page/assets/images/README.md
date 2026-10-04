@@ -13,8 +13,7 @@ Drop the following files here (PNG, 1600×1000 px recommended, 2x for retina):
 | `screenshot-transcript.png` | Video page with transcript visible — show click-to-seek (highlight one line) |
 | `screenshot-mindmap.png` | Mindmap tab — full tree visible, with cursor hovering over a node |
 | `screenshot-quiz.png` | Quiz tab — a question with one answer selected (green) |
-| `screenshot-discuss.png` | Discuss tab — user message + AI response with timestamp citation |
-| `screenshot-tools.png` | Tools tab — the WebM→MP4 plugin card, ideally with the "Last successful output" green box |
+| `screenshot-discuss.png` | Discuss tab — the AI chat answering a question about the video |
 | `screenshot-dashboard.png` | (optional) Course dashboard — list of courses with videos |
 
 ## How to capture
