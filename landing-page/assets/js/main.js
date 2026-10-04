@@ -114,20 +114,45 @@
     });
   });
 
-  // ---------- Inject real images when they exist (screenshot placeholders) ----------
-  document.querySelectorAll('.shot__img[data-img]').forEach((el) => {
+  // ---------- Inject real images when they exist (lazy GIF loading) ----------
+  // The screenshots are full-screen GIFs (~3-9 MB each). Loading all five
+  // at page-open would stall the page, so each one is injected only when
+  // its tile scrolls into view (IntersectionObserver). Without IO support
+  // (old browsers), fall back to loading everything up front.
+  const shotEls = document.querySelectorAll('.shot__img[data-img]');
+
+  function loadShot(el) {
+    if (el.dataset.loaded) return;
+    el.dataset.loaded = '1';
     const filename = el.dataset.img;
-    const img = new Image();
+    const img = document.createElement('img');
     img.alt = el.getAttribute('aria-label') || '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
     img.onload = () => {
       el.classList.add('shot__img--loaded');
     };
     img.onerror = () => {
       // Keep the placeholder if image is missing
+      el.dataset.loaded = '';
     };
     img.src = 'assets/images/' + filename;
     el.appendChild(img);
-  });
+  }
+
+  if ('IntersectionObserver' in window) {
+    const shotObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          loadShot(entry.target);
+          shotObserver.unobserve(entry.target);
+        }
+      });
+    }, { rootMargin: '200px 0px' }); // start slightly before the tile is on screen
+    shotEls.forEach((el) => shotObserver.observe(el));
+  } else {
+    shotEls.forEach(loadShot);
+  }
 
   // ---------- Stats counter (only if reduced motion is not preferred) ----------
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;

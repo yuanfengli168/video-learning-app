@@ -872,6 +872,28 @@ section { padding: 6rem 0; }
   object-fit: cover;
 }
 
+/* Once the real GIF has loaded, hide the filename placeholder */
+.shot__img--loaded::before {
+  content: none;
+}
+
+/* While a GIF is still downloading (lazy-loaded on scroll) */
+.shot__img:not(.shot__img--loaded)::after {
+  content: 'Loading…';
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2em 0.7em;
+  pointer-events: none;
+}
+
 .shot__caption {
   padding: 1rem 1.25rem;
   font-size: 0.9rem;
