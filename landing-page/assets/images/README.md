@@ -9,8 +9,8 @@ Drop the following files here (PNG, 1600×1000 px recommended, 2x for retina):
 | Filename | What to capture |
 |---|---|
 | `og-image.png` | 1200×630 — Open Graph card (used by Twitter, LinkedIn, etc. when shared). Show the logo + tagline + product mockup |
-| `screenshot-upload.png` | Upload screen — drag-and-drop zone, file picker, course/section picker |
 | `screenshot-transcript.png` | Video page with transcript visible — show click-to-seek (highlight one line) |
+| `screenshot-flashcards.png` | Flashcards tab — a card mid-flip or the front of a card, with the "Teach me real-world usage" link visible |
 | `screenshot-mindmap.png` | Mindmap tab — full tree visible, with cursor hovering over a node |
 | `screenshot-quiz.png` | Quiz tab — a question with one answer selected (green) |
 | `screenshot-discuss.png` | Discuss tab — the AI chat answering a question about the video |
