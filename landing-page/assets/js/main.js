@@ -114,21 +114,6 @@
     });
   });
 
-  // ---------- Inject real images when they exist (screenshot placeholders) ----------
-  document.querySelectorAll('.shot__img[data-img]').forEach((el) => {
-    const filename = el.dataset.img;
-    const img = new Image();
-    img.alt = el.getAttribute('aria-label') || '';
-    img.onload = () => {
-      el.classList.add('shot__img--loaded');
-    };
-    img.onerror = () => {
-      // Keep the placeholder if image is missing
-    };
-    img.src = 'assets/images/' + filename;
-    el.appendChild(img);
-  });
-
   // ---------- Stats counter (only if reduced motion is not preferred) ----------
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (!prefersReducedMotion && 'IntersectionObserver' in window) {

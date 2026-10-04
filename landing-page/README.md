@@ -7,7 +7,7 @@ Branch: `mvp2-production-patches-promotion-pages`, based on `mvp2-production-pat
 
 | File | URL | Purpose |
 |---|---|---|
-| `index.html` | `/` | Landing page — hero, features, 2 demo videos (free + paid tiers), screenshots, support/donate CTA |
+| `index.html` | `/` | Landing page — hero, features, 2 demo slots (free + paid tiers), support/donate CTA |
 | `contact.html` | `/contact.html` | Contact — email cards, mailto: form (with donation topic) |
 
 **Removed in this rebrand** (vs. the old `landing-page/contact-donate-supporters` branch): the `Install`, `Donate`, and `Supporters` pages. The product is now a hosted service at [capysmart.com](https://www.capysmart.com) — self-hosting instructions no longer apply, and donations are handled via email (`jackyopenclaw.168@gmail.com`).
@@ -16,7 +16,7 @@ Branch: `mvp2-production-patches-promotion-pages`, based on `mvp2-production-pat
 
 ```
 landing-page/
-├── index.html              # Landing page (features + demos + screenshots + support)
+├── index.html              # Landing page (features + demos + support)
 ├── contact.html            # Contact form (mailto:) + donate-by-email section
 ├── README.md               # This file
 ├── _config.yml             # Jekyll config (GitHub Pages theme override)
@@ -35,10 +35,11 @@ landing-page/
 
 | Placeholder | Where | What to do |
 |---|---|---|
-| `FREE_ACCOUNT_VIDEO_ID` | `index.html` (Demo section, free slot) | Upload the ~10-min free-account demo to YouTube (unlisted OK), paste the video ID |
-| `PAID_ACCOUNT_VIDEO_ID` | `index.html` (Demo section, paid slot) | Upload the ~10-min paid-account demo to YouTube (unlisted OK), paste the video ID |
-| Screenshots | `assets/images/screenshot-*.png` | The screenshots are injected by JS if present; see `assets/images/README.md` for the capture list |
+| `FREE_ACCOUNT_VIDEO_ID` | `index.html` (Demo section, free slot) | Upload the ~10-min free-account demo to YouTube (unlisted OK), paste the video ID into the hidden iframe src, and remove the `hidden` attribute on the surrounding `.demo__video-wrap` |
+| `PAID_ACCOUNT_VIDEO_ID` | `index.html` (Demo section, paid slot) | Upload the ~10-min paid-account demo to YouTube (unlisted OK), paste the video ID into the hidden iframe src, and remove the `hidden` attribute on the surrounding `.demo__video-wrap` |
 | `og-image.png` | `assets/images/og-image.png` | Create a 1200×630 OG image (CapySmart branding) for social shares |
+
+Until those IDs are filled in, each demo slot shows a **"Recording pending · 10-minute walkthrough"** placeholder card (no broken YouTube embed), so the page reads correctly before launch.
 
 ## Local Preview
 

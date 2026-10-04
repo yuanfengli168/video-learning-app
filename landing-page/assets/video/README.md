@@ -1,60 +1,69 @@
-# Demo Video
+# Demo Videos
 
-This folder holds the demo video embedded in the landing page.
+The promotion page has **two demo slots** (free tier + paid tier) that embed
+short walkthroughs of CapySmart. Until the recordings are uploaded, each slot
+shows an in-page placeholder card (no broken YouTube embed) — so the page
+reads correctly before launch.
 
-## Quick start (3 options)
+## How the slots are wired
 
-### Option A: Self-host MP4 (recommended for control)
+Both demo slots live in `index.html` under the `#demo` section. For each slot,
+there is:
 
-1. Export your screen recording as `demo.mp4` (H.264, 1080p, ~5 Mbps bitrate, 2-3 min long)
-2. Drop it in this folder
-3. Open `../../index.html`, find the `<div class="demo__placeholder" ...>` block
-4. Replace it with:
-   ```html
-   <video controls poster="../images/screenshot-mindmap.png" preload="metadata">
-     <source src="assets/video/demo.mp4" type="video/mp4" />
-     Your browser doesn't support embedded video.
-     <a href="assets/video/demo.mp4">Download the demo</a> instead.
-   </video>
-   ```
-5. Add this CSS to `assets/css/style.css`:
-   ```css
-   .demo__player video { width: 100%; height: auto; display: block; aspect-ratio: 16/9; background: #000; }
-   ```
+1. A **placeholder card** (`.demo__placeholder`) — visible by default; shows
+   `▶ Recording pending · 10-minute walkthrough`.
+2. A **hidden iframe** (`.demo__video-wrap[data-demo-video]`, `hidden`) —
+   contains the YouTube `<iframe>` once the video ID is filled in.
 
-### Option B: YouTube embed (recommended for reach)
+To go live with a demo, edit the corresponding slot in `index.html`:
 
-1. Upload your video to YouTube (unlisted is fine)
-2. Get the video ID from the URL: `youtube.com/watch?v=XXXXXXXXXXX`
-3. Replace the placeholder in `index.html` with:
-   ```html
-   <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;">
-     <iframe
-       src="https://www.youtube.com/embed/XXXXXXXXXXX?rel=0"
-       style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
-       title="Video Learning App demo"
-       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-       allowfullscreen></iframe>
-   </div>
-   ```
+```html
+<!-- BEFORE (still showing the placeholder) -->
+<div class="demo__placeholder" role="img" aria-label="Free-account demo video coming soon">
+  ...
+</div>
+<div class="demo__video-wrap" data-demo-video hidden>
+  <iframe src="https://www.youtube.com/embed/FREE_ACCOUNT_VIDEO_ID?rel=0&modestbranding=1" ...></iframe>
+</div>
 
-### Option C: Both (best UX)
+<!-- AFTER (placeholder removed, iframe unhidden, real ID pasted) -->
+<div class="demo__video-wrap" data-demo-video>
+  <iframe src="https://www.youtube.com/embed/AbCd1234XYZ?rel=0&modestbranding=1" ...></iframe>
+</div>
+```
 
-Use Option A as the default with a "Watch on YouTube" link as a fallback for users on metered connections.
+Steps:
 
-## Recommended video specs
+1. Upload the recording to YouTube (unlisted is fine — no need to publish publicly).
+2. Copy the video ID from the URL `youtube.com/watch?v=XXXXXXXX`.
+3. In `index.html`, find the slot (search for `FREE_ACCOUNT_VIDEO_ID` or
+   `PAID_ACCOUNT_VIDEO_ID`).
+4. Replace the `FREE_ACCOUNT_VIDEO_ID` / `PAID_ACCOUNT_VIDEO_ID` in the iframe
+   `src` with the real ID.
+5. Delete the entire `.demo__placeholder` block above that iframe.
+6. Remove the `hidden` attribute from the iframe's parent `.demo__video-wrap`.
 
-| Spec | Value |
-|---|---|
-| Resolution | 1920×1080 (1080p) |
-| Aspect ratio | 16:9 |
-| Codec | H.264 (universal) or H.265 (smaller) |
-| Bitrate | 5-8 Mbps (good balance) |
-| Audio | AAC, 128-192 kbps |
-| Length | 2-3 minutes (sweet spot for social) |
-| File size | Aim for under 50 MB |
+## Per-site recording tips
 
-## Script + shot list
+- **Length**: target ~10 minutes per recording; aim for a clear end-to-end
+  walkthrough of one user journey, not a feature tour.
+- **Audio**: the product requires audio (Whisper transcription). Include
+  narration in the recording, or pair it with a clear voiceover.
+- **Aspect**: 16:9, 1080p is fine. The `.demo__player` container auto-scales.
+- **Branding**: open CapySmart with a clean account and a real-feeling course
+  (Andrew Ng, 3Blue1Brown, etc.) — familiar content is more compelling.
+- **Privacy**: hide any personal data — use generic course names, a free Gmail
+  account for sign-in if needed, and blur or skip any screens with real emails.
 
-See [`../../../doc/marketing/video-demo-script.md`](../../../doc/marketing/video-demo-script.md)
-for the full voiceover script, shot list, and cut-down versions for each platform.
+## Optional: self-host the MP4 instead
+
+If you'd rather host the MP4 yourself (no YouTube dependency), the page has
+no MP4 slot — you'd need to add a `<video>` element in place of each
+`.demo__placeholder` block. The CSS already styles `.demo__player` for this:
+
+```css
+.demo__player video { width: 100%; height: auto; display: block; aspect-ratio: 16/9; background: #000; }
+```
+
+Drop the MP4s into this folder (`assets/video/`) and reference them as
+`assets/video/demo-free.mp4` / `assets/video/demo-paid.mp4`.
