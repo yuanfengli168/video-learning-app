@@ -279,22 +279,13 @@
             <p class="demo__slot-sub">Upload your own videos — up to 1 GB per file, 25 GB of storage included — and generate materials for any lecture, with full tutor chat.</p>
           </div>
           <div class="demo__player">
-            <!-- Demo video is pending — once uploaded to YouTube, paste the real
-                 video ID (from youtube.com/watch?v=XXXXXXXX) over
-                 PAID_ACCOUNT_VIDEO_ID in the iframe src below. Unlisted is fine. -->
-            <div class="demo__placeholder" role="img" aria-label="Paid-account demo video coming soon">
-              <div class="demo__placeholder-inner">
-                <div class="demo__play" aria-hidden="true">▶</div>
-                <div class="demo__placeholder-title">Paid-account demo</div>
-                <p class="demo__placeholder-sub">Recording pending · 10-minute walkthrough</p>
-              </div>
-            </div>
-            <div class="demo__video-wrap" data-demo-video hidden>
+            <div class="demo__video-wrap" data-demo-video>
               <iframe
-                src="https://www.youtube.com/embed/PAID_ACCOUNT_VIDEO_ID?rel=0&modestbranding=1"
+                src="https://www.youtube.com/embed/VemUDOucZz4?rel=0&modestbranding=1"
                 title="CapySmart paid-account demo"
                 frameborder="0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerpolicy="strict-origin-when-cross-origin"
                 allowfullscreen
                 loading="lazy"></iframe>
             </div>
