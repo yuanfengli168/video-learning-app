@@ -1,7 +1,6 @@
 """Tests for videos router — upload, transcribe, get."""
 
 import io
-import uuid as uuid_module
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -25,35 +24,16 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _park_retryable(video_id: str) -> None:
-    """2026-09-21 (re-run guards): park a just-uploaded video at
-    'error' so manual transcribe/generate calls reach the endpoint
-    under test (the guard 409s freshly-queued uploads — working as
-    designed). These tests exercise the retry path, whose semantic
-    home is exactly this park."""
-    from sqlalchemy import text
-    from app.database import SessionLocal
-    with SessionLocal() as db:
-        db.execute(text("UPDATE videos SET status='error' WHERE id=:v"),
-                   {"v": video_id})
-        db.commit()
-
-
-def _create_course_and_section(paid_client: TestClient):
-    """Helper: create a course and section, return (course_id, section_id).
-
-    The caller is responsible for passing a client authenticated as
-    PAID+ (e.g. paid_client / admin_client), since course creation
-    requires the MANAGE_OWN_COURSE capability (MVP2.1.0.4).
-    """
+def _create_course_and_section(client: TestClient):
+    """Helper: create a course and section, return (course_id, section_id)."""
     with _mock_auth():
-        course_resp = paid_client.post(
+        course_resp = client.post(
             "/api/courses",
             json={"title": "ML"},
             headers=_auth_headers(),
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = paid_client.post(
+        section_resp = client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
@@ -62,9 +42,9 @@ def _create_course_and_section(paid_client: TestClient):
     return course_id, section_id
 
 
-def test_list_whisper_models(paid_client: TestClient):
+def test_list_whisper_models(client: TestClient):
     """/api/videos/models should return available models."""
-    response = paid_client.get("/api/videos/models")
+    response = client.get("/api/videos/models")
     assert response.status_code == 200
     models = response.json()["models"]
     assert "base" in models
@@ -72,13 +52,13 @@ def test_list_whisper_models(paid_client: TestClient):
     assert "medium" in models
 
 
-def test_upload_video(paid_client: TestClient):
+def test_upload_video(client: TestClient):
     """Should upload a video file and queue auto-processing (MVP2.0 #1)."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("test.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
@@ -89,13 +69,13 @@ def test_upload_video(paid_client: TestClient):
     assert response.json()["auto_process"] is True
 
 
-def test_upload_invalid_extension(paid_client: TestClient):
+def test_upload_invalid_extension(client: TestClient):
     """Should reject non-video files."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
 
     fake_file = io.BytesIO(b"text content")
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("document.txt", fake_file, "text/plain")},
             headers=_auth_headers(),
@@ -104,11 +84,11 @@ def test_upload_invalid_extension(paid_client: TestClient):
     assert "not allowed" in response.json()["detail"]
 
 
-def test_upload_to_nonexistent_section(paid_client: TestClient):
+def test_upload_to_nonexistent_section(client: TestClient):
     """Should return 404 for non-existent section."""
     fake_video = io.BytesIO(b"fake")
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             "/api/videos/upload/nonexistent-section",
             files={"file": ("test.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
@@ -116,19 +96,19 @@ def test_upload_to_nonexistent_section(paid_client: TestClient):
     assert response.status_code == 404
 
 
-def test_get_video(paid_client: TestClient):
+def test_get_video(client: TestClient):
     """Should get video details."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = paid_client.get(
+        response = client.get(
             f"/api/videos/{video_id}", headers=_auth_headers()
         )
     assert response.status_code == 200
@@ -138,28 +118,27 @@ def test_get_video(paid_client: TestClient):
     assert data["has_transcript"] is False
 
 
-def test_get_video_not_found(paid_client: TestClient):
+def test_get_video_not_found(client: TestClient):
     """Should return 404 for non-existent video."""
     with _mock_auth():
-        response = paid_client.get(
+        response = client.get(
             "/api/videos/nonexistent", headers=_auth_headers()
         )
     assert response.status_code == 404
 
 
-def test_transcribe_video(paid_client: TestClient):
+def test_transcribe_video(client: TestClient):
     """Should kick off transcription and return 202 Accepted with a job."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        _park_retryable(video_id)
 
         # Mock the background worker so we don't need real Whisper.
         # The worker writes the transcript asset + sets video status,
@@ -195,7 +174,7 @@ def test_transcribe_video(paid_client: TestClient):
             "app.routers.videos._run_transcribe_job",
             side_effect=fake_worker,
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers=_auth_headers(),
             )
@@ -207,7 +186,7 @@ def test_transcribe_video(paid_client: TestClient):
     assert data["job"]["job_type"] == "transcribe"
     # Once the (mocked) worker ran, the transcript is queryable.
     with _mock_auth():
-        get_resp = paid_client.get(
+        get_resp = client.get(
             f"/api/videos/{video_id}/transcript", headers=_auth_headers()
         )
     assert get_resp.status_code == 200
@@ -217,19 +196,18 @@ def test_transcribe_video(paid_client: TestClient):
     assert get_resp.json()["language"] == "en"
 
 
-def test_get_transcript(paid_client: TestClient):
+def test_get_transcript(client: TestClient):
     """Should get the transcript after the (mocked) transcribe worker ran."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        _park_retryable(video_id)
 
         fake_transcript = {
             "segments": [{"start": 0.0, "end": 2.0, "text": "Hello world"}],
@@ -260,13 +238,13 @@ def test_get_transcript(paid_client: TestClient):
             "app.routers.videos._run_transcribe_job",
             side_effect=fake_worker,
         ):
-            paid_client.post(
+            client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers=_auth_headers(),
             )
 
         # Now get the transcript
-        response = paid_client.get(
+        response = client.get(
             f"/api/videos/{video_id}/transcript", headers=_auth_headers()
         )
     assert response.status_code == 200
@@ -276,19 +254,19 @@ def test_get_transcript(paid_client: TestClient):
     assert data["segments"][0]["text"] == "Hello world"
 
 
-def test_get_transcript_not_found(paid_client: TestClient):
+def test_get_transcript_not_found(client: TestClient):
     """Should return 404 if no transcript exists."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        response = paid_client.get(
+        response = client.get(
             f"/api/videos/{video_id}/transcript", headers=_auth_headers()
         )
     assert response.status_code == 404
@@ -297,7 +275,7 @@ def test_get_transcript_not_found(paid_client: TestClient):
 # ── MVP2.0 export endpoint ─────────────────────────────────────────────────
 
 def _create_video_with_transcript(
-    paid_client: TestClient,
+    client: TestClient,
     title: str = "My Lecture",
     segments: list[dict] | None = None,
 ) -> str:
@@ -306,7 +284,7 @@ def _create_video_with_transcript(
     The transcript is whatever `segments` is provided (default: one
     short English segment). Saves the test from copy-pasting the
     same fake-worker setup in every export test."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
     if segments is None:
         segments = [{"start": 0.0, "end": 3.0, "text": "Hello world"}]
     fake_transcript = {
@@ -316,15 +294,12 @@ def _create_video_with_transcript(
     }
 
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": (f"{title}.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        # 2026-09-21 (re-run guards): park at 'error' before the
-        # transcribe call below (freshly-queued uploads 409).
-        _park_retryable(video_id)
 
         def fake_worker(vid: str, model: str) -> None:
             from app.services.transcription import transcript_to_json
@@ -341,18 +316,18 @@ def _create_video_with_transcript(
                     db.commit()
 
         with patch("app.routers.videos._run_transcribe_job", side_effect=fake_worker):
-            paid_client.post(
+            client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers=_auth_headers(),
             )
     return video_id
 
 
-def test_export_transcript_md(paid_client: TestClient):
+def test_export_transcript_md(client: TestClient):
     """Default format is md; returns text/markdown + Content-Disposition."""
-    video_id = _create_video_with_transcript(paid_client, title="Math 101")
+    video_id = _create_video_with_transcript(client, title="Math 101")
     with _mock_auth():
-        resp = paid_client.get(
+        resp = client.get(
             f"/api/videos/{video_id}/transcript/export",
             headers=_auth_headers(),
         )
@@ -365,14 +340,14 @@ def test_export_transcript_md(paid_client: TestClient):
     assert "[00:00:00] Hello world" in body
 
 
-def test_export_transcript_json(paid_client: TestClient):
+def test_export_transcript_json(client: TestClient):
     """?format=json returns the raw transcript JSON."""
     video_id = _create_video_with_transcript(
-        paid_client, title="Lecture",
+        client, title="Lecture",
         segments=[{"start": 0, "end": 1, "text": "你好"}],
     )
     with _mock_auth():
-        resp = paid_client.get(
+        resp = client.get(
             f"/api/videos/{video_id}/transcript/export?format=json",
             headers=_auth_headers(),
         )
@@ -386,11 +361,11 @@ def test_export_transcript_json(paid_client: TestClient):
     assert parsed["segments"][0]["text"] == "你好"
 
 
-def test_export_transcript_txt(paid_client: TestClient):
+def test_export_transcript_txt(client: TestClient):
     """?format=txt returns plain text, no markdown."""
-    video_id = _create_video_with_transcript(paid_client, title="Plain")
+    video_id = _create_video_with_transcript(client, title="Plain")
     with _mock_auth():
-        resp = paid_client.get(
+        resp = client.get(
             f"/api/videos/{video_id}/transcript/export?format=txt",
             headers=_auth_headers(),
         )
@@ -405,11 +380,11 @@ def test_export_transcript_txt(paid_client: TestClient):
     assert "[00:00:00] Hello world" in body
 
 
-def test_export_transcript_invalid_format(paid_client: TestClient):
+def test_export_transcript_invalid_format(client: TestClient):
     """Invalid format returns 400 with a clear error message."""
-    video_id = _create_video_with_transcript(paid_client)
+    video_id = _create_video_with_transcript(client)
     with _mock_auth():
-        resp = paid_client.get(
+        resp = client.get(
             f"/api/videos/{video_id}/transcript/export?format=docx",
             headers=_auth_headers(),
         )
@@ -417,17 +392,17 @@ def test_export_transcript_invalid_format(paid_client: TestClient):
     assert "Invalid format" in resp.json()["detail"]
 
 
-def test_export_transcript_not_found(paid_client: TestClient):
+def test_export_transcript_not_found(client: TestClient):
     """Returns 404 if no transcript exists for the video yet."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("x.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        resp = paid_client.get(
+        resp = client.get(
             f"/api/videos/{video_id}/transcript/export",
             headers=_auth_headers(),
         )
@@ -435,26 +410,26 @@ def test_export_transcript_not_found(paid_client: TestClient):
     assert "Transcript not found" in resp.json()["detail"]
 
 
-def test_export_transcript_video_not_found(paid_client: TestClient):
+def test_export_transcript_video_not_found(client: TestClient):
     """Returns 404 if the video itself doesn't exist."""
     with _mock_auth():
-        resp = paid_client.get(
+        resp = client.get(
             "/api/videos/nonexistent-id/transcript/export",
             headers=_auth_headers(),
         )
     assert resp.status_code == 404
 
 
-def test_export_transcript_unicode_filename(paid_client: TestClient):
+def test_export_transcript_unicode_filename(client: TestClient):
     """CJK characters in the video title are preserved in the filename.
 
     Uses RFC 5987 `filename*=UTF-8''...` because HTTP headers are
     latin-1. The endpoint sends BOTH the basic filename (ascii-
     replaced) and the UTF-8 form; modern browsers prefer the latter.
     """
-    video_id = _create_video_with_transcript(paid_client, title="中文课程")
+    video_id = _create_video_with_transcript(client, title="中文课程")
     with _mock_auth():
-        resp = paid_client.get(
+        resp = client.get(
             f"/api/videos/{video_id}/transcript/export",
             headers=_auth_headers(),
         )
@@ -468,19 +443,19 @@ def test_export_transcript_unicode_filename(paid_client: TestClient):
     assert unquote(quoted) == "中文课程.md"
 
 
-def test_export_transcript_sanitizes_unsafe_chars(paid_client: TestClient):
+def test_export_transcript_sanitizes_unsafe_chars(client: TestClient):
     """Characters that are reserved on at least one OS (/, \\, :) are
     replaced with `-` in the filename so the download works on
     Windows too."""
     # Upload with a title containing forward slash
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
     with _mock_auth():
         # Use upload_video's title which is derived from filename
         # (Path(file.filename).stem), so we can craft one with a slash
         # — but file upload likely doesn't allow it. Instead, edit
         # the DB directly to put a slash in the title (real users
         # may have titles imported from elsewhere with / or \).
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("x.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
@@ -496,7 +471,7 @@ def test_export_transcript_sanitizes_unsafe_chars(paid_client: TestClient):
                 content='{"segments": [], "language": "en", "duration": 0}',
             ))
             db.commit()
-        resp = paid_client.get(
+        resp = client.get(
             f"/api/videos/{video_id}/transcript/export",
             headers=_auth_headers(),
         )
@@ -513,237 +488,37 @@ def test_export_transcript_sanitizes_unsafe_chars(paid_client: TestClient):
     assert unquote(quoted) == "bad-name-here-test.md"
 
 
-def test_transcribe_invalid_model(paid_client: TestClient):
+def test_transcribe_invalid_model(client: TestClient):
     """Should return 400 for invalid model name."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        _park_retryable(video_id)
-        response = paid_client.post(
+        response = client.post(
             f"/api/videos/{video_id}/transcribe?model_name=nonexistent",
             headers=_auth_headers(),
         )
     assert response.status_code == 400
 
 
-def test_transcribe_free_user_gets_403(paid_client: TestClient):
-    """Regression for Day-13 catalog-curation bug.
-
-    POST /api/videos/{id}/transcribe was previously gated only by
-    `get_current_user`, so any signed-in FREE user could re-run
-    whisper on a catalog video — same blast radius as regenerating
-    materials (transcribe chains into generate). Now gated on
-    REGEN_MATERIALS; FREE users must upgrade.
-
-    We use `paid_client` to set up the course + section + video
-    (course creation requires MANAGE_OWN_COURSE), then patch
-    verify_token to return a FREE-role uid and hit the transcribe
-    endpoint — it should return 403.
-    """
-    course_id, section_id = _create_course_and_section(paid_client)
-    fake_video = io.BytesIO(b"fake video content")
-    with _mock_auth():
-        upload_resp = paid_client.post(
-            f"/api/videos/upload/{section_id}",
-            files={"file": ("lecture.mp4", fake_video, "video/mp4")},
-            headers=_auth_headers(),
-        )
-    video_id = upload_resp.json()["video_id"]
-
-    # Now hit /transcribe as a FREE user. Force role=2 (FREE) in the
-    # users table so capabilities_for_role returns the FREE set.
-    from sqlalchemy import text
-    from app.auth.admin import clear_role_cache
-    with paid_client:
-        from app.database import SessionLocal
-        with SessionLocal() as db:
-            db.execute(
-                text("UPDATE users SET role=2 WHERE user_id=:uid"),
-                {"uid": "test-user-uid"},
-            )
-            db.commit()
-        clear_role_cache()
-
-        with patch(
-            "app.auth.dependencies.verify_token",
-            return_value={"uid": "test-user-uid", "email": "free@test.com"},
-        ):
-            response = paid_client.post(
-                f"/api/videos/{video_id}/transcribe?model_name=base",
-                headers=_auth_headers(),
-            )
-    assert response.status_code == 403, (
-        f"FREE user should be blocked from transcribing; got {response.status_code}: "
-        f"{response.text[:200]}"
-    )
-
-
-def test_transcribe_paid_on_others_video_gets_403(paid_client: TestClient, admin_client: TestClient):
-    """PAID users can re-transcribe videos they OWN, but NOT catalog
-    videos owned by another user (admin).
-
-    Day-13 update: previously PAID could transcribe any video (the
-    REGEN_MATERIALS capability alone was the gate). Now ownership
-    matters too — a PAID user with the 'jackyopenclaw' uid can regen
-    their own uploads, but NOT admin's catalog videos.
-
-    We use admin_client (different uid, role=0) to create the catalog
-    video, then patch verify_token to simulate the PAID user ('test-user-uid',
-    role=1) trying to transcribe it.
-    """
-    # Admin creates their own course + section + video via the API.
-    # admin_client fixture sets the auth to a different uid than paid_client,
-    # so the resulting course is owned by a different user.
-    ADMIN_UID = "uid-admin"  # admin_client fixture's uid
-
-    # Force the admin_client to use a specific different uid for clarity.
-    # The paid_client fixture uses 'test-user-uid' (PAID), and the
-    # admin_client fixture uses 'uid-admin' (ADMIN) — see conftest._TEST_UIDS.
-    # These are different, so ownership will differ.
-
-    with _mock_auth():  # default FAKE_USER = test-user-uid — wait, we need admin uid
-        pass
-
-    # We need a NEW mock auth for the admin client. Patch verify_token
-    # to return admin uid for the admin_client's requests.
-    ADMIN_FAKE = {"uid": ADMIN_UID, "email": "admin@test.com"}
-    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
-        # Create admin's course
-        course_resp = admin_client.post(
-            "/api/courses",
-            json={"title": "Admin Catalog Test"},
-            headers=_auth_headers(),
-        )
-        assert course_resp.status_code == 200, course_resp.text
-        admin_course_id = course_resp.json()["course_id"]
-        # Create admin's section
-        section_resp = admin_client.post(
-            f"/api/courses/{admin_course_id}/sections",
-            json={"title": "Catalog"},
-            headers=_auth_headers(),
-        )
-        admin_section_id = section_resp.json()["section_id"]
-        # Upload admin's video
-        upload_resp = admin_client.post(
-            f"/api/videos/upload/{admin_section_id}",
-            files={"file": ("admin_vid.mp4", io.BytesIO(b"x"), "video/mp4")},
-            headers=_auth_headers(),
-        )
-        assert upload_resp.status_code == 202, upload_resp.text
-        admin_video_id = upload_resp.json()["video_id"]
-
-    # Now PAID user (paid_client fixture, uid='test-user-uid') tries to
-    # transcribe admin's video. The default _mock_auth returns PAID's uid.
-    with _mock_auth():
-        response = paid_client.post(
-            f"/api/videos/{admin_video_id}/transcribe?model_name=base",
-            headers=_auth_headers(),
-        )
-    assert response.status_code == 403, (
-        f"PAID user should be blocked from transcribing admin's catalog video; "
-        f"got {response.status_code}: {response.text[:200]}"
-    )
-
-
-def test_transcribe_paid_on_own_video_succeeds(paid_client: TestClient):
-    """PAID users CAN re-transcribe videos they uploaded themselves.
-
-    Companion test to test_transcribe_paid_on_others_video_gets_403.
-    Uses the existing _create_course_and_section helper which creates
-    a course owned by 'test-user-uid' (the PAID fixture user).
-    """
-    course_id, section_id = _create_course_and_section(paid_client)
-    fake_video = io.BytesIO(b"fake video content")
-    with _mock_auth():
-        upload_resp = paid_client.post(
-            f"/api/videos/upload/{section_id}",
-            files={"file": ("owned.mp4", fake_video, "video/mp4")},
-            headers=_auth_headers(),
-        )
-    video_id = upload_resp.json()["video_id"]
-    _park_retryable(video_id)
-
-    # Mock the worker (it's a BackgroundTask that would otherwise block).
-    with patch(
-        "app.routers.videos._run_transcribe_job",
-    ):
-        with _mock_auth():
-            response = paid_client.post(
-                f"/api/videos/{video_id}/transcribe?model_name=base",
-                headers=_auth_headers(),
-            )
-    assert response.status_code == 202, (
-        f"PAID user should be able to transcribe their OWN video; "
-        f"got {response.status_code}: {response.text[:200]}"
-    )
-
-
-def test_transcribe_admin_can_transcribe_any_video(paid_client: TestClient, admin_client: TestClient):
-    """ADMIN can transcribe any video regardless of owner.
-
-    Day-13 update: ADMIN is the curator of catalog videos. They must be
-    able to fix/re-transcribe their own catalog entries from the UI.
-    Companion to test_transcribe_paid_on_others_video_gets_403.
-    """
-    ADMIN_UID = "uid-admin"
-    ADMIN_FAKE = {"uid": ADMIN_UID, "email": "admin@test.com"}
-
-    # Create admin's catalog video via the API
-    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
-        course_resp = admin_client.post(
-            "/api/courses",
-            json={"title": "Admin Catalog"},
-            headers=_auth_headers(),
-        )
-        admin_course_id = course_resp.json()["course_id"]
-        section_resp = admin_client.post(
-            f"/api/courses/{admin_course_id}/sections",
-            json={"title": "Catalog"},
-            headers=_auth_headers(),
-        )
-        admin_section_id = section_resp.json()["section_id"]
-        upload_resp = admin_client.post(
-            f"/api/videos/upload/{admin_section_id}",
-            files={"file": ("admin_vid.mp4", io.BytesIO(b"x"), "video/mp4")},
-            headers=_auth_headers(),
-        )
-        admin_video_id = upload_resp.json()["video_id"]
-        _park_retryable(admin_video_id)
-
-    # Now hit /transcribe as ADMIN (admin_client fixture, but we need to
-    # re-mock verify_token so admin_client requests return ADMIN_FAKE).
-    with patch("app.auth.dependencies.verify_token", return_value=ADMIN_FAKE):
-        with patch("app.routers.videos._run_transcribe_job"):
-            response = admin_client.post(
-                f"/api/videos/{admin_video_id}/transcribe?model_name=base",
-                headers=_auth_headers(),
-            )
-    assert response.status_code == 202, (
-        f"ADMIN should be able to transcribe any video (own or otherwise); "
-        f"got {response.status_code}: {response.text[:200]}"
-    )
-
-
-def test_transcribe_failure_sets_error_status(paid_client: TestClient):
+def test_transcribe_failure_sets_error_status(client: TestClient):
     """Should set video status to 'error' if the background transcription fails."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     fake_video = io.BytesIO(b"fake video content")
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
-        _park_retryable(video_id)
 
         def fake_worker_raises(vid: str, model: str) -> None:
             # Simulate the worker catching an exception from
@@ -764,7 +539,7 @@ def test_transcribe_failure_sets_error_status(paid_client: TestClient):
             "app.routers.videos._run_transcribe_job",
             side_effect=fake_worker_raises,
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/videos/{video_id}/transcribe?model_name=base",
                 headers=_auth_headers(),
             )
@@ -773,7 +548,7 @@ def test_transcribe_failure_sets_error_status(paid_client: TestClient):
 
     # Verify the (mocked) worker marked the video as 'error'.
     with _mock_auth():
-        get_resp = paid_client.get(
+        get_resp = client.get(
             f"/api/videos/{video_id}", headers=_auth_headers()
         )
     assert get_resp.json()["status"] == "error"
@@ -781,12 +556,12 @@ def test_transcribe_failure_sets_error_status(paid_client: TestClient):
 
 # ── MVP2.0 #1 — Auto-pipeline tests ──────────────────────────────────────────
 
-def test_upload_returns_202_and_queued_status(paid_client: TestClient):
+def test_upload_returns_202_and_queued_status(client: TestClient):
     """Upload endpoint returns 202 + status 'queued' + auto_process=True."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     fake = io.BytesIO(b"fake video content")
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("v.mp4", fake, "video/mp4")},
             headers=_auth_headers(),
@@ -798,14 +573,14 @@ def test_upload_returns_202_and_queued_status(paid_client: TestClient):
     assert "video_id" in data
 
 
-def test_upload_creates_transcribe_job_immediately(paid_client: TestClient):
+def test_upload_creates_transcribe_job_immediately(client: TestClient):
     """The transcribe job tracker is started at upload time, before the
     background task runs, so the UI can poll /status right away."""
     from app.jobs import get_job
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     fake = io.BytesIO(b"fake")
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("v.mp4", fake, "video/mp4")},
             headers=_auth_headers(),
@@ -816,9 +591,9 @@ def test_upload_creates_transcribe_job_immediately(paid_client: TestClient):
     assert job["status"] == "running"  # queued state appears as "running" initially
 
 
-def test_auto_pipeline_chains_transcribe_then_generate(paid_client: TestClient):
+def test_auto_pipeline_chains_transcribe_then_generate(client: TestClient):
     """_run_auto_pipeline calls transcribe then generate in order."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     called_order: list[str] = []
 
     def fake_transcribe(vid: str, model: str) -> None:
@@ -846,13 +621,13 @@ def test_auto_pipeline_chains_transcribe_then_generate(paid_client: TestClient):
                 db.commit()
         called_order.append("transcribe")
 
-    def fake_generate(vid: str, uid: str = "", role: int = 2) -> None:
+    def fake_generate(vid: str) -> None:
         called_order.append("generate")
 
     # Upload (no_auto_pipeline autouse fixture suppresses the background call)
     fake = io.BytesIO(b"fake")
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("v.mp4", fake, "video/mp4")},
             headers=_auth_headers(),
@@ -872,9 +647,9 @@ def test_auto_pipeline_chains_transcribe_then_generate(paid_client: TestClient):
     )
 
 
-def test_auto_pipeline_skips_generate_if_transcription_fails(paid_client: TestClient):
+def test_auto_pipeline_skips_generate_if_transcription_fails(client: TestClient):
     """If transcription fails, generation must NOT be called."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     generate_called = []
 
     def fake_transcribe_fail(vid: str, model: str) -> None:
@@ -890,12 +665,12 @@ def test_auto_pipeline_skips_generate_if_transcription_fails(paid_client: TestCl
                 v.status = "error"
                 db.commit()
 
-    def fake_generate(vid: str, uid: str = "", role: int = 2) -> None:
+    def fake_generate(vid: str) -> None:
         generate_called.append(vid)
 
     fake = io.BytesIO(b"fake")
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("v.mp4", fake, "video/mp4")},
             headers=_auth_headers(),
@@ -911,85 +686,17 @@ def test_auto_pipeline_skips_generate_if_transcription_fails(paid_client: TestCl
     assert generate_called == [], "generate must NOT be called when transcription fails"
 
 
-def test_auto_pipeline_passes_uid_and_role_to_generate_worker(
-    paid_client: TestClient,
-):
-    """Regression for Day-12 catalog-curation bug.
-
-    _run_auto_pipeline() used to call:
-        _run_generate_job(video_id)
-    while the real signature is (video_id, user_id, user_role).
-    The auto-pipeline runs as a BackgroundTask, so the TypeError
-    was swallowed silently — the video stayed at status='generating'
-    and no LLM call was ever made. The previous test stubs only
-    took 1 arg, so CI never noticed.
-
-    This test asserts the auto-pipeline looks up the owner's uid and
-    role from the DB and passes them through.
-    """
-    course_id, section_id = _create_course_and_section(paid_client)
-    fake = io.BytesIO(b"fake")
-    with _mock_auth():
-        resp = paid_client.post(
-            f"/api/videos/upload/{section_id}",
-            files={"file": ("v.mp4", fake, "video/mp4")},
-            headers=_auth_headers(),
-        )
-    video_id = resp.json()["video_id"]
-
-    def fake_transcribe(vid: str, model: str) -> None:
-        from app.jobs import get_job, finish_job
-        from app.database import SessionLocal
-        from app.models import Asset, Video
-        from app.services.transcription import transcript_to_json
-        job = get_job(vid, "transcribe")
-        if job:
-            finish_job(job, status="completed")
-        with SessionLocal() as db:
-            v = db.get(Video, vid)
-            if v:
-                v.status = "ready"
-                db.add(Asset(
-                    video_id=vid,
-                    asset_type="transcript",
-                    content=transcript_to_json({
-                        "segments": [{"start": 0.0, "end": 1.0, "text": "Hi"}],
-                        "language": "en",
-                        "duration": 1.0,
-                    }),
-                ))
-                db.commit()
-
-    with (
-        patch("app.routers.videos._run_transcribe_job", side_effect=fake_transcribe),
-        patch("app.routers.generation._run_generate_job") as mock_generate,
-    ):
-        _REAL_RUN_AUTO_PIPELINE(video_id, "base")
-
-    assert mock_generate.call_count == 1
-    args, _kwargs = mock_generate.call_args
-    assert len(args) == 3, (
-        f"_run_generate_job must be called with (video_id, user_id, user_role); "
-        f"got args={args!r}"
-    )
-    # First arg is the video id; second must be the course owner's uid;
-    # third must be the owner's role (an int).
-    assert args[0] == video_id
-    assert args[1] == "test-user-uid"  # FAKE_USER uid
-    assert isinstance(args[2], int)
-
-
 # ── MVP2.0 #3 — Bulk upload tests ─────────────────────────────────────────────
 
-def test_upload_bulk_queues_all_valid_files(paid_client: TestClient):
+def test_upload_bulk_queues_all_valid_files(client: TestClient):
     """Bulk endpoint queues all valid files and returns per-file results."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     files = [
         ("files", ("a.mp4", io.BytesIO(b"v1"), "video/mp4")),
         ("files", ("b.webm", io.BytesIO(b"v2"), "video/webm")),
     ]
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload-bulk/{section_id}",
             files=files,
             headers=_auth_headers(),
@@ -1005,15 +712,15 @@ def test_upload_bulk_queues_all_valid_files(paid_client: TestClient):
     assert len(set(video_ids)) == 2  # each file got a unique video_id
 
 
-def test_upload_bulk_skips_invalid_extension(paid_client: TestClient):
+def test_upload_bulk_skips_invalid_extension(client: TestClient):
     """Bulk endpoint skips files with disallowed extensions."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     files = [
         ("files", ("video.mp4", io.BytesIO(b"v"), "video/mp4")),
         ("files", ("doc.pdf", io.BytesIO(b"d"), "application/pdf")),
     ]
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload-bulk/{section_id}",
             files=files,
             headers=_auth_headers(),
@@ -1027,7 +734,7 @@ def test_upload_bulk_skips_invalid_extension(paid_client: TestClient):
     assert "not allowed" in skipped[0]["error"]
 
 
-def test_upload_bulk_skips_file_exceeding_10gb(paid_client: TestClient):
+def test_upload_bulk_skips_file_exceeding_10gb(client: TestClient):
     """Bulk endpoint skips a file that exceeds the 10 GB cap.
 
     MVP3.0 item #1: cap was 2 GB, raised to 10 GB ([jul11] #3).
@@ -1035,7 +742,7 @@ def test_upload_bulk_skips_file_exceeding_10gb(paid_client: TestClient):
     10 GB+1 in memory.
     """
     import os
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
 
     def fake_getsize(path: str) -> int:
         # Make every file appear larger than 10 GB
@@ -1049,7 +756,7 @@ def test_upload_bulk_skips_file_exceeding_10gb(paid_client: TestClient):
         patch("app.routers.videos.os.path.getsize", side_effect=fake_getsize),
         _mock_auth(),
     ):
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload-bulk/{section_id}",
             files=files,
             headers=_auth_headers(),
@@ -1060,76 +767,67 @@ def test_upload_bulk_skips_file_exceeding_10gb(paid_client: TestClient):
     assert data["skipped"] == 2
     for r in data["results"]:
         assert r["status"] == "skipped"
-        # 13a: the tier message (registry §1 wording) fires first
-        assert "your plan allows" in r["error"]
+        assert "too large" in r["error"]
 
 
-def test_upload_accepts_exactly_10gb_file(paid_client: TestClient):
-    """An ADMIN user's file at 10 GB must be accepted (their tier is 20GB).
+def test_upload_accepts_exactly_10gb_file(client: TestClient):
+    """A file of exactly 10 GB must be accepted (the cap is inclusive).
 
-    2026-09-21 (13a): the tier resolver fires BEFORE the platform cap.
-    For an admin (20GB tier), a 10GB file passes the tier check and
-    then the direct-path platform check (10GB inclusive).
+    MVP3.0 item #1: user said '10 GB inclusive'. The check is
+    `file_size > MAX_FILE_SIZE`, so 10 GB == cap is OK and 10 GB + 1
+    byte is rejected. We mock getsize for both single + bulk paths.
     """
     import os
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
-    from sqlalchemy import text as _text
-    from app.database import SessionLocal
-
+    # ── Single upload at exactly 10 GB — should succeed ──
     with _mock_auth():
-        # Promote the test user to ADMIN (role=0) so their tier limit
-        # is 20GB — the 10GB file fits both the tier and platform caps.
-        with SessionLocal() as s:
-            s.execute(_text(
-                "UPDATE users SET role=0 WHERE user_id='test-user-uid'"
-            ))
-            s.commit()
-        from app.auth.admin import clear_role_cache
-        clear_role_cache()
+        # First check current cap value
+        from app.routers.videos import MAX_FILE_SIZE
+        assert MAX_FILE_SIZE == 10 * 1024 ** 3, (
+            f"cap should be 10 GB, got {MAX_FILE_SIZE / (1024**3)} GB"
+        )
 
         with patch(
             "app.routers.videos.os.path.getsize",
             return_value=10 * 1024 ** 3,
         ):
-            resp = paid_client.post(
+            resp = client.post(
                 f"/api/videos/upload/{section_id}",
                 files={"file": ("exact10gb.mp4", io.BytesIO(b"x"), "video/mp4")},
                 headers=_auth_headers(),
             )
-        assert resp.status_code == 202, f"10 GB (admin tier) should be accepted, got {resp.status_code}: {resp.text}"
+        assert resp.status_code == 202, f"10 GB should be accepted, got {resp.status_code}: {resp.text}"
 
 
-def test_upload_rejects_just_over_10gb_file(paid_client: TestClient):
+def test_upload_rejects_just_over_10gb_file(client: TestClient):
     """A file of 10 GB + 1 byte must be rejected.
 
     MVP3.0 item #1: cap is strictly inclusive at 10 GB. Any file
     bigger must return 413 (Payload Too Large). We also assert the
     error message reflects the new 10 GB cap, not the old 2 GB.
     """
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
 
     with _mock_auth():
         with patch(
             "app.routers.videos.os.path.getsize",
             return_value=10 * 1024 ** 3 + 1,
         ):
-            resp = paid_client.post(
+            resp = client.post(
                 f"/api/videos/upload/{section_id}",
                 files={"file": ("over10gb.mp4", io.BytesIO(b"x"), "video/mp4")},
                 headers=_auth_headers(),
             )
     assert resp.status_code == 413, f"10 GB + 1 byte should be rejected, got {resp.status_code}: {resp.text}"
     detail = resp.json()["detail"]
-    # 13a: the TIER message names the user's OWN limit (the actionable
-    # number), not the old platform 10GB message
-    assert "your plan allows up to 1.0 GB" in detail, f"error should name the tier limit, got: {detail}"
+    assert "10 GB" in detail, f"error message should mention 10 GB, got: {detail}"
 
 
-def test_upload_bulk_partial_success(paid_client: TestClient):
+def test_upload_bulk_partial_success(client: TestClient):
     """One valid file + one over-limit file: partial success."""
     import os
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     call_count = [0]
 
     def size_side_effect(path: str) -> int:
@@ -1145,7 +843,7 @@ def test_upload_bulk_partial_success(paid_client: TestClient):
         patch("app.routers.videos.os.path.getsize", side_effect=size_side_effect),
         _mock_auth(),
     ):
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload-bulk/{section_id}",
             files=files,
             headers=_auth_headers(),
@@ -1159,11 +857,11 @@ def test_upload_bulk_partial_success(paid_client: TestClient):
     assert skipped[0]["filename"] == "huge.mp4"
 
 
-def test_upload_bulk_wrong_section(paid_client: TestClient):
+def test_upload_bulk_wrong_section(client: TestClient):
     """Bulk endpoint returns 404 for non-existent section."""
     files = [("files", ("v.mp4", io.BytesIO(b"x"), "video/mp4"))]
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             "/api/videos/upload-bulk/nonexistent-section",
             files=files,
             headers=_auth_headers(),
@@ -1171,11 +869,11 @@ def test_upload_bulk_wrong_section(paid_client: TestClient):
     assert resp.status_code == 404
 
 
-def test_upload_bulk_empty_files(paid_client: TestClient):
+def test_upload_bulk_empty_files(client: TestClient):
     """Bulk endpoint returns 400 when no files are provided."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload-bulk/{section_id}",
             files=[],
             headers=_auth_headers(),
@@ -1189,13 +887,13 @@ def test_upload_bulk_empty_files(paid_client: TestClient):
 # because Whisper can't decode empty audio. The old code only checked the
 # UPPER bound (file_size > MAX_FILE_SIZE) — never the LOWER bound.
 
-def test_upload_rejects_zero_byte_file(paid_client: TestClient):
+def test_upload_rejects_zero_byte_file(client: TestClient):
     """Single upload of a 0-byte file is rejected with 400."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
 
     fake_file = io.BytesIO(b"")  # 0 bytes
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("video.mp4", fake_file, "video/mp4")},
             headers=_auth_headers(),
@@ -1204,16 +902,16 @@ def test_upload_rejects_zero_byte_file(paid_client: TestClient):
     assert "empty" in response.json()["detail"].lower()
 
 
-def test_upload_zero_byte_does_not_create_db_row(paid_client: TestClient):
+def test_upload_zero_byte_does_not_create_db_row(client: TestClient):
     """When upload is rejected, no Video row is created and no file
     remains on disk."""
     import os
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     uploads_before = set(os.listdir("uploads/")) if os.path.exists("uploads/") else set()
 
     fake_file = io.BytesIO(b"")
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("video.mp4", fake_file, "video/mp4")},
             headers=_auth_headers(),
@@ -1227,17 +925,17 @@ def test_upload_zero_byte_does_not_create_db_row(paid_client: TestClient):
     assert not any(f.endswith(".mp4") for f in new_files), f"unexpected new files: {new_files}"
 
 
-def test_upload_bulk_skips_zero_byte_file(paid_client: TestClient):
+def test_upload_bulk_skips_zero_byte_file(client: TestClient):
     """Bulk upload: a 0-byte file is reported as 'skipped' with a clear
     error message. Other files in the batch continue processing."""
-    _, section_id = _create_course_and_section(paid_client)
+    _, section_id = _create_course_and_section(client)
     files = [
         ("files", ("good.mp4", io.BytesIO(b"v"), "video/mp4")),
         ("files", ("empty.webm", io.BytesIO(b""), "video/webm")),
         ("files", ("also_good.mp4", io.BytesIO(b"w"), "video/mp4")),
     ]
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             f"/api/videos/upload-bulk/{section_id}",
             files=files,
             headers=_auth_headers(),
@@ -1290,7 +988,7 @@ def test_upload_route_registered_before_transcribe_route():
         f"must be declared BEFORE /{{video_id}}/transcribe (index {transcribe_idx})."
     )
 
-def test_export_transcript_collapses_underscore_runs(paid_client: TestClient):
+def test_export_transcript_collapses_underscore_runs(client: TestClient):
     """Bilibili (and some other downloaders) auto-rename files with
     long underscore runs like `1.-Foo_______-10-07-2026.mp4`. The
     export filename should collapse those into single spaces so
@@ -1301,9 +999,9 @@ def test_export_transcript_collapses_underscore_runs(paid_client: TestClient):
     complaint (MVP2.0-Status.md §7). The DB title is NOT
     modified — only the export filename.
     """
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
     with _mock_auth():
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("x.mp4", io.BytesIO(b"x"), "video/mp4")},
             headers=_auth_headers(),
@@ -1321,7 +1019,7 @@ def test_export_transcript_collapses_underscore_runs(paid_client: TestClient):
             db.commit()
         # Try all three formats to be sure
         for fmt, ext in [("md", "md"), ("json", "json"), ("txt", "txt")]:
-            resp = paid_client.get(
+            resp = client.get(
                 f"/api/videos/{video_id}/transcript/export?format={fmt}",
                 headers=_auth_headers(),
             )
@@ -1366,7 +1064,7 @@ def test_export_transcript_collapses_underscore_runs(paid_client: TestClient):
 
 
 def _create_video_with_assets(
-    paid_client: TestClient,
+    client: TestClient,
     section_id: str,
     title: str = "test.mp4",
     with_assets: bool = True,
@@ -1376,7 +1074,7 @@ def _create_video_with_assets(
     for the delete tests. Returns the video_id."""
     with _mock_auth():
         fake_content = b"x" * 1024  # 1 KB so the file is not 0-byte
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": (title, io.BytesIO(fake_content), "video/mp4")},
             headers=_auth_headers(),
@@ -1417,15 +1115,15 @@ def _create_video_with_assets(
     return video_id
 
 
-def test_delete_video_success(paid_client: TestClient):
+def test_delete_video_success(client: TestClient):
     """Should delete the video, return 200 with cascade summary."""
     from pathlib import Path
     from app.database import SessionLocal
     from app.config import settings
 
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
     video_id = _create_video_with_assets(
-        paid_client, section_id, title="to-delete.mp4",
+        client, section_id, title="to-delete.mp4",
         with_assets=True, with_chat=True,
     )
 
@@ -1436,7 +1134,7 @@ def test_delete_video_success(paid_client: TestClient):
         assert Path(v.file_path).exists(), "file should exist before delete"
 
     with _mock_auth():
-        resp = paid_client.delete(
+        resp = client.delete(
             f"/api/videos/{video_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 200
@@ -1468,14 +1166,14 @@ def test_delete_video_success(paid_client: TestClient):
     assert len(files_remaining) == 0, "file should be removed from disk"
 
 
-def test_delete_video_no_assets_no_chat(paid_client: TestClient):
+def test_delete_video_no_assets_no_chat(client: TestClient):
     """A freshly-uploaded video with no assets still deletes cleanly."""
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
     video_id = _create_video_with_assets(
-        paid_client, section_id, with_assets=False, with_chat=False,
+        client, section_id, with_assets=False, with_chat=False,
     )
     with _mock_auth():
-        resp = paid_client.delete(
+        resp = client.delete(
             f"/api/videos/{video_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 200
@@ -1485,23 +1183,23 @@ def test_delete_video_no_assets_no_chat(paid_client: TestClient):
     assert data["deleted"]["chat_sessions"] == 0
 
 
-def test_delete_video_not_found(paid_client: TestClient):
+def test_delete_video_not_found(client: TestClient):
     """Returns 404 for a non-existent video."""
     with _mock_auth():
-        resp = paid_client.delete(
+        resp = client.delete(
             "/api/videos/nonexistent-id", headers=_auth_headers(),
         )
     assert resp.status_code == 404
 
 
-def test_delete_video_wrong_user(paid_client: TestClient):
+def test_delete_video_wrong_user(client: TestClient):
     """Returns 403 if the user doesn't own the course."""
-    course_id, section_id = _create_course_and_section(paid_client)
-    video_id = _create_video_with_assets(paid_client, section_id)
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(client, section_id)
 
     # Switch to a different user
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "user-B"}):
-        resp = paid_client.delete(
+        resp = client.delete(
             f"/api/videos/{video_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 403
@@ -1512,27 +1210,27 @@ def test_delete_video_wrong_user(paid_client: TestClient):
         assert db.get(Video, video_id) is not None
 
 
-def test_delete_video_unauthenticated(paid_client: TestClient):
+def test_delete_video_unauthenticated(client: TestClient):
     """Returns 401 without auth."""
-    course_id, section_id = _create_course_and_section(paid_client)
-    video_id = _create_video_with_assets(paid_client, section_id)
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(client, section_id)
     # No _mock_auth() here
     # MVP2.0.6: conftest client fixture sets a default valid
     # cookie. Clear it for this unauthenticated test.
-    paid_client.cookies.clear()
-    resp = paid_client.delete(f"/api/videos/{video_id}")
+    client.cookies.clear()
+    resp = client.delete(f"/api/videos/{video_id}")
     assert resp.status_code == 401
 
 
-def test_delete_video_missing_file_on_disk(paid_client: TestClient):
+def test_delete_video_missing_file_on_disk(client: TestClient):
     """If the on-disk file is already gone (e.g. cleaned up manually),
     the delete should still succeed — the DB cascade is the important
     part, and we don't want a missing file to crash the operation."""
     from pathlib import Path
     from app.database import SessionLocal
 
-    course_id, section_id = _create_course_and_section(paid_client)
-    video_id = _create_video_with_assets(paid_client, section_id)
+    course_id, section_id = _create_course_and_section(client)
+    video_id = _create_video_with_assets(client, section_id)
 
     # Manually remove the file before the delete
     with SessionLocal() as db:
@@ -1541,7 +1239,7 @@ def test_delete_video_missing_file_on_disk(paid_client: TestClient):
         assert not Path(v.file_path).exists()
 
     with _mock_auth():
-        resp = paid_client.delete(
+        resp = client.delete(
             f"/api/videos/{video_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 200
@@ -1555,7 +1253,7 @@ def test_delete_video_missing_file_on_disk(paid_client: TestClient):
         assert db.get(Video, video_id) is None
 
 
-def test_delete_video_zero_byte_file(paid_client: TestClient):
+def test_delete_video_zero_byte_file(client: TestClient):
     """Regression: the 0-byte video from the 2026-07-09 incident
     can be deleted cleanly via this endpoint. The 0-byte rejection
     is on upload, not on delete — even if a 0-byte file slipped
@@ -1563,7 +1261,7 @@ def test_delete_video_zero_byte_file(paid_client: TestClient):
     from pathlib import Path
     from app.config import settings
 
-    course_id, section_id = _create_course_and_section(paid_client)
+    course_id, section_id = _create_course_and_section(client)
     # Manually create a 0-byte file in the DB (bypassing the upload
     # endpoint which now rejects 0-byte files)
     from app.database import SessionLocal
@@ -1583,7 +1281,7 @@ def test_delete_video_zero_byte_file(paid_client: TestClient):
         db.commit()
 
     with _mock_auth():
-        resp = paid_client.delete(
+        resp = client.delete(
             f"/api/videos/{video_id}", headers=_auth_headers(),
         )
     assert resp.status_code == 200

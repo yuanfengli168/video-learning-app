@@ -14,7 +14,7 @@ claims. Every request looks up role from this table.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text, func
+from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -46,33 +46,6 @@ class User(Base):
     # Admin promotion requires explicit UPDATE — no self-service path.
     role: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # ── Upload limit overrides (13a, 2026-09-21 — registry §1/§2) ──
-    # NULL = use the tier default (env var). A set value BEATS the tier
-    # default — this IS the paid-add-on infrastructure: "they paid more
-    # → flip their override" (one SQL update via the flip-kit, no code).
-    # Kept on users (not a separate table) because the resolver reads
-    # the user row anyway on every gated request.
-    max_file_bytes: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True, default=None,
-        comment="per-user max upload file size override (NULL = tier default)",
-    )
-    storage_quota_bytes: Mapped[int | None] = mapped_column(
-        BigInteger, nullable=True, default=None,
-        comment="per-user storage quota override (NULL = tier default)",
-    )
-    # ── Model preference (2026-09-22, doc/model-preference-design.md) ──
-    # The user's ollama-model choice. NULL = tier default (PAID gets
-    # LLM_MODEL_PAID_DEFAULT, ADMIN gets LLM_MODEL_ADMIN_DEFAULT).
-    # Only the ADMIN's row is written today (via /admin/settings); when
-    # MVP3 exposes model choice to PAID it's this same column + the
-    # same resolver + one more capability-gated page. The value is
-    # validated against LLM_MODEL_CATALOG at write time AND re-checked
-    # at read time (an override removed from the catalog falls back to
-    # the tier default — graceful retirement, no migration).
-    llm_model_pref: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, default=None,
-        comment="per-user ollama model override (NULL = tier default)",
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )

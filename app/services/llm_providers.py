@@ -167,52 +167,8 @@ def call_llm_with_fallback(
 
     # Step 4: try each provider in order
     attempts: list[dict[str, Any]] = []
-    # 2026-09-22 (model preference, doc/model-preference-design.md):
-    # the ollama model is now per-user, two-layer resolved —
-    #   users.llm_model_pref override (if set AND in catalog)
-    #     → tier default (LLM_MODEL_PAID_DEFAULT / _ADMIN_DEFAULT)
-    #     → legacy fallback (llm_model_ollama)
-    # The override is re-validated against the catalog at READ time:
-    # a value removed from LLM_MODEL_CATALOG silently falls back to
-    # the tier default (graceful retirement). Non-ollama providers
-    # (groq/openai) are untouched. FREE never reaches this branch
-    # (groq-only chain).
-    from app.models.user import User
-
-    pref_model: str | None = None
-    if "ollama" in chain:
-        pref_row = None
-        _pref_db = None
-        try:
-            _pref_db = SessionLocal()
-            pref_row = _pref_db.query(User).filter(
-                User.user_id == user_id
-            ).first()
-        except Exception:
-            pref_row = None  # a DB hiccup falls back to the tier default
-        finally:
-            if _pref_db is not None:
-                try:
-                    _pref_db.close()
-                except Exception:
-                    pass
-        if pref_row is not None and pref_row.llm_model_pref:
-            if pref_row.llm_model_pref in settings.get_model_catalog():
-                pref_model = pref_row.llm_model_pref
-            else:
-                # Override not in catalog → fall back to tier default.
-                logger.warning(
-                    "user %s model_pref %r not in catalog; tier default applies",
-                    user_id, pref_row.llm_model_pref,
-                )
     for provider in chain:
-        if provider == "ollama":
-            model = (
-                pref_model
-                or settings.get_tier_default_model(int(user_role))
-            )
-        else:
-            model = settings.get_model_for_provider(provider)
+        model = settings.get_model_for_provider(provider)
         attempt: dict[str, Any] = {
             "provider": provider,
             "model": model,
@@ -276,32 +232,12 @@ def call_llm_with_fallback(
                "role": user_role,
                "attempts": attempts,
            })
-    # 2026-09-22 (owner decision): FREE users get a friendly retry
-    # message with the YouTube-Ask workaround instead of the technical
-    # chain-debug text — Groq's free tier fails intermittently by
-    # nature, and "All 1 provider(s) in your tier's chain failed"
-    # reads like a bug report, not a "try again". The discriminator is
-    # the ROLE (the product contract), NOT len(chain): sponsored free
-    # providers may add a second free-tier provider someday, and a
-    # paying customer must NEVER see "The free AI service…". Unknown/
-    # missing role fails SAFE to the technical message.
-    from app.auth.roles import UserRole
-
-    if user_role == int(UserRole.FREE):
-        message = (
-            "The free AI service is temporarily unavailable. "
-            "This is intermittent. Please try again in a minute — or, "
-            "for a YouTube video like this one, use YouTube's own "
-            "\"Ask\" feature when logged on the source page."
-        )
-    else:
-        message = (
-            f"All {len(attempts)} provider(s) in your tier's chain failed. "
-            f"See 'attempts' for details."
-        )
     return {
         "status": "provider_unavailable",
-        "message": message,
+        "message": (
+            f"All {len(attempts)} provider(s) in your tier's chain failed. "
+            f"See 'attempts' for details."
+        ),
         "attempts": attempts,
     }
 

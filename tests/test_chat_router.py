@@ -16,21 +16,21 @@ def _mock_auth():
     return patch("app.auth.dependencies.verify_token", return_value=FAKE_USER)
 
 
-def _setup_video(paid_client: TestClient):
+def _setup_video(client: TestClient):
     """Helper: create course → section → video. Returns video_id."""
     with _mock_auth():
-        course_resp = paid_client.post(
+        course_resp = client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = paid_client.post(
+        section_resp = client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake video content")
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
@@ -38,12 +38,12 @@ def _setup_video(paid_client: TestClient):
     return upload_resp.json()["video_id"]
 
 
-def test_create_chat_session(paid_client: TestClient):
+def test_create_chat_session(client: TestClient):
     """Should create a chat session for a concept."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
 
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
@@ -55,10 +55,10 @@ def test_create_chat_session(paid_client: TestClient):
     assert "real-world" in data["system_prompt"].lower()
 
 
-def test_create_chat_session_video_not_found(paid_client: TestClient):
+def test_create_chat_session_video_not_found(client: TestClient):
     """Should return 404 for non-existent video."""
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             "/api/chat/sessions",
             json={"video_id": "nonexistent", "concept": "RAG"},
             headers=_auth_headers(),
@@ -66,13 +66,13 @@ def test_create_chat_session_video_not_found(paid_client: TestClient):
     assert response.status_code == 404
 
 
-def test_send_message(paid_client: TestClient):
+def test_send_message(client: TestClient):
     """Should send a message and get an AI response."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
 
     with _mock_auth():
         # Create session
-        session_resp = paid_client.post(
+        session_resp = client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
@@ -81,10 +81,10 @@ def test_send_message(paid_client: TestClient):
 
         # Send message
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             return_value="RAG is used in search engines...",
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "How is RAG used in the real world?"},
                 headers=_auth_headers(),
@@ -95,10 +95,10 @@ def test_send_message(paid_client: TestClient):
     assert data["ai_message"]["content"] == "RAG is used in search engines..."
 
 
-def test_send_message_session_not_found(paid_client: TestClient):
+def test_send_message_session_not_found(client: TestClient):
     """Should return 404 for non-existent session."""
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             "/api/chat/sessions/nonexistent/messages",
             json={"content": "Hello"},
             headers=_auth_headers(),
@@ -106,12 +106,12 @@ def test_send_message_session_not_found(paid_client: TestClient):
     assert response.status_code == 404
 
 
-def test_send_message_ollama_failure(paid_client: TestClient):
+def test_send_message_ollama_failure(client: TestClient):
     """Should return 500 when Ollama fails."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
 
     with _mock_auth():
-        session_resp = paid_client.post(
+        session_resp = client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
@@ -119,10 +119,10 @@ def test_send_message_ollama_failure(paid_client: TestClient):
         session_id = session_resp.json()["session_id"]
 
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             side_effect=RuntimeError("Ollama down"),
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "Hello"},
                 headers=_auth_headers(),
@@ -130,12 +130,12 @@ def test_send_message_ollama_failure(paid_client: TestClient):
     assert response.status_code == 500
 
 
-def test_get_chat_session(paid_client: TestClient):
+def test_get_chat_session(client: TestClient):
     """Should get a chat session with messages."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
 
     with _mock_auth():
-        session_resp = paid_client.post(
+        session_resp = client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
@@ -143,16 +143,16 @@ def test_get_chat_session(paid_client: TestClient):
         session_id = session_resp.json()["session_id"]
 
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             return_value="RAG is used in...",
         ):
-            paid_client.post(
+            client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "How?"},
                 headers=_auth_headers(),
             )
 
-        response = paid_client.get(
+        response = client.get(
             f"/api/chat/sessions/{session_id}", headers=_auth_headers()
         )
     assert response.status_code == 200
@@ -163,33 +163,33 @@ def test_get_chat_session(paid_client: TestClient):
     assert data["messages"][1]["role"] == "assistant"
 
 
-def test_get_chat_session_not_found(paid_client: TestClient):
+def test_get_chat_session_not_found(client: TestClient):
     """Should return 404 for non-existent session."""
     with _mock_auth():
-        response = paid_client.get(
+        response = client.get(
             "/api/chat/sessions/nonexistent", headers=_auth_headers()
         )
     assert response.status_code == 404
 
 
-def test_list_chat_sessions(paid_client: TestClient):
+def test_list_chat_sessions(client: TestClient):
     """Should list all chat sessions for the user."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
 
     with _mock_auth():
         # Create two sessions
-        paid_client.post(
+        client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
         )
-        paid_client.post(
+        client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "Transformer"},
             headers=_auth_headers(),
         )
 
-        response = paid_client.get("/api/chat/sessions", headers=_auth_headers())
+        response = client.get("/api/chat/sessions", headers=_auth_headers())
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
@@ -198,65 +198,65 @@ def test_list_chat_sessions(paid_client: TestClient):
     assert "Transformer" in concepts
 
 
-def test_list_chat_sessions_empty(paid_client: TestClient):
+def test_list_chat_sessions_empty(client: TestClient):
     """Should return empty list for user with no sessions."""
     with _mock_auth():
-        response = paid_client.get("/api/chat/sessions", headers=_auth_headers())
+        response = client.get("/api/chat/sessions", headers=_auth_headers())
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_delete_chat_session(paid_client: TestClient):
+def test_delete_chat_session(client: TestClient):
     """Should delete a chat session."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
 
     with _mock_auth():
-        session_resp = paid_client.post(
+        session_resp = client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
         )
         session_id = session_resp.json()["session_id"]
 
-        response = paid_client.delete(
+        response = client.delete(
             f"/api/chat/sessions/{session_id}", headers=_auth_headers()
         )
     assert response.status_code == 200
     assert response.json()["status"] == "deleted"
 
 
-def test_delete_chat_session_not_found(paid_client: TestClient):
+def test_delete_chat_session_not_found(client: TestClient):
     """Should return 404 for non-existent session."""
     with _mock_auth():
-        response = paid_client.delete(
+        response = client.delete(
             "/api/chat/sessions/nonexistent", headers=_auth_headers()
         )
     assert response.status_code == 404
 
 
-def test_chat_session_ownership(paid_client: TestClient):
+def test_chat_session_ownership(client: TestClient):
     """Should not allow access to another user's chat session."""
     # Create video as user-A
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "user-A"}):
-        course_resp = paid_client.post(
+        course_resp = client.post(
             "/api/courses", json={"title": "ML"}, headers=_auth_headers()
         )
         course_id = course_resp.json()["course_id"]
-        section_resp = paid_client.post(
+        section_resp = client.post(
             f"/api/courses/{course_id}/sections",
             json={"title": "Week 1"},
             headers=_auth_headers(),
         )
         section_id = section_resp.json()["section_id"]
         fake_video = io.BytesIO(b"fake video content")
-        upload_resp = paid_client.post(
+        upload_resp = client.post(
             f"/api/videos/upload/{section_id}",
             files={"file": ("lecture.mp4", fake_video, "video/mp4")},
             headers=_auth_headers(),
         )
         video_id = upload_resp.json()["video_id"]
 
-        session_resp = paid_client.post(
+        session_resp = client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
@@ -265,18 +265,18 @@ def test_chat_session_ownership(paid_client: TestClient):
 
     # Try to access as user-B
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "user-B"}):
-        response = paid_client.get(
+        response = client.get(
             f"/api/chat/sessions/{session_id}", headers=_auth_headers()
         )
     assert response.status_code == 403
 
 
-def test_unauthorized_chat_access(paid_client: TestClient):
+def test_unauthorized_chat_access(client: TestClient):
     """Should return 401 without auth."""
     # MVP2.0.6: conftest client fixture sets a default valid
     # cookie. Clear it for this unauthenticated test.
-    paid_client.cookies.clear()
-    response = paid_client.get("/api/chat/sessions")
+    client.cookies.clear()
+    response = client.get("/api/chat/sessions")
     assert response.status_code == 401
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -284,11 +284,11 @@ def test_unauthorized_chat_access(paid_client: TestClient):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_create_video_chat_session_success(paid_client: TestClient):
+def test_create_video_chat_session_success(client: TestClient):
     """Should create a video-scope session with a system prompt that
     mentions the video's materials. The placeholder concept is stored
     so the NOT NULL column is satisfied, and scope='video' is set."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with _mock_auth():
         # Add some assets so the prompt has real content
         from app.database import SessionLocal
@@ -314,7 +314,7 @@ def test_create_video_chat_session_success(paid_client: TestClient):
             ))
             db.commit()
 
-        response = paid_client.post(
+        response = client.post(
             "/api/chat/video-sessions",
             json={"video_id": video_id},
             headers=_auth_headers(),
@@ -328,13 +328,13 @@ def test_create_video_chat_session_success(paid_client: TestClient):
     assert "retrieval" in data["system_prompt"]
 
 
-def test_create_video_chat_session_empty_materials(paid_client: TestClient):
+def test_create_video_chat_session_empty_materials(client: TestClient):
     """When a video has no assets yet (just uploaded), the chat
     should still be creatable — the prompt uses friendly
     placeholders for each empty section."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             "/api/chat/video-sessions",
             json={"video_id": video_id},
             headers=_auth_headers(),
@@ -350,10 +350,10 @@ def test_create_video_chat_session_empty_materials(paid_client: TestClient):
     assert "No transcript" in prompt
 
 
-def test_create_video_chat_session_video_not_found(paid_client: TestClient):
+def test_create_video_chat_session_video_not_found(client: TestClient):
     """Should return 404 for non-existent video."""
     with _mock_auth():
-        response = paid_client.post(
+        response = client.post(
             "/api/chat/video-sessions",
             json={"video_id": "nonexistent"},
             headers=_auth_headers(),
@@ -361,23 +361,11 @@ def test_create_video_chat_session_video_not_found(paid_client: TestClient):
     assert response.status_code == 404
 
 
-def test_create_video_chat_session_wrong_user(paid_client: TestClient):
-    """Day 5 hotfix2: a non-owner FREE user can chat about a PUBLIC video
-    (the old 'course.user_id == uid' check wrongly blocked this). The
-    new visibility-tier check returns 200 for any user with appropriate role.
-
-    To still cover the 403 path, we set the video to ADMIN_ONLY visibility
-    AFTER _setup_video; then user-B (default FREE) gets 403."""
-    video_id = _setup_video(paid_client)
-    # Make the test video ADMIN_ONLY so FREE user-B is blocked
-    from app.database import SessionLocal
-    from sqlalchemy import text
-    db = SessionLocal()
-    db.execute(text("UPDATE videos SET visibility=2 WHERE id=:id"), {"id": video_id})
-    db.commit()
-    db.close()
+def test_create_video_chat_session_wrong_user(client: TestClient):
+    """Should return 403 for video not owned by the user."""
+    video_id = _setup_video(client)
     with patch("app.auth.dependencies.verify_token", return_value={"uid": "user-B"}):
-        response = paid_client.post(
+        response = client.post(
             "/api/chat/video-sessions",
             json={"video_id": video_id},
             headers=_auth_headers(),
@@ -385,15 +373,15 @@ def test_create_video_chat_session_wrong_user(paid_client: TestClient):
     assert response.status_code == 403
 
 
-def test_send_message_in_video_scope_session(paid_client: TestClient):
+def test_send_message_in_video_scope_session(client: TestClient):
     """Sending a message in a video-scope session should work the
     same as a flashcard-scope session — the /messages endpoint is
     scope-agnostic. The chat is about the whole video though, so
     the AI sees the full transcript context."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with _mock_auth():
         # Create a video session
-        session_resp = paid_client.post(
+        session_resp = client.post(
             "/api/chat/video-sessions",
             json={"video_id": video_id},
             headers=_auth_headers(),
@@ -401,8 +389,8 @@ def test_send_message_in_video_scope_session(paid_client: TestClient):
         session_id = session_resp.json()["session_id"]
 
         # Mock the Ollama call
-        with patch("app.routers.chat.chat_with_fallback", return_value="The video covers RAG concepts."):
-            response = paid_client.post(
+        with patch("app.routers.chat.chat_with_ollama", return_value="The video covers RAG concepts."):
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "What does this video cover?"},
                 headers=_auth_headers(),
@@ -412,24 +400,24 @@ def test_send_message_in_video_scope_session(paid_client: TestClient):
     assert data["ai_message"]["content"] == "The video covers RAG concepts."
 
 
-def test_list_sessions_includes_scope(paid_client: TestClient):
+def test_list_sessions_includes_scope(client: TestClient):
     """The list endpoint should return the scope field so the
     chat history UI can show 'Video' vs 'Flashcard' badges."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with _mock_auth():
         # One flashcard-scope session
-        paid_client.post(
+        client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
         )
         # One video-scope session
-        paid_client.post(
+        client.post(
             "/api/chat/video-sessions",
             json={"video_id": video_id},
             headers=_auth_headers(),
         )
-        response = paid_client.get("/api/chat/sessions", headers=_auth_headers())
+        response = client.get("/api/chat/sessions", headers=_auth_headers())
     assert response.status_code == 200
     sessions = response.json()
     assert len(sessions) == 2
@@ -440,117 +428,17 @@ def test_list_sessions_includes_scope(paid_client: TestClient):
     assert video_session["concept"] == "[whole video]"
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# Discuss resume (2026-09-12, user request #3): the video page's Discuss
-# tab must be able to find the user's latest video-scope session for the
-# current video so it can LOAD HISTORY instead of always starting fresh.
-# ─────────────────────────────────────────────────────────────────────────
-
-def test_list_sessions_filters_by_video_and_scope(
-    paid_client: TestClient, db_session
-):
-    """GET /sessions?video_id=…&scope=video returns ONLY that video's
-    video-scope sessions, newest first."""
-    from datetime import datetime, timedelta
-    from sqlalchemy import text as sql_text
-
-    video_a = _setup_video(paid_client)
-    with _mock_auth():
-        first = paid_client.post(
-            "/api/chat/video-sessions",
-            json={"video_id": video_a},
-            headers=_auth_headers(),
-        ).json()["session_id"]
-        second = paid_client.post(
-            "/api/chat/video-sessions",
-            json={"video_id": video_a},
-            headers=_auth_headers(),
-        ).json()["session_id"]
-        # One flashcard-scope session on video_a — must NOT match
-        paid_client.post(
-            "/api/chat/sessions",
-            json={"video_id": video_a, "concept": "RAG"},
-            headers=_auth_headers(),
-        )
-
-    # Stagger created_at: SQLite stores second-precision timestamps,
-    # so same-test-second inserts tie and the DESC ordering is
-    # nondeterministic. Explicitly make `first` older (mirrors
-    # production where sessions are minutes+ apart).
-    base = datetime(2026, 9, 12, 12, 0, 0)
-    db_session.execute(
-        sql_text("UPDATE chat_sessions SET created_at = :t WHERE id = :id"),
-        {"t": base.isoformat(), "id": first},
-    )
-    db_session.execute(
-        sql_text("UPDATE chat_sessions SET created_at = :t WHERE id = :id"),
-        {"t": (base + timedelta(minutes=1)).isoformat(), "id": second},
-    )
-    db_session.commit()
-
-    with _mock_auth():
-        response = paid_client.get(
-            f"/api/chat/sessions?video_id={video_a}&scope=video",
-            headers=_auth_headers(),
-        )
-    assert response.status_code == 200
-    sessions = response.json()
-    assert len(sessions) == 2, "only video-scope sessions on this video"
-    assert all(s["scope"] == "video" for s in sessions)
-    assert all(s["video_id"] == video_a for s in sessions)
-    # newest first — the resume flow picks sessions[0]
-    assert sessions[0]["id"] == second
-
-
-def test_list_sessions_filter_other_videos_excluded(paid_client: TestClient):
-    """Sessions on a DIFFERENT video must not leak into the filtered list."""
-    video_a = _setup_video(paid_client)
-    video_b = _setup_video(paid_client)
-    with _mock_auth():
-        paid_client.post(
-            "/api/chat/video-sessions",
-            json={"video_id": video_a},
-            headers=_auth_headers(),
-        )
-        paid_client.post(
-            "/api/chat/video-sessions",
-            json={"video_id": video_b},
-            headers=_auth_headers(),
-        )
-        response = paid_client.get(
-            f"/api/chat/sessions?video_id={video_b}&scope=video",
-            headers=_auth_headers(),
-        )
-    assert response.status_code == 200
-    sessions = response.json()
-    assert len(sessions) == 1
-    assert sessions[0]["video_id"] == video_b
-
-
-def test_list_sessions_filter_empty(paid_client: TestClient):
-    """No matching sessions → empty list (client falls back to creating
-    a new session), NOT 404 — the resume flow treats [] as 'no history'."""
-    video_id = _setup_video(paid_client)
-    with _mock_auth():
-        response = paid_client.get(
-            f"/api/chat/sessions?video_id={video_id}&scope=video",
-            headers=_auth_headers(),
-        )
-    assert response.status_code == 200
-    assert response.json() == []
-
-
-def test_get_video_session_includes_scope(paid_client: TestClient):
+def test_get_video_session_includes_scope(client: TestClient):
     """GET /sessions/{id} should also return scope."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with _mock_auth():
-        create_resp = paid_client.post(
+        create_resp = client.post(
             "/api/chat/video-sessions",
             json={"video_id": video_id},
             headers=_auth_headers(),
         )
         session_id = create_resp.json()["session_id"]
-        response = paid_client.get(
+        response = client.get(
             f"/api/chat/sessions/{session_id}", headers=_auth_headers()
         )
     assert response.status_code == 200
@@ -569,11 +457,11 @@ def test_get_video_session_includes_scope(paid_client: TestClient):
 # there (even if the LLM invents markers — defense in depth).
 
 
-def _create_video_session(paid_client: TestClient) -> str:
+def _create_video_session(client: TestClient) -> str:
     """Helper: create a video-scope session for the freshly-uploaded test video."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with _mock_auth():
-        resp = paid_client.post(
+        resp = client.post(
             "/api/chat/video-sessions",
             json={"video_id": video_id},
             headers=_auth_headers(),
@@ -581,16 +469,16 @@ def _create_video_session(paid_client: TestClient) -> str:
     return resp.json()["session_id"]
 
 
-def test_video_scope_response_includes_empty_citations_list(paid_client: TestClient):
+def test_video_scope_response_includes_empty_citations_list(client: TestClient):
     """Video-scope response shape includes a (possibly empty) citations
     list, even when the AI didn't cite any timestamps."""
-    session_id = _create_video_session(paid_client)
+    session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             return_value="这是普通的中文回答，没有时间戳。",
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "Q?"},
                 headers=_auth_headers(),
@@ -601,15 +489,15 @@ def test_video_scope_response_includes_empty_citations_list(paid_client: TestCli
     assert data["citations"] == []
 
 
-def test_video_scope_response_parses_mmss_citations(paid_client: TestClient):
+def test_video_scope_response_parses_mmss_citations(client: TestClient):
     """A response containing [M:SS] markers returns a populated citations list."""
-    session_id = _create_video_session(paid_client)
+    session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             return_value="视频在 [3:45] 提到 Claude Code 需要付费。",
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "Why?"},
                 headers=_auth_headers(),
@@ -623,15 +511,15 @@ def test_video_scope_response_parses_mmss_citations(paid_client: TestClient):
     assert "raw" in cite
 
 
-def test_video_scope_response_parses_hhmmss_citations(paid_client: TestClient):
+def test_video_scope_response_parses_hhmmss_citations(client: TestClient):
     """[H:MM:SS] markers work for > 1h videos."""
-    session_id = _create_video_session(paid_client)
+    session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             return_value="See [1:30:45] for the deep dive.",
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "Show me"},
                 headers=_auth_headers(),
@@ -642,15 +530,15 @@ def test_video_scope_response_parses_hhmmss_citations(paid_client: TestClient):
     assert data["citations"][0]["display"] == "[1:30:45]"
 
 
-def test_video_scope_response_parses_multiple_citations(paid_client: TestClient):
+def test_video_scope_response_parses_multiple_citations(client: TestClient):
     """Multiple markers in one response produce a list of citations in order."""
-    session_id = _create_video_session(paid_client)
+    session_id = _create_video_session(client)
     with _mock_auth():
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             return_value="At [0:30] we start, and at [5:00] we pivot.",
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "Summary?"},
                 headers=_auth_headers(),
@@ -664,23 +552,23 @@ def test_video_scope_response_parses_multiple_citations(paid_client: TestClient)
     assert citations[0]["offset"] < citations[1]["offset"]
 
 
-def test_flashcard_scope_response_has_empty_citations(paid_client: TestClient):
+def test_flashcard_scope_response_has_empty_citations(client: TestClient):
     """Flashcard-scope sessions (per-concept) don't get a citations
     list — there's no transcript to cite from. Even if the AI
     happens to write [3:45], we don't return it as a citation."""
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with _mock_auth():
-        session_resp = paid_client.post(
+        session_resp = client.post(
             "/api/chat/sessions",
             json={"video_id": video_id, "concept": "RAG"},
             headers=_auth_headers(),
         )
         session_id = session_resp.json()["session_id"]
         with patch(
-            "app.routers.chat.chat_with_fallback",
+            "app.routers.chat.chat_with_ollama",
             return_value="RAG is mentioned at [10:00] in the original paper.",
         ):
-            response = paid_client.post(
+            response = client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "Tell me more"},
                 headers=_auth_headers(),
@@ -691,7 +579,7 @@ def test_flashcard_scope_response_has_empty_citations(paid_client: TestClient):
     assert data["citations"] == []
 
 
-def test_video_chat_context_includes_transcript_with_proper_shape(paid_client: TestClient):
+def test_video_chat_context_includes_transcript_with_proper_shape(client: TestClient):
     """REGRESSION (manualTodo [jul14] #6): the chat prompt must
     include the transcript text, not the "could not be parsed"
     fallback. The original bug: `json_to_transcript()` returns a
@@ -711,7 +599,7 @@ def test_video_chat_context_includes_transcript_with_proper_shape(paid_client: T
     from app.models import Asset
     from app.routers.chat import _build_video_chat_context
 
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     transcript_json = (
         '{"segments": ['
         '{"start": 0.0, "end": 5.0, "text": "Hello everyone."},'
@@ -751,111 +639,7 @@ def test_video_chat_context_includes_transcript_with_proper_shape(paid_client: T
     assert "couldn't read it" not in prompt
 
 
-# ── Tier-aware transcript caps at the router (2026-09-20) ──────────────────
-
-
-def _seed_long_transcript(video_id: str, n_segments: int) -> None:
-    """Write an n-segment transcript asset onto a video."""
-    import json as _json
-    from app.database import SessionLocal
-    from app.models import Asset
-
-    segments = [
-        {"start": float(i), "end": float(i + 1), "text": f"seg {i}"}
-        for i in range(n_segments)
-    ]
-    payload = _json.dumps({
-        "segments": segments, "language": "en", "duration": float(n_segments),
-    })
-    with SessionLocal() as db:
-        existing = db.query(Asset).filter_by(
-            video_id=video_id, asset_type="transcript"
-        ).first()
-        if existing:
-            existing.content = payload
-        else:
-            db.add(Asset(
-                video_id=video_id, asset_type="transcript", content=payload,
-            ))
-        db.commit()
-
-
-def test_video_chat_context_tier_cap_free_truncates(paid_client: TestClient):
-    """FREE role (2): a 1500-segment video still truncates at 600 —
-    the FREE tier's Groq model has a small context window."""
-    from app.database import SessionLocal
-    from app.models import Video
-    from app.routers.chat import _build_video_chat_context
-
-    video_id = _setup_video(paid_client)
-    _seed_long_transcript(video_id, 1500)
-
-    with SessionLocal() as db:
-        video = db.get(Video, video_id)
-        prompt = _build_video_chat_context(db, video, user_role=2)
-
-    assert "omitted for length" in prompt
-    assert "seg 0" in prompt          # head kept
-    assert "seg 1499" in prompt       # tail kept
-    # Middle really gone: cap 600 → head 0-299, tail 1200-1499;
-    # anchor the checks so they can't substring-match kept lines
-    assert "[16:40] seg 1000" not in prompt
-    # The omission marker is honest about the count
-    assert "[900 segments omitted for length]" in prompt
-
-
-def test_video_chat_context_tier_cap_paid_full(paid_client: TestClient):
-    """PAID role (1): the same 1500-segment video fits entirely
-    under the 3000 cap — 'the AI watched the entire lecture'."""
-    from app.database import SessionLocal
-    from app.models import Video
-    from app.routers.chat import _build_video_chat_context
-
-    video_id = _setup_video(paid_client)
-    _seed_long_transcript(video_id, 1500)
-
-    with SessionLocal() as db:
-        video = db.get(Video, video_id)
-        prompt = _build_video_chat_context(db, video, user_role=1)
-
-    assert "omitted" not in prompt
-    assert "[16:40] seg 1000" in prompt   # the middle is there now
-    assert "seg 1499" in prompt
-
-
-def test_create_video_chat_session_resolves_role(
-    paid_client: TestClient, db_session
-):
-    """The session-creation endpoint resolves the caller's DB role and
-    passes it to the context builder (the tier cap must follow the
-    REAL role, not the default). Seeded PAID user → PAID cap applies."""
-    from app.routers.chat import _build_video_chat_context
-    from unittest.mock import patch as _patch
-
-    video_id = _setup_video(paid_client)
-    _seed_long_transcript(video_id, 1500)
-
-    captured = {}
-    original = _build_video_chat_context
-
-    def spy(db, video, *, user_role=2):
-        captured["user_role"] = user_role
-        return original(db, video, user_role=user_role)
-
-    with _mock_auth(), _patch(
-        "app.routers.chat._build_video_chat_context", side_effect=spy
-    ):
-        resp = paid_client.post(
-            "/api/chat/video-sessions",
-            json={"video_id": video_id},
-            headers=_auth_headers(),
-        )
-    assert resp.status_code == 200, resp.text
-    # paid_client's fixture user (user-A) is seeded PAID (role=1)
-    assert captured["user_role"] == 1
-
-
-def test_video_chat_context_logs_transcript_parse_failure(paid_client: TestClient):
+def test_video_chat_context_logs_transcript_parse_failure(client: TestClient):
     """When the transcript Asset's content is genuinely malformed
     JSON, _build_video_chat_context should return the fallback
     message (so the LLM knows the transcript is broken) AND log
@@ -869,7 +653,7 @@ def test_video_chat_context_logs_transcript_parse_failure(paid_client: TestClien
     from app.models import Asset, Video
     from app.routers.chat import _build_video_chat_context
 
-    video_id = _setup_video(paid_client)
+    video_id = _setup_video(client)
     with SessionLocal() as db:
         # Insert genuinely-broken JSON (missing closing brace)
         existing = db.query(Asset).filter_by(

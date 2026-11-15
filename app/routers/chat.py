@@ -9,9 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
-from app.auth.roles import user_can_access_video
 from app.database import get_db
-from app.models import Asset, ChatMessage, ChatSession, Video
+from app.models import Asset, ChatMessage, ChatSession, Course, Section, Video
 from app.models.chat import SCOPE_VIDEO, VALID_SCOPES, VIDEO_SCOPE_CONCEPT_PLACEHOLDER
 from app.services.chat import (
     build_system_prompt,
@@ -21,17 +20,7 @@ from app.services.chat import (
     render_quiz_for_chat,
     transcript_to_chat_text,
 )
-# Day 5 hotfix: chat is now routed through the LiteLLM wrapper so rate
-# limits, audit logs, and per-tier provider chains apply uniformly.
-from app.services.llm_providers import ChatCallError, chat_with_fallback
-from app.utils.events import log_event
 from app.services.transcription import json_to_transcript
-from app.utils.validation import (
-    ValidationError,
-    llm_safe_wrap_user_content,
-    validate_chat_message,
-    validate_concept,
-)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -71,29 +60,18 @@ async def create_chat_session(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Day 5 hotfix2: replace the old `course.user_id == uid` check
-    # (which blocked every non-admin user from admin-curated videos)
-    # with a visibility-tier check. FREE users can chat about
-    # PUBLIC videos; PAID users can also chat about PAID_ONLY; etc.
-    if not user_can_access_video(user.get("role"), video.visibility):
-        raise HTTPException(
-            status_code=403,
-            detail="Not authorized to chat about this video "
-            f"(visibility={video.visibility}, your role={user.get('role')})",
-        )
+    # Verify ownership
+    section = db.get(Section, video.section_id)
+    course = db.get(Course, section.course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your video")
 
-    # Validate the concept before it goes into a system prompt
-    try:
-        safe_concept = validate_concept(body.concept)
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    system_prompt = build_system_prompt(safe_concept)
+    system_prompt = build_system_prompt(body.concept)
 
     session = ChatSession(
         user_id=user.get("uid", ""),
         video_id=body.video_id,
-        concept=safe_concept,
+        concept=body.concept,
         system_prompt=system_prompt,
     )
     db.add(session)
@@ -127,19 +105,11 @@ async def send_message(
     if session.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your chat session")
 
-    # Validate the message BEFORE saving or sending to LLM.
-    # Catches: prompt injection attempts, oversized messages,
-    # control chars / null bytes, empty messages.
-    try:
-        safe_content = validate_chat_message(body.content)
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    # Save user message (sanitized version)
+    # Save user message
     user_msg = ChatMessage(
         session_id=session_id,
         role="user",
-        content=safe_content,
+        content=body.content,
     )
     db.add(user_msg)
     db.commit()
@@ -156,48 +126,12 @@ async def send_message(
         for msg in all_messages
     ]
 
-    # Defense in depth: wrap the latest user message in clear delimiters
-    # so the model knows "this is user data, not instructions".
-    # Even if check_for_prompt_injection misses something, this helps.
-    if ollama_messages and ollama_messages[-1]["role"] == "user":
-        ollama_messages[-1]["content"] = llm_safe_wrap_user_content(
-            ollama_messages[-1]["content"]
-        )
-
-    # Day 5 hotfix: route through LiteLLM (tier-aware fallback + audit log).
-    # chat_with_ollama() is still imported for any code that imports it,
-    # but the live path here uses chat_with_fallback() which:
-    #   1. applies per-user rate limit (5/min, 15/day for FREE)
-    #   2. picks tier chain (FREE → [groq]; PAID/ADMIN → [ollama, openai])
-    #   3. writes an audit-log row per call (success/failure/rate-limit)
-    #   4. raises structured ChatCallError on rate-limit (429) or
-    #      all-providers-failed (503)
-    from app.auth.admin import get_user_role_from_db
-
-    uid = user.get("uid", "")
-    user_role = int(get_user_role_from_db(uid, db))  # 0/1/2
-
     try:
-        ai_response = chat_with_fallback(
+        ai_response = chat_with_ollama(
             messages=ollama_messages,
             system_prompt=session.system_prompt,
-            user_role=user_role,
-            user_id=uid,
-            video_id=session.video_id,
         )
-    except ChatCallError as exc:
-        # Surface structured detail so the UI can render a useful toast.
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     except Exception as exc:
-        # Last-resort defense: an unexpected crash inside the wrapper.
-        log_event(
-            db, level="ERROR",
-            source="routers.chat",
-            message=f"unexpected chat error for session {session_id}",
-            user_id=uid,
-            video_id=session.video_id,
-            context={"error": str(exc), "type": type(exc).__name__},
-        )
         raise HTTPException(
             status_code=500, detail=f"Chat failed: {exc}"
         ) from exc
@@ -226,7 +160,7 @@ async def send_message(
     return {
         "user_message": {
             "role": "user",
-            "content": safe_content,
+            "content": body.content,
         },
         "ai_message": {
             "role": "assistant",
@@ -257,13 +191,6 @@ async def get_chat_session(
         "video_id": session.video_id,
         "scope": session.scope,
         "created_at": session.created_at.isoformat() if session.created_at else None,
-        # 2026-09-12: resolve the video title for the detail header too
-        # (mirrors the list endpoint; None for flashcard/deleted).
-        "video_title": (
-            db.get(Video, session.video_id).title
-            if session.video_id and db.get(Video, session.video_id)
-            else None
-        ),
         "messages": [
             {
                 "role": msg.role,
@@ -279,40 +206,13 @@ async def get_chat_session(
 async def list_chat_sessions(
     db: Session = Depends(get_db),
     user: dict[str, Any] = Depends(get_current_user),
-    video_id: str | None = None,
-    scope: str | None = None,
 ) -> list[dict[str, Any]]:
-    """List chat sessions for the current user.
-
-    2026-09-12 (Discuss resume): optional video_id + scope filters.
-    The video page's Discuss tab calls
-    GET /sessions?video_id=…&scope=video to find the user's most
-    recent session for THAT video so it can resume it (load history
-    + continue) instead of silently starting a new one on every page
-    load. No filters = all sessions (the chat-history page's
-    existing behavior, unchanged).
-    """
-    q = select(ChatSession).where(ChatSession.user_id == user.get("uid", ""))
-    if video_id is not None:
-        q = q.where(ChatSession.video_id == video_id)
-    if scope is not None:
-        q = q.where(ChatSession.scope == scope)
+    """List all chat sessions for the current user."""
     sessions = db.execute(
-        q.order_by(ChatSession.created_at.desc())
+        select(ChatSession)
+        .where(ChatSession.user_id == user.get("uid", ""))
+        .order_by(ChatSession.created_at.desc())
     ).scalars().all()
-
-    # 2026-09-12 (chat history metadata): resolve the video titles for
-    # the listed sessions in ONE query (video-scope sessions used to
-    # show a bare "Whole video" label with no way to tell WHICH video
-    # — the user couldn't find yesterday's discussion). Left-join via
-    # dict so missing/deleted videos degrade to None, not a crash.
-    video_ids = [s.video_id for s in sessions if s.video_id]
-    titles: dict[str, str] = {}
-    if video_ids:
-        rows = db.execute(
-            select(Video.id, Video.title).where(Video.id.in_(video_ids))
-        ).fetchall()
-        titles = {r[0]: r[1] for r in rows}
 
     return [
         {
@@ -322,9 +222,6 @@ async def list_chat_sessions(
             "scope": s.scope,
             "created_at": s.created_at.isoformat() if s.created_at else None,
             "message_count": len(s.messages),
-            # Video title when resolvable (video-scope rows; deleted
-            # videos → None → the UI falls back to the old label).
-            "video_title": titles.get(s.video_id) if s.video_id else None,
         }
         for s in sessions
     ]
@@ -365,14 +262,9 @@ def _maybe_log_transcript_parse_error(
     )
 
 
-def _build_video_chat_context(db: Session, video: Video, *, user_role: int | None = 2) -> str:
+def _build_video_chat_context(db: Session, video: Video) -> str:
     """Pull the video's transcript + summary + mindmap + quiz and
     format them into the LLM system prompt for a video-scope chat.
-
-    user_role drives the tier-aware transcript cap (2026-09-20):
-    FREE keeps the 600-segment cap (its Groq model has a small
-    window), PAID gets 3000, ADMIN 8000. The default (2=FREE) keeps
-    any non-router caller conservative.
 
     Returns the formatted system prompt string. Falls back to a
     placeholder when an asset is missing so the chat is still
@@ -388,11 +280,6 @@ def _build_video_chat_context(db: Session, video: Video, *, user_role: int | Non
     transcript_text = ""
     transcript_asset = by_type.get("transcript")
     if transcript_asset and transcript_asset.content:
-        # Tier-aware cap (2026-09-20): resolve per the session owner's
-        # role BEFORE formatting — see doc/PriceAndCost/chat-context-
-        # economics.md for the numbers and the reasoning.
-        from app.services.chat import segment_cap_for_role
-        cap = segment_cap_for_role(user_role)
         try:
             # json_to_transcript() returns a wrapper dict
             # `{"segments": [...], "language": ..., "duration": ...}`. We
@@ -407,9 +294,7 @@ def _build_video_chat_context(db: Session, video: Video, *, user_role: int | Non
                 if isinstance(transcript_obj, dict)
                 else transcript_obj
             )
-            transcript_text = transcript_to_chat_text(
-                segments, max_segments=cap
-            )
+            transcript_text = transcript_to_chat_text(segments)
         except Exception as exc:
             # Bad JSON in the DB — log it for the developer AND give
             # the LLM a clearer message so it can tell the user what
@@ -467,26 +352,14 @@ async def create_video_chat_session(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Day 5 hotfix2: visibility-tier check instead of ownership.
-    # See note in create_chat_session() above.
-    if not user_can_access_video(user.get("role"), video.visibility):
-        raise HTTPException(
-            status_code=403,
-            detail="Not authorized to discuss this video "
-            f"(visibility={video.visibility}, your role={user.get('role')})",
-        )
+    # Verify ownership
+    section = db.get(Section, video.section_id)
+    course = db.get(Course, section.course_id)
+    if course.user_id != user.get("uid", ""):
+        raise HTTPException(status_code=403, detail="Not your video")
 
-    # Build the LLM context from the video's existing materials.
-    # 2026-09-20: resolve the caller's DB role for the tier-aware
-    # transcript cap (the token claims' role can be stale after a
-    # tier upgrade; get_user_role_from_db is the same source of
-    # truth send_message uses for the LLM chain pick).
-    from app.auth.admin import get_user_role_from_db
-
-    user_role = int(get_user_role_from_db(user.get("uid", ""), db))
-    system_prompt = _build_video_chat_context(
-        db, video, user_role=user_role
-    )
+    # Build the LLM context from the video's existing materials
+    system_prompt = _build_video_chat_context(db, video)
 
     session = ChatSession(
         user_id=user.get("uid", ""),

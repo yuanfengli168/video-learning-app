@@ -1,16 +1,14 @@
 # Video Learning App
 
-![MVP2.0 Production Patches](https://img.shields.io/badge/MVP2.0%20Production%20Patches-in%20progress-yellow) ![Tests](https://img.shields.io/badge/tests-1427%20passing-brightgreen) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Jinja2%20%7C%20SQLite%20%7C%20Ollama%20%7C%20LiteLLM-blue) ![Branch](https://img.shields.io/badge/branch-mvp2--production--patches-yellow)
+![MVP2.1.0.2 Status](https://img.shields.io/badge/MVP2.1.0.2-shipped-brightgreen) ![Tests](https://img.shields.io/badge/tests-623%20passing-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen) ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Jinja2%20%7C%20SQLite%20%7C%20Ollama-blue) ![Branch](https://img.shields.io/badge/branch-MVP2.1-yellow)
 
-An open-source, AI-powered web application designed to help users learn from curated YouTube videos. Admins curate a hand-picked catalog; users watch, chat, and use auto-generated learning materials (summaries, mindmaps, quizzes, flashcards). The app handles captions via YouTube's transcript API (via yt-dlp), falls back to local Whisper when needed, and uses a multi-provider LLM setup (Ollama + Groq + OpenAI) via LiteLLM.
+An open-source, AI-powered web application designed to help users learn from online video classes. The app transcribes local video files, generates interactive learning materials (summaries, mindmaps, quizzes, flashcards), and provides a ChatGPT-style interface to chat with an AI about real-world applications of the concepts.
 
 > **MVP1 is finished** ([scorecard](doc/MVP1.0-successfullyFinished.md)). **MVP2.0 is finished** ([scorecard](doc/MVP2.0-successfullyFinished.md)) on `main` — 9 versions shipped (2.0.0 → 2.0.8 + same-day 2.0.8 amendment), 552/552 tests passing, 92% coverage.
 >
-> **MVP2.0 production-patches is in progress** on the `mvp2-production-patches` branch — pivots from user-uploaded videos to admin-curated YouTube catalog with role-based access (ADMIN/PAID/FREE). Day 1-9 shipped: role system, YouTube Data API enrichment, yt-dlp caption download, LiteLLM multi-provider with tier-based chains + rate limiting + Ollama quota tracker, structured audit log with `/admin/events` dashboard, Groq model swap (llama-3.3 → groq/compound → groq/compound-mini for stability), chat routed through LiteLLM wrapper, visibility-based access for non-owner free users on admin-curated videos, JS error display for structured errors, gunicorn 4×2 production server stack, `/api/ready` readiness endpoint, Cloudflare Tunnel verified end-to-end, Day 6 runbook, Day 7 buffer (status.sh bug fix + youtube_captions.py 49%→95% coverage), Day 8 (YouTube IFrame API integration), Day 9 hotfix (Firebase authorized domains + session-expiry-on-network-blip + Python 3.14 SCDynamicStore SIGSEGV via NO_PROXY=*). Post-Day-9 hardening (2026-09-03→06): MLX transcription fork-crash fix + ops postmortem, role-enrichment fix (PAID got FREE LLM chain), roles & tiers cheatsheet, usage pages (FREE claim / PAID bars), admin analytics + per-user usage monitor, personal activity feed, telemetry pipeline + beacon, pricing page, 90-day retention w/ HDD archive. YouTube-embed unlock + playback analytics + login redesign (2026-09-06→08, 2.1.0.8). Go-live prep + course-management UX (2026-09-09→12, 2.1.0.9): dashboard Top Viewed/Our Loves/Newest tabs, course + section rename, course-level section sort, admin content-structure analytics, admin sidebar fix, per-provider LLM usage table, Discuss-tab overhaul (auto-resize input, markdown rendering, session resume, typing-while-waiting). **1427 tests passing**. Launch target 2026-09-15. See [`doc/mvp2-production-patches-status.md`](doc/mvp2-production-patches-status.md) for current branch state, [`doc/mvp2-final-go-live-plan.md`](doc/mvp2-final-go-live-plan.md) for the 14-day plan, [`doc/runbook-day6.md`](doc/runbook-day6.md) for 11pm incident response.
+> **MVP2.1 is in progress** on the `MVP2.1` branch — 4 versions shipped so far: 2.1.0 (Plugin Tools tab + WebM→MP4), 2.1.0.1 (Tools tab UX fixes + Plugin worker pool, limit=3), 2.1.0.2 (backlog bug fixes: `Video.duration` schema, `file_size` not updated on swap, hardcoded `Content-Type: video/mp4`). 623/623 tests passing, 92% coverage. See [`doc/MVP2.1-Status.md`](doc/MVP2.1-Status.md) for the full per-version history, and [`doc/MVP2.1-all.md`](doc/MVP2.1-all.md) for what's next.
 
 ## Quick Commands
-
-> **Going to prod?** See **[doc/GO-LIVE-INSTALL.md](doc/GO-LIVE-INSTALL.md)** for the single-file install runbook (Mac Studio setup, FDA grants, backup jobs, Cloudflare Tunnel). Follow it top-to-bottom on a fresh host.
 ```
 # First time only:
 bash scripts/setup.sh                    # Install everything
@@ -35,7 +33,7 @@ See [`doc/HowToStart.md`](doc/HowToStart.md) for the full guide (troubleshooting
 *   **Backend:** FastAPI (Python 3.14)
 *   **Frontend:** Jinja2 templates + vanilla JS + Tailwind CSS (dark/light themes, responsive for Desktop & Mobile)
 *   **Database:** SQLAlchemy 2.0 ORM with SQLite (local). PostgreSQL + Alembic migration target is queued for MVP2.0.1 wave 3 (#10).
-*   **AI Models:** Faster-Whisper (CPU transcription, 4 model sizes) + MLX Whisper Large V3 Turbo (Apple-Silicon GPU transcription, runs in an isolated subprocess — see [`doc/mlx-fork-crash-postmortem.md`](doc/mlx-fork-crash-postmortem.md)), Ollama (LLM processing via `glm-5.2:cloud`)
+*   **AI Models:** Faster-Whisper (Transcription, 4 model sizes), Ollama (LLM processing via `glm-5.2:cloud`)
 *   **Authentication:** AuthKit Firebase login UI + Firebase Admin SDK (backend token verification) + httpOnly session cookies
 
 ## Features
@@ -46,10 +44,8 @@ See [`doc/HowToStart.md`](doc/HowToStart.md) for the full guide (troubleshooting
 *   **Responsive layout:** The video page works on mobile, tablet, and desktop. The main content uses `min-w-0` so flex children can shrink below their intrinsic width (preventing video overflow on small screens). The transcript header (title + controls) stacks vertically on mobile and sits side-by-side at sm+. Two-column split (60/40) activates at the `lg` breakpoint.
 *   **Interactive Chat:** Click "Teach me real-world usage" on a flashcard to open a chatroom where the AI teaches real-world examples. Chat history is persisted.
 *   **Transcript Viewer:** Timestamped transcript with click-to-seek video player integration, keyword search with live highlighting, and prev/next match navigation.
-*   **Whisper Model Selection:** Choose between `tiny`, `base`, `small`, `medium` (CPU) plus the recommended **MLX Whisper Large V3 Turbo** smart pick (Apple Silicon) on the web UI. Models auto-download on first use.
+*   **Whisper Model Selection:** Choose between `tiny`, `base`, `small`, `medium` on the web UI. Models auto-download.
 *   **Session-based Auth:** Firebase ID tokens are exchanged for httpOnly session cookies — no tokens in JavaScript.
-*   **Usage & Analytics (2026-09-05):** Batched UI telemetry (plays, pauses, seeks, tab clicks, logins) feeds admin dashboards — [`/admin/analytics`](doc/roles-tiers-cheatsheet.md) (activity overview, top videos/users, daily chart) and `/admin/usage` (per-user 7h/week quota bars). Users see their own quota on `/usage` (FREE: daily claim; PAID: 50/7h + 100/wk bars) and personal history on `/activity`. Events pruned after 90 days to a permanent HDD archive.
-*   **Pricing Page:** `/pricing` — beta plans overview with a contact CTA (paid tier is invite-only during beta).
 
 ## Quick Start
 ```bash
@@ -69,7 +65,7 @@ uvicorn app.main:app --reload   # http://localhost:8000
     ```
 *   **FFmpeg** for audio extraction (`brew install ffmpeg`)
 *   **Firebase project** with Google + Email/Password auth enabled (see `doc/handover.md` for setup). **Important:** add `localhost` to your Firebase project's **Authentication → Settings → Authorized Domains** before testing Google sign-in, otherwise the popup will fail with a domain-not-authorized error.
-*   **(Apple Silicon)** `mlx-whisper` ships in `requirements.txt` (behind a `darwin+arm64` marker) for the 5-10x faster MLX Whisper Large V3 Turbo backend. Transcription with it runs in an **isolated subprocess** (`scripts/mlx_transcribe_worker.py`) — running MLX inside gunicorn workers crashes them (macOS fork-safety abort; see [`doc/mlx-fork-crash-postmortem.md`](doc/mlx-fork-crash-postmortem.md)). Whisper models are pulled from Hugging Face on first use — pre-cache them once on a clean network (see the postmortem's model inventory). Without MLX, the app falls back to `faster-whisper` `base` (CPU, slower but still works).
+*   **(Apple Silicon only, optional)** `pip install mlx-whisper` for the 5-10x faster MLX Whisper Large V3 Turbo backend. Without it, the app falls back to `faster-whisper` `base` (CPU, slower but still works). See `doc/MVP2.0-Status.md` §19 for the smart-pick details.
 
 ## Testing
 ```bash

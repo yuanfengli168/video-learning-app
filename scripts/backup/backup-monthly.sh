@@ -12,16 +12,7 @@ SRC_MEDIUM="/Volumes/Storage-Medium-NVMe/video-app"
 LOG="$HOME/Library/Logs/video-app-backup.log"
 RETENTION_MONTHLY=12  # keep last 12 months
 
-# Log to stdout AND $LOG. CRITICAL: the log append must never kill
-# the job (set -euo pipefail + an unwritable log file would otherwise
-# abort the script — 2026-09-18 Studio incident class).
-# Write stdout exactly once; try the file append separately so a
-# failure there can't double-print or abort.
-log() {
-    local line="[$(date '+%F %T')] [monthly] $*"
-    echo "$line"
-    { echo "$line" >> "$LOG"; } 2>/dev/null || true
-}
+log() { echo "[$(date '+%F %T')] [monthly] $*" | tee -a "$LOG"; }
 
 if [ ! -d "/Volumes/Storage-Backup-HDD" ]; then
     log "ERROR: Storage-Backup-HDD not mounted — skipping"
