@@ -29,7 +29,7 @@ def test_health_returns_200():
     assert r.status_code == 200
     data = r.json()
     assert data["status"] == "ok"
-    assert data["app"] == "Video Learning App"
+    assert data["app"] == "CapySmart"
     # 'server' field reports which ASGI server is running (gunicorn
     # in prod, uvicorn in dev). Just check it's a string.
     assert isinstance(data["server"], str)

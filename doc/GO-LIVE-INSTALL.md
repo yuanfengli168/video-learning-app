@@ -2,6 +2,12 @@
 
 > **One file, one checklist, one source of truth.**
 > Follow this top-to-bottom on a fresh Mac Studio (or any new prod host) and you'll have a working backup, monitoring, and public HTTPS in roughly 30 minutes.
+>
+> **Updated 2026-09-12** for the 9/15 launch: COOKIE_SECURE, the trial
+> cohort script, the YouTube-views refresh daemon, and Firebase
+> authorized-domains for the tunnel. This is the handover doc for the
+> Mac Studio agent — follow Steps 0–7, then the Post-install section
+> IN ORDER; the verify commands in each step are the acceptance bar.
 
 ## TL;DR (for the impatient)
 
@@ -37,7 +43,7 @@ sudo bash scripts/install-launchdaemon.sh
 curl -s http://localhost:8000/api/ready | python3 -m json.tool
 #    ↑ backup.is_healthy should be true
 #    ↑ newest_age_hours should be < 1
-curl -s https://your-tunnel.trycloudflare.com/api/ready | python3 -m json.tool
+curl -s https://learn.yourdomain.com/api/ready | python3 -m json.tool
 ```
 
 ---
@@ -50,7 +56,7 @@ curl -s https://your-tunnel.trycloudflare.com/api/ready | python3 -m json.tool
 | 1. Get the code | 1 min | Working tree on `mvp2-production-patches` |
 | 2. Dependencies + secrets | 5 min | venv + `.env` + Firebase service account |
 | 3. macOS permissions | 2 min | FDA for the 3 binaries that need it |
-| 4. Backup jobs | 1 min | 5 launchd jobs in `/Library/LaunchDaemons/` |
+| 4. Backup jobs | 1 min | 7 launchd jobs in `/Library/LaunchDaemons/` (5 backup + prune-events + refresh-youtube-views) |
 | 5. Cloudflare Tunnel | 3 min | Public HTTPS URL on your own domain |
 | 6. App server | 2 min | gunicorn running, auto-start on boot |
 | 7. Verify | 1 min | `/api/ready` reports healthy |
@@ -60,6 +66,45 @@ Total: ~20 min + waiting for first scheduled run.
 ---
 
 ## Step 0 — Host prerequisites
+
+### 0a. Migrating from the dev MacBook Pro? (drive move, 2026-09-13 plan)
+
+If the three external drives (Storage-Fast-NVMe, Storage-Medium-NVMe,
+Storage-Backup-HDD) are coming over from the dev machine, do this on the
+MacBook Pro FIRST:
+
+```bash
+# 1. Graceful stop (SQLite on a volume yanked mid-write can corrupt)
+bash scripts/stop.sh
+# 2. Unmount all three drives cleanly (Finder ⏏ or:)
+diskutil unmount /Volumes/Storage-Fast-NVMe   # repeat for the other two
+```
+
+Then on the Mac Studio, plug in the drives and verify they mount with the
+SAME volume names (the DB path, upload dir, and backup dir in .env all
+reference `/Volumes/Storage-*` by name — if names differ, rename in Disk
+Utility to match, or edit .env).
+
+The DB and all uploads come over ON the drives — no data copy needed.
+Three things are NOT on the drives and must be brought manually:
+
+- `.env` — git-ignored; copy from the MacBook Pro (then set
+  `COOKIE_SECURE=true` per Step 2)
+- `firebase-service-account.json` — git-ignored; copy + `chmod 600`
+- Ollama models — live in `~/.ollama`, NOT on the drives:
+  `ollama pull glm-5.2:cloud`
+
+### 0b. Prevent sleep (a sleeping Mac Studio = a dead site)
+
+System Settings → Energy Saver (or Battery → Options on desktops):
+
+- **Prevent automatic sleeping on power adapter** → ON
+- **Wake for network access** → ON
+
+(The app's own `scripts/status.sh` checks this and warns — make it green
+before finishing Step 0.)
+
+### 0c. Fresh-host prerequisites
 
 The Mac Studio needs:
 
@@ -128,6 +173,14 @@ CLOUDFLARE_TUNNEL_TOKEN=...
 # Postgres (Neon or local SQLite)
 DATABASE_URL=postgresql://...   # production
 # OR leave unset to use SQLite at /Volumes/Storage-Fast-NVMe/video_learning.db
+
+# ── Launch-specific (2026-09-12) ──
+# Cookie Secure flag: MUST be true in production (HTTPS via the tunnel).
+# Browsers refuse Secure cookies over plain http://localhost, so keep
+# false only for local dev. Flip AFTER the tunnel is up (Step 5) and
+# restart the app (Step 6) — login over http://localhost:8000 keeps
+# working either way, but PUBLIC https logins REQUIRE secure=true.
+COOKIE_SECURE=false   # ← change to true after Step 5 succeeds
 ```
 
 Then add the Firebase service account:
@@ -151,9 +204,10 @@ System Settings → Privacy & Security → Full Disk Access → click **+** → 
 |---|---|
 | `/usr/bin/sqlite3` | backup jobs use it to .backup the live DB |
 | `/bin/bash` | shell that runs the backup scripts under launchd |
-| `/usr/bin/python3` | the probe script runs Python under launchd |
+| `/usr/bin/python3` | the probe + prune jobs run Python under launchd (both stdlib-only) |
+| `<repo>/venv/bin/python` | the app server (gunicorn) + refresh-youtube-views run the **venv** python under launchd. FDA is per-binary: the venv python is a DIFFERENT binary from /usr/bin/python3 — without its own grant, gunicorn gets "Operation not permitted" reading `/Volumes/Storage-Fast-NVMe/video_learning.db` (verified 2026-09-17 on the Studio: same code, root terminal OK, launchd blocked). In the Go to Folder dialog enter the full path, e.g. `~/Code-Prod/video-learning-app/venv/bin/python` (Cmd+Shift+G expands `~`). The venv python is a symlink to Homebrew's `python3.14`; macOS resolves and grants the underlying binary, so this one grant covers every venv invocation. |
 
-Without these three, **all backup jobs silently fail with exit code 126** (TCC blocks sqlite3 from `/Volumes/Storage-Fast-NVMe/`). This is the single most common reason backups stop working on a new host. Verify after granting:
+Without these four, **all backup jobs silently fail with exit code 126** (TCC blocks sqlite3 from `/Volumes/Storage-Fast-NVMe/`), and worse, the backup **probe** reports `healthy=false` forever because it can't stat the RAID. This is the single most common reason backups stop working on a new host. Verify after granting:
 
 ```bash
 sudo launchctl kickstart -k system/com.videoapp.backup-db
@@ -190,6 +244,8 @@ Expected outcome:
 ✅ Installed com.videoapp.backup-monthly
 ✅ Installed com.videoapp.backup-verify
 ✅ Installed com.videoapp.backup-probe
+✅ Installed com.videoapp.prune-events
+✅ Installed com.videoapp.refresh-youtube-views
 ```
 
 Verify:
@@ -209,6 +265,8 @@ Schedule (each job runs at its time):
 | `backup-monthly` | 1st of month 00:30 | `monthly-YYYY-MM/` archive |
 | `backup-verify` | Sunday 01:00 | integrity check on existing backups |
 | `backup-probe` | every 5 min | `/tmp/video-app-backup-status.json` |
+| `prune-events` | 00:30 daily | events >90d archived to HDD, then deleted |
+| `refresh-youtube-views` | 00:10 daily | `videos.view_count` snapshot for the Top Viewed tab |
 
 ---
 
@@ -230,6 +288,31 @@ Expected outcome:
 ✅ Tunnel active: https://learn.yourdomain.com
 ✅ Smoke test: HTTP 200 in 0.6s
 ```
+
+**⚠️ REQUIRED after the tunnel is live — Firebase authorized domains.**
+Google sign-in will fail with `auth/unauthorized-domain` until you add the
+tunnel hostname in the Firebase console:
+
+1. Firebase Console → Authentication → Settings → **Authorized domains**
+2. Add `learn.yourdomain.com` (the tunnel hostname, exactly)
+3. Verify: open `https://learn.yourdomain.com/login` in a PRIVATE window →
+   the Google sign-in popup must complete without an unauthorized-domain
+   error.
+
+(Day 9 lesson: this same step was done for trycloudflare.com on the dev
+host — the tunnel hostname must always be authorized or login breaks for
+EVERYONE.)
+
+**Then flip the cookie flag and restart the app:**
+
+```bash
+${EDITOR:-nano} .env    # COOKIE_SECURE=true
+sudo bash scripts/restart.sh   # or: launchctl kickstart the app daemon
+```
+
+Why here: the fb_token cookie now carries the Secure flag, which browsers
+only accept over HTTPS. Localhost http keeps working regardless (browsers
+exempt localhost), so this flag is purely about public-URL correctness.
 
 ---
 
@@ -257,25 +340,34 @@ Expected outcome:
 ## Step 7 — Verify
 
 ```bash
-curl -s http://localhost:8000/api/ready | python3 -m json.tool
+bash scripts/doctor.sh
 ```
 
-Expected:
+`doctor.sh` (added 2026-09-18, after the Studio deploy) checks everything this
+doc walks through, in one read-only command: sleep state, 3 volumes, venv +
+`.env` + secrets perms, DB reachable + WAL, Ollama + model, gunicorn +
+`/api/ready`, all 7 launchd jobs, probe health + backups on the RAID, and —
+the silent killer — **TCC/FDA by symptom** (can `/usr/bin/python3`, the venv
+python, and `sqlite3` actually read `/Volumes/Storage-Backup-HDD`). It encodes
+every failure mode found during the 2026-09-17/18 deployment. Run it after any
+install, upgrade, macOS update, or reboot; expect exit 0.
 
-```json
-{
-  "status": "ready",
-  "db": { "status": "ok" },
-  "integrity_ok": true,
-  "ollama_ok": true,
-  "events_table_ok": true,
-  "backup": {
-    "probe_present": true,
-    "is_healthy": true,
-    "newest_age_hours": 0.1,
-    "is_stale": false
-  }
-}
+The legacy per-step verification (kept for reference):
+
+```bash
+curl -s http://localhost:8000/api/ready | python3 -m json.tool
+#    ↑ backup.is_healthy should be true
+#    ↑ newest_age_hours should be < 26
+```
+
+**Post-install one-time fixup** (2026-09-18 lesson): after the first launchd
+run, `~/Library/Logs/video-app-backup.log` is root-owned (the jobs run as
+root). The admin Backups page button runs as your user — with the hardened
+`log()` (commit 7b938f5) the backup succeeds regardless, but chown it so both
+contexts share one log:
+
+```bash
+sudo chown "$(whoami)":staff ~/Library/Logs/video-app-backup.log
 ```
 
 If `backup.is_healthy: false`: see Step 3 (FDA missing) or wait 5 min for the probe to refresh.
@@ -287,22 +379,60 @@ curl -s https://learn.yourdomain.com/api/ready | python3 -m json.tool
 # Same JSON, served through Cloudflare Tunnel
 ```
 
+**Also verify the cookie carries Secure on the public URL** (after
+flipping COOKIE_SECURE=true):
+
+```bash
+curl -sI https://learn.yourdomain.com/login | grep -i set-cookie
+# the fb_token cookie is set at login time; to check the flag, sign in
+# once via the browser and inspect the /api/auth/session response
+# headers — Set-Cookie must contain: HttpOnly; Secure; SameSite=Lax
+```
+
 ---
 
 ## Post-install
 
-After the above, do these one-time things:
+After the above, do these one-time things **in order**:
 
 1. **Seed users**: `python scripts/seed_users.py` — adds the 3 known Google OAuth users with their roles (ADMIN/PAID/FREE). Idempotent.
 
 2. **Smoke-test login**: open `https://learn.yourdomain.com/login`, sign in with one of the 3 Google accounts, verify the admin UI shows the user's role correctly.
 
-3. **Watch the dashboard for 24h**: open `https://learn.yourdomain.com/admin/backups` and confirm:
+3. **Grant the trial cohort** (soft-launch 20): collect the emails into a
+   cohort file, one per line (`#` comments OK):
+
+   ```bash
+   cat > cohort.txt << 'EOF'
+   # soft-launch cohort — 9/15 go-live
+   friend1@gmail.com
+   friend2@gmail.com
+   EOF
+   bash scripts/grant_trial.sh grant --all-cohort cohort.txt
+   bash scripts/grant_trial.sh list   # verify all show PAID + due date
+   ```
+
+   ⚠️ Each friend must have **signed in once** before granting (user rows
+   auto-create on first login — the script fails loudly with this
+   explanation otherwise). At trial end (2026-10-15, 30 days):
+   `bash scripts/grant_trial.sh revert --all-cohort cohort.txt`.
+   Full audit trail lives in `users.notes` (granted/due/cohort/reverted).
+
+4. **First YouTube-views refresh** (the nightly daemon runs at 00:10, but
+   prime the Top Viewed tab immediately):
+
+   ```bash
+   venv/bin/python scripts/refresh_youtube_views.py
+   # expect: Updated N video(s) — fills videos.view_count so the
+   # dashboard's Top Viewed tab shows real numbers on day one
+   ```
+
+5. **Watch the dashboard for 24h**: open `https://learn.yourdomain.com/admin/backups` and confirm:
    - At least 4 backup files appear in `db-backup/` (one every 6 hours)
    - The probe reports `is_healthy: true` consistently
    - RAID free space is reasonable (we warn at <5 GB)
 
-4. **Invite soft-launch users** (Day 11 of plan): 10-20 friends via Google OAuth. Share the URL in the landing page.
+6. **Invite soft-launch users** (Day 11 of plan): 10-20 friends via Google OAuth. Share the URL in the landing page.
 
 ---
 

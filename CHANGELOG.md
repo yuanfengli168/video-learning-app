@@ -3,6 +3,124 @@
 All notable changes to the Video Learning App are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0.11] - 2026-09-26/29 — Chunked-upload background-completion + Resume card (chunks-are-sacred) + live-fix batch
+
+🛟 **The 9/26 incident**: owner navigated away mid 6-chunk upload; Starlette `ClientDisconnect` was unhandled → ERROR 500 → session stayed `active` for the 1h TTL → every new init returned 400 for an hour. **Owner-ratified model (9/27): uploads run in the background while the browser tab is open; chunks are sacred — a disconnect PRESERVES the session; the 1h TTL is the abandonment net; the Resume card is the recovery path.** Three real user hits (9/28–29) drove a live-fix batch: a serializer/JS shape drift, a JS timezone misparse, and a same-tab-navigation misunderstanding — all closed. **Live-proven 9/29**: a 5-file batch (628MB–1.64GB, incl. the session that sat at 4/15 chunks) completed → transcribed → `ready` through the resume path in production. Tests 1617 → **1653 passing**.
+
+### 🚨 Incident + model shift
+
+- **ClientDisconnect soft-block (~1h)** — the original A-safe fix (instant cancel on disconnect) was shipped 9/26 and **reverted 9/27**: canceling contradicted the background-upload model (a refresh/lid-close shouldn't throw away 10/32 chunks). The handler now catches `ClientDisconnect`, **preserves the session**, logs a `ui.upload` warning events row (chunks_uploaded + duration), and returns 499 instead of an unhandled 500. Full diagnosis + decision trail: [`doc/known-issues-2026-09-21.md` §6](doc/known-issues-2026-09-21.md).
+
+### ✨ Features
+
+- **`feat(upload)`: Resume card (course page)** — on page load, `GET /me` reports the user's ACTIVE session (filename, chunks received, bytes, TTL countdown). If it targets a section on this page, the card renders above the picker: "⏳ lecture-04.mov — 10/32 chunks (~525 MB of 1.4 GB) · auto-cancels in ~17 min. [Resume] [Cancel and remove]" + the honest browser-open note. Resume re-opens the picker; re-selecting the SAME file (name+size verified) continues from the first missing chunk — **nothing re-uploads**. Cancel DELETEs the session and reloads fresh.
+- **`feat(upload)`: enriched `/me` + structured 400** — both payloads now carry `received_chunks`, `received_bytes`, `section_id` (read from the real staging dir — filesystem-as-truth, registry §3a), so the card and the modal can't disagree with reality.
+- **`feat(upload)`: two-choice active-session modal** — a new upload attempt while a session is active now asks the two honest questions: "It's still receiving — your progress is preserved. OK = cancel that upload and start this one. Cancel = keep waiting (this pick is discarded)" — with the file name, size, chunk progress, and last-activity age. On dashboard bulk, "keep waiting" skips the rest of the batch honestly instead of spamming the modal per file.
+- **Background completion is now the contract**: navigate to any page while a >100MB upload flies — chunks keep arriving (same tab), the Video row appears in the section, no interruption anywhere.
+- **`feat(upload)`: stay-on-tab guidance** (`5da2b3c`, 9/29) — `beforeunload` guard (`window._uploadInFlight`) asks the browser to confirm same-tab navigation mid-upload; our own success navigations clear the flag first (4 sites on course.html, 2 on dashboard.html). "Keep this tab open — want to browse other pages? Open them in a new tab" copy on both upload surfaces. Born of the 9/29 incident: a same-tab Dashboard click killed a batch at 4/15 chunks.
+
+### 🐛 Live-fix batch (three real user hits, 9/28–29)
+
+- **`fix(upload)`: resume 404 — serializer/JS shape drift** (`8c288b0`) — `/me` sends `id`, the client destructured `session_id`, and `chunk_size` was missing from the payload entirely → the first resume PUT went to `/undefined/` → "Upload session not found" on a same-file re-pick. Fixed both sides; the test now pins the FULL client contract (`id` + `chunk_size` + `received_chunks`).
+- **`fix(upload)`: the TZ misparse — "about to auto-cancel" with 50 min left** (9/29) — the DB stores naive UTC; a timezone-less ISO string is parsed by JS `new Date()` as LOCAL time, so at UTC+8 the Resume card's countdown computed −8h and permanently read "about to auto-cancel" (the modal's "last activity X ago" ~8h off too). All client-facing datetimes (`started_at`, `last_chunk_at`, `expires_at`, `cancelled_at`) now carry the `+00:00` designator (`_utc_iso`, seconds precision — Safari-strict-safe); tests assert the suffix. **Display-only**: the sweeper's TTL is pure SQL and never misjudged — verified live (sweep pass claimed 0 with the session at +50 min real time left).
+
+### 🧪 Tests
+
+- `test_chunk_client_disconnect_preserves_session` — the core assertion: disconnect → session STAYS active, chunks stay on disk, /me still reports it (drives the real handler with a stub request that raises `ClientDisconnect`).
+- `test_me_reports_chunk_progress_for_resume_card` — received_chunks/received_bytes/section_id AND the full resume contract (`id`, `chunk_size`) reflect the real staging dir.
+- `test_me_returns_active_session_with_expires_at` — TTL delta + the UTC-designator assertions (`+00:00` suffix on all three datetimes — the TZ regression pin).
+- `test_last_cancelled_carries_utc_designator` — the interrupted-banner feed's `cancelled_at` pinned to the same JS-parse contract.
+- Plus: structured-400 envelope, `/me` null, `/me` user-scoping.
+- Plus the 5 from the 9/26 batch (structured 400 envelope, /me null, /me with TTL, user-scoping).
+
+### 🗑️ Removed
+
+- **A-safe auto-cancel** (shipped 9/26, reverted 9/27): disconnects preserve instead of cancel. The 1h inactivity sweeper remains the only automatic cleaner — that's by design.
+
+## [2.1.0.10] - 2026-09-13/22 — Production hardening: queue + WAL + chunked uploads + tier limits + re-run guards + path-disclosure fix (56-commit batch)
+
+🔒 **The Mac Studio went 24/7 production live at www.capysmart.com, and the next 9 days of real traffic shaped the batch: a QueuePool outage series with postmortem, the 13a chunked-upload milestone, tier limits with a flip-kit, and — on launch day itself — a screenshot-driven path-disclosure fix.** Commits `19107cc` → `4982e50`, all on `mvp2-production-patches`. Tests 1427 → **1617 passing**.
+
+### 🚨 Incidents (root causes fixed + postmortemed)
+
+- **QueuePool outage series (2026-09-19/20)** — 3 root causes: (1) queue-claim rollback — `_claim_one` never committed, so 4 schedulers re-claimed the same rows every 3s → ~60 concurrent transcribes → 60 connections checked out against a 30-cap pool. Fixed claim-commit + `_dispatched_videos` guard + a pool watchdog (`c827a7b`). (2) macOS ObjC fork-safety SIGABRT killing workers — fix must precede Python's ObjC init: `export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` moved into start.sh, before gunicorn (`16671f2`). (3) The first watchdog shipped broken — `pool.status()` returns a STRING in SQLAlchemy 2.x; fixed to `checkedout()` (`39a5ce5`). Full postmortem: `doc/984f7e2`-committed postmortem doc + `incident-capture.sh` for live evidence BEFORE restarts (`8580406`).
+
+### ✨ Features
+
+- **`feat(upload)`: 13a — chunked/resumable uploads, complete** (`5ee1760`→`57534ee`, 6 commits) — `POST /api/upload-sessions/init` (tier + quota validation at declared size, before any bytes move; one-active-session rule) → `PUT /{id}/chunk/{n}` (raw body, idempotent, per-chunk retry client-side) → `POST /{id}/complete` (byte-verify → Video row) → `DELETE /{id}` (instant quota release). In-app sweeper thread: 1h no-activity TTL, julianday SQL claim, commit-immediately (the c827a7b pattern by construction). Client: files >100MB auto-chunk (32MB slices), per-chunk 3× retry, cancel button, interrupted-upload banner. Production-verified: 1.4GB + 1.5GB browser uploads byte-exact; the sweeper's first sweep freed 177MB.
+- **`feat(limits)`: 13d-lite — tier limits + per-user overrides** — the resolver (`effective_limit(user) = user override → tier default`), per-file + quota checks on ALL upload paths (chunked init AND legacy single/bulk — no dodging), /usage storage & limits cards. PAID 1GB/25GB, ADMIN 20GB/100GB (env-tunable). Plus **the flip-kit**: `scripts/promote-paid.sh` — one-command PAID flip with per-user limit overrides (`c14059e`), first production use the same day (2GB file override for a real user).
+- **`feat(queue)`: transcription mini-queue** (`0f1cb30`) — 2-slot DB-backed scheduler replaces BackgroundTask dispatch; uploads queue visibly with per-video status; `queued` videos cancel with honest "wastes nothing, frees your upload allowance" copy.
+- **`feat(guards)`: re-run protection A+B+C** (`49f47ef`) — owner report: users on queued/transcribing videos saw no loading indicator and re-clicked Transcribe/Generate 10× = 10 stacked pipelines. A: server 409 while in-flight (>30min staleness escape so orphan rows stay recoverable). B: in-flight progress strip + 2s polling on the video page. C: 3/day manual re-run cap via audit events.
+- **`feat(upload)`: per-file multi-upload + the upload-failure beacon** (`ab31553`+`dd611ee`) — the bundled multi-file POST died at Cloudflare's edge (the free plan's 100MB per-REQUEST cap) with ZERO server-side trace; two real incidents (18-file ~18GB, 8-file). Now per-file sequential: >100MB → own chunked session, ≤100MB → single endpoint; 429 stops the batch with the honest reason. New `ui.upload` telemetry source: every client-side upload failure lands in the events table even when the request never reached the server.
+- **`feat(caps)`: upload dual gates + congestion soft notice** (`240b048`) + **`feat(admin)`: queued-video cancel + Upload-activity analytics card** (`ed4f004`).
+- **`feat(recovery)`: one-click orphan recovery + fix silent job no-ops** (`5349bca`); **`feat(chat)`: tier-aware transcript caps FREE 600 / PAID 3000 / ADMIN 8000** (`498eb4e`); **`feat(youtube)`: /live/ URL support + ASR rolling-caption dedupe** (`3d0f0c2`); **`feat(admin)`: title autofill from YouTube** (`b95d8b6`); **`feat(brand)`: rebrand to CapySmart** (`23908fc`); **`feat(ops)`: doctor.sh** full-stack one-command health check (`de1880b`); **`feat(upload)`: path-aware size cap** — 100MB via tunnel / 10GB direct, detected via `Cf-Connecting-Ip` (`12242e0`).
+- **`perf(db)`: SQLite WAL + busy_timeout** (`eec1f36`) — readers stop stalling behind writers; **`ops(gunicorn)`: capacity rewrite** for the verified 32GB machine — 8 threads/worker (`821c8e4`).
+
+### 🐛 Bug fixes
+
+- **`fix(security)`: path-disclosure hardening** (`3bd68ee`+`4982e50`) — a beta screenshot showed a PAID user the full server path of a plugin output + an "Open in Finder" button (meaningless remotely — it pops Finder on the SERVER). Now: runs/swap APIs return `output_path: null` + `filename` for non-admin (`_sanitize_run_for_role` — the single choke-point), the swap endpoint resolves the MP4 server-side (no path round-trip; old-client body-path replays ignored for non-admin), reveal endpoint admin-only, the out-of-root 403 no longer echoes the allowed-roots list, SSR context sanitized, and a one-time scrub of legacy `plugin_runs.message` rows (0 rows carry paths after the restart). Also found+fixed during: `video.html` had TWO `performSwap` definitions — JS hoisting made the old one win; both unified path-free.
+- **`fix(queue)`: dispatch reads the STAMPED whisper model** (`396e9bd`) — hardcoded `"base"` meant every queue upload since 9/16 ran CPU faster-whisper instead of MLX turbo; explains the 7-minute transcribe on a 47-min video. Production-verified same day (mlx-whisper stamped + dispatched).
+- **`fix(auth)`: 10s clock-skew tolerance in Firebase token verification** (`374ed57`) — the "Token used too early" random-login-failure class; Firebase's zero-tolerance iat check vs 0.66s NTP skew.
+- **`fix(transcribe)`: model-cache check-and-load lock** (`f605486`); **`fix(ops)`: portable launchd templates + TCC fixes + plugin-sweep datetime bug** (`4a1ca3c`); **`fix(launchd)`** (`1d8cc23`); **`fix(community)`: env var name mismatch** (`efdef27`).
+- **Banner dismissal never stuck** (in `ab31553`) — the dismiss key derived from display text vs the load key from filename+size; never matched, so the interrupted-upload banner re-appeared on every course-page load.
+- **`fix(i18n)`: queued-cancel prompts EN-first** (`b19597a`) — the one Chinese string a beta user hits in the flow; originals kept as adjacent comments for future zh locale.
+
+### 📚 Docs
+
+- `doc/BlockersOrChallengers.md` queue postmortem (`984f7e2`); limits registry created (`b82d360`+`f23b15a`) — every numeric limit, its env var, its enforcement point, single source of truth; flip-kit runbook (`bda0d1a`); known-issues-2026-09-21 + Todo #15/#16; PriceAndCost addenda A1–A10 (upload-size economics, beta program A8, shutdown-beta plan A9); roles-tiers-cheatsheet §B telemetry contract + RUN_PLUGIN row fix (this batch's doc pass); mvp2-production-patches-status rows 28-34.
+
+### 🧪 Tests
+
+- Full suite **1617 passing, 19 skipped** (+190 since 2.1.0.9): chunked-upload battery (26) + live smoke (17 checks), tunnel-cap (5), re-run guards (13), path-disclosure (16), upload-error telemetry (10), per-file multi-upload template-source (11), usage (+5), sweeper/orphan-recovery, and the incident-driven fixes' regression pins.
+
+## [2.1.0.9] - 2026-09-12 — Course management UX, Discuss tab overhaul & go-live polish (8-commit batch)
+
+✨ **Launch-week polish driven by real usage: courses + sections became editable, the Discuss tab got a ChatGPT-grade input/markdown/session overhaul, and the admin pages gained structure + provider-usage observability.** Commits `587ed58` → `2076a3f`, all on `mvp2-production-patches`.
+
+### ✨ Features
+
+- **`feat(courses)`: rename courses + sections — the missing edit path** (`587ed58`) — PAID users could create courses/sections but never edit them. New `PUT /api/courses/{cid}/sections/{sid}` (title/description, all-None = no-op) + ✏️ Edit Course and per-section rename buttons + modals on the course page. 1403 tests.
+- **`feat(budget)`: requests-used-per-provider table on `/admin/budget`** (`20735d0`) — per-provider (and per-model) LLM request counts parsed from the audit events (`LLM call succeeded via …` / `LLM call failed on …`), 7-day window, ok/failed/total per provider. Complements the Ollama quota cards with what the app actually sent where, across all tier chains.
+- **`feat(discuss)`: 4 UX fixes on the video page Discuss tab** (`2076a3f`) — (a) single-line `<input>` → auto-resizing `<textarea>` (Enter sends, Shift+Enter newline); (b) assistant messages now render markdown (headings, bold/italic, code, lists, tables, links) via a dependency-free DOM-node renderer — never innerHTML on LLM output, links validated to http(s)/root-relative, `[M:SS]` citation buttons preserved; (c) session RESUME: the tab loads the user's most recent video-scope session (`GET /api/chat/sessions?video_id=…&scope=video` filters added) instead of silently starting a new one on every page load; (d) only the Send button greys out while waiting — the textarea stays active for typing.
+- **Course-level asc/desc section sort** (`cbab93d` + `8e44720`) — ↑ asc/↓ desc button beside Edit Course sorts section cards by natural key with per-course localStorage persistence; `8e44720` fixed the default-asc not applying on first open. (History: shipped ↑/↓ arrow-button moves in `dfa4980`, reverted same day per user feedback — the full `move` endpoint was removed cleanly; drag-and-drop deferred to `Todo.md` #10.)
+- **`feat`: admin content-structure analytics** (in `dfa4980`) — "Content structure" table on `/admin/analytics`: per-course sections/videos/ready/error counts, backing data for future feature decisions (e.g. whether a course search bar is warranted).
+
+### 🐛 Bug fixes
+
+- **`fix(admin)`: sidebar nav disappearing on Budget/Events/Backups pages** (`677e95e`) — those three routes called `_ctx()` without a DB session, so `is_admin` never computed and the entire admin nav block collapsed (rendered as FREE). Now every admin page passes `db=db`; pinned by `tests/test_admin_sidebar.py` across all 6 pages.
+
+### 📚 Docs
+
+- `doc/materials-port-plan.md` — staged port plan for the materials feature from `mvp-mobile-pocket-v0.1`, executing week-2 post-launch as the trial-cohort flagship.
+
+### 🧪 Tests
+
+- Full suite **1427 passing** (+95 since 2.1.0.8): rename (9), section-ordering iteration (arrows 10 → reverted → sort 6), structure analytics (1), sidebar completeness (6), provider usage (3), Discuss UX (9) + list-endpoint filters (3).
+
+## [2.1.0.8] - 2026-09-06/08 — YouTube embed unlock, player hardening & go-live polish
+
+🔒 **A user-reported "the YouTube player is a dead black box" turned into a 4-commit layered-fix saga (CSP → XSS → Permissions-Policy → COEP), followed by playback analytics, a transcript-follow regression fix, a login redesign, and two go-live polish items.** Commits `223b314` → `13fe6d2`, all on `mvp2-production-patches`.
+
+### 🐛 Bug fixes
+
+- **`fix(csp)`: allowlist YouTube origins** (`223b314`) — Day-8 regression: `yt_player.js` loads the IFrame API from `www.youtube.com` and embeds via `www.youtube-nocookie.com`, but neither origin was in the CSP `frame-src`/`script-src`/`connect-src` allowlist. Every admin-curated YouTube video in the catalog rendered as a dead black box. All browsers silently refuse the iframe without this.
+- **`fix(xss)`: escape chat + materials content before `innerHTML`** (`216fcb8`) — the live-chat path in `video.html` interpolated raw strings into `innerHTML`: the user's own message, the AI reply, and fetch error text. Any LLM reply containing `<script>`/`<img onerror=…>` executed in the session. All sinks now go through `escapeHtml()` first.
+- **`fix(player)`: unlock YouTube embed (Permissions-Policy + Referrer-Policy)** (`ca191fc`) — the CSP fix alone wasn't enough. The global middleware set `Permissions-Policy: fullscreen=(self)` and `Referrer-Policy: strict-origin-when-cross-origin`, both hostile to the YouTube iframe. Now the video page's full-screen request needs no permission delegation; referrer policy relaxed to `no-referrer-when-downgrade` so Google's embed can load its resources.
+- **`fix(coep)`: exempt `/video/{id}` pages so the YouTube embed can navigate** (`04edaf5`) — cross-origin isolation (COEP) was also blocking the embed. Exempted the video pages from COOP/COEP headers so the iframe can navigate cross-origin.
+- **`polish(player)`: crash-proof the rAF time loop + mtime cache-busting for static JS** (`e3dae96`) — (a) The transcript-follow rAF loop could keep running after the video element was removed, throwing on every frame in the background; now guarded by `document.contains()`. (b) Static JS now ships with `?v=<mtime>` cache-busting via the `asset()` helper, so players/follow widgets refresh on deploy without a hard refresh.
+- **`fix(usage)`: week window shifted a week back under host TZ** (`13fe6d2`) — `get_user_usage()` stripped `tzinfo` before calling `_week_bounds()`, whose `astimezone(utc)` silently reinterpreted the naive value as host-local (+08 on the Mac Studio), computing the PREVIOUS Mon–Sun window and dropping just-counted calls. Now keeps `now` timezone-aware and converts to naive only at the SQL boundary; added an injectable `now=` kwarg for deterministic tests. Two boundary-flaky tests pinned to a fixed Wednesday reference clock.
+
+### ✨ Features
+
+- **`feat(playback)`: admin playback analytics + transcript-follow regression fix + contact CTAs** (`c20ea96`) — (a) New admin playback analytics view (play/pause/seek/ended counters from the telemetry pipeline, top videos by play counts). (b) `transcript-follow.js` regression fix: the follow highlight wasn't tracking playback when the video is a YouTube iframe (it subscribed via `onTimeUpdate`, which the wrapper contract provides — the regression was the subscription being lost on re-init). (c) Login/pricing/contact CTAs polished.
+- **`polish(login)`: redesign login page hero with branded card + AuthKit theming** (`62b1568`) — branded card design with light/dark AuthKit theme, cleaner provider buttons, copy polish.
+
+### 🧪 Tests
+
+- Full suite **1332 passing** (+20 since the 2.1.0.7 batch): transcript-follow source-level + integration tests (20 .mjs), usage week-bounds tests (10), player wrapper tests, session-expiry tests. Zero changes to auth flow, LLM chains, storage, or admin RBAC.
+
+## [2.1.0.7] - 2026-09-05/06 — Usage pages, admin analytics, telemetry & retention (8-commit batch)
+
 ## [1.0.0] - 2026-07-06 — MVP1 release
 
 🎉 **First stable release.** MVP1 (local single-user foundation) is feature-complete, tested, and signed off. See [`doc/MVP1.0-successfullyFinished.md`](doc/MVP1.0-successfullyFinished.md) for the full scorecard.
@@ -1146,3 +1264,118 @@ an existing if/else).
 - **Total: ~250 lines of code changed, 0 new tests** (the existing 17 plugin tests still pass; the 633-test suite is green).
 
 [2.1.0.4]: https://github.com/yuanfengli168/video-learning-app/compare/v2.1.0.3..HEAD
+
+## [2.2.0] - 2026-08-24 — MVP2.0 Production Patches: pivot to admin-curated YouTube catalog (in progress)
+
+> **Branch**: `mvp2-production-patches` (based on `main`)
+> **Scope**: Convert this Mac Studio into a 24/7 production server for an admin-curated YouTube catalog. Users no longer upload videos — admins paste YouTube URLs.
+> **Tests**: 1201 passing, 89% coverage (was 633 / 92% before this branch)
+> **Versions shipped on this branch**: 47 commits ahead of `main`, all pushed
+
+**Note:** Versions below are unnumbered in-flux commits on `mvp2-production-patches`, listed in chronological order. Final version number (e.g. `2.2.0`) will be assigned when this branch merges to `main`.
+
+### ✨ Features
+
+- **Role-based access control (RBAC).** New `app/auth/roles.py` with `UserRole` (ADMIN/PAID/FREE), `VideoVisibility` (PUBLIC/PAID_ONLY/ADMIN_ONLY), `Capability` (CURATE_CATALOG, VIEW_ADMIN_DASHBOARD, etc.), and `ROLE_CAPABILITIES` mapping. `app/auth/admin.py` exposes `require_capability(...)` FastAPI dependency. Auto-creates `users` row on first login with default role=FREE.
+- **Admin upload form** (`/admin/upload`) — paste any YouTube URL, set title + visibility + section. New `POST /api/admin/videos/youtube` endpoint extracts video ID, fetches YouTube Data API v3 metadata, creates Video row with `status='pending'`.
+- **Admin Section picker** — `<select>` grouped by `<optgroup>` per Course. New `app/services/section_picker.py` (3-tier priority: explicit → first alphabetical → auto-create "Default Catalog"/"Uncategorized"). Cross-admin defense: section_id from another admin's course → 400.
+- **Catalog** — `visible_videos_for_user` excludes legacy uploads (no `youtube_id`) and respects visibility tier. Cards show real YouTube thumbnail, channel name, duration overlay (m:ss), course/section badge.
+- **Watch page** — renders YouTube iframe (`youtube-nocookie.com`) for `youtube_id` videos; falls back to HTML5 `<video>` for legacy uploads. IFrame API hooks for future jump-to-time.
+- **yt-dlp caption download** (`app/services/youtube_captions.py` + `youtube_captions_job.py`) — replaces Whisper for the auto-fire path when YouTube captions are available (1-3s vs 5-15min). Custom VTT parser handles real-world quirks (NOTE blocks, `<c>` tags, multi-line cues, SRT comma decimals). Smart retry: falls back without language preference if first attempt hits YouTube's 429 rate limit. New endpoints: `POST /api/admin/videos/{id}/captions/retry`, `GET /api/admin/videos/{id}/captions/status`.
+- **Day 4 (LiteLLM migration, 7 commits)** — Replaced direct Ollama httpx calls with LiteLLM. Per-tier rate limits (FREE 5/min/30day, PAID 15/min/200day, ADMIN 60/min/1000day). Tier-based provider chains: FREE→[groq], PAID/ADMIN→[ollama, openai] — Free users never touch Ollama; Paid users never touch Groq. Ollama Pro quota tracker (5h 800 + weekly 3000, auto-fallback at 90%). New endpoints: `GET /api/admin/llm/budget` (JSON) + `GET /admin/budget` (HTML observability page with live quota bars + per-tier chains + verification recipe). Sidebar nav link "LLM Budget" added.
+- **Day 5 (Structured audit log, 5 commits)** — New `events` SQLite table (id, ts, level, source, message, user_id, video_id, context_json) with 6 indexes. `app/utils/events.py` → `log_event()` helper that never raises (broken audit log must never break a real request) + mirrors to stdlib logger. Wired into `youtube_captions_job` (7 event types: invalid JSON, retry, success, two error paths in main worker, retry worker crash) and `llm_providers` (5 event types via `_audit()` short-session helper: rate-limit, Ollama skip, success, per-provider fail, all-providers-fail). New `GET /admin/events?level=&source=&video_id=&page=` observability page with filterable dropdowns, level-colored badges, collapsible `context_json`, prev/next pagination. Sidebar nav link "Audit Log" added.
+- **Day 5 hotfix (4 commits)** — Groq deprecated `llama-3.3-70b-versatile` in Aug 2026, breaking all FREE-tier LLM calls (`/admin/events` surfaced the 404). Fixes: (a) `groq/compound` chosen as the new free model — verified live, 1.4s response for 7k tokens, 131k ctx. (b) `chat_with_fallback()` wrapper routes `app/routers/chat.py::send_message` through `call_llm_with_fallback()` so chat now picks the tier chain + rate limit + audit log (was bypassing all three by calling `chat_with_ollama()` directly). (c) Lowered `rate_limit_free_per_day` from 30 → 15 (Groq free tier is 250 req/day TOTAL per API key, not per user). 7 new tests in `tests/test_chat_with_fallback.py`.
+- **Day 5 hotfix2 (5 commits)** — lyf99.2022 (FREE) reported: chat input disabled + no transcript/materials visible on admin-curated PUBLIC videos. Root cause: pre-Day-1 `course.user_id == uid` ownership check (inherited from the old "users upload their own video" model) was never updated for admin-curated videos. Fixes: (a) New `user_can_access_video(role, visibility)` helper is the single source of truth. (b) 5 routes updated: `create_chat_session`, `create_video_chat_session`, `get_asset`, `get_transcript`, `export_transcript`. (c) JS bug fix: chat input is now re-enabled after an error so the user can retry. (d) New `app/services/video_status.py` reconciles `status='error'` → `'ready'` when all 5 required assets exist (so the materials section actually renders). 30 new tests (`test_roles.py` 17 + `test_generation.py` +2 + `test_video_status.py` 8 + existing chat tests updated).
+- **Day 5 hotfix3 (2 commits)** — lyf99.2022 reported `❌ [object Object]` from chat. Two root causes: (a) `groq/compound` (router) consistently returns 413 for our 3k-token system prompts — its sub-model has a small request-body limit; live-tested `groq/compound-mini` which works (HTTP 200 in 1.57s, 131k ctx). Switched `llm_model_groq` accordingly. (b) `new Error(err.detail)` where `err.detail` is a dict (added in hotfix2's `ChatCallError`) coerced the dict to `'[object Object]'`. Added `formatErrorDetail(detail, fallback)` JS helper that handles string + dict shapes (extracts `.message` from dict).
+- **Day 6 (7 commits)** — Production server stack. (a) `gunicorn>=23.0.0` dep + verified install. (b) `gunicorn.conf.py` (4 workers × 2 threads, 60s timeout, graceful shutdown, max_requests=1000 + jitter, `forwarded_allow_ips=*` for Cloudflare Tunnel). (c) `scripts/start.sh` rewritten (default gunicorn; `SERVER=uvicorn` env var for dev hot-reload) + `stop.sh` handles both. (d) New `/api/ready` k8s-style readiness endpoint (DB + events table + Ollama checks, 503 on DB unreachable); 5 new tests. (e) Cloudflare Tunnel verified end-to-end (live `https://*.trycloudflare.com` → gunicorn:8000, 200 in 0.68s); install script updated. (f) `scripts/restart.sh` + `doc/runbook-day6.md` (8 sections + process tree). (g) Doc refresh.
+
+### 🐛 Bug fixes
+
+- **Admin upload form posts via session cookie** instead of `firebase.auth()` (which wasn't loaded on that page).
+- **Catalog excludes legacy uploads** without `youtube_id` (Day 1 default visibility 0 had surfaced them).
+
+### 📚 Docs
+
+- **`doc/public-repo-readiness.md`** (new) — 6 hardening recommendations for publishing this branch on GitHub: cookie `Secure` env-driven, `DB_PATH` env override, rate-limiting on `/api/admin/*`, Dependabot, gitleaks Action.
+- **`doc/security-hardening-mvp2.md`** (new) — 10 attack vectors, 7 mitigations applied, 7 recommended additions, threat model + incident response checklist.
+- **Doc freshness refresh** — `Readme.md`, `doc/MVP2.0-Status.md`, `doc/mvp2-final-go-live-plan.md`, `doc/mvp2-production-patches-status.md` updated to reflect 1017 tests + Day 1-3 state.
+
+### 🧪 Tests
+
+- **+568 tests** (633 → 1201): Day 1 (roles + admin deps), Day 2A (admin upload + catalog), Day 2B (YouTube API client + enrichment), Day 2C (Section picker + iframe), Day 3 (VTT parser + caption worker), Day 4 (LiteLLM rate limiter + provider fallback + `/admin/budget`), Day 5 (`log_event` helper + `/admin/events` page), Day 5 hotfix (`chat_with_fallback` wrapper, 7 new tests), Day 5 hotfix2 (`user_can_access_video` + `video_status` + 5 route fixes, 30 new tests), Day 5 hotfix3 (JS error helper, no new tests but a real-world verified e2e flow), Day 6 (`/api/health` liveness + `/api/ready` readiness, 5 new tests + 51 infra tests for gunicorn.conf.py, start/stop/restart.sh, and live-boot), Day 7 buffer (26 tests for `youtube_captions.fetch_youtube_captions()` integration path → module 49%→95% coverage), Day 8 (YouTube IFrame API integration: 28 tests for `yt_player.js` wrapper), Day 9 hotfix (3 tests: NO_PROXY shell test + 2 session-expiry middleware tests).
+- **89% coverage** maintained (network code naturally hard to cover without integration tests; we mock at the worker boundary).
+
+### 🐛 Notable bug fixed Day 7
+
+- **`scripts/status.sh` didn't detect gunicorn.** After Day 6's gunicorn switch, the runbook's first command always reported "uvicorn not running" even when the app was perfectly healthy. Now matches both `video-learning-app` proc_name (gunicorn) and `uvicorn app.main` (dev). Also detects Mac auto-sleep state and smoke-tests `/api/health` + `/api/ready`.
+
+### 📋 In progress
+
+- **Day 7**: Buffer day — done. See commit `f82d216`.
+- **Day 8**: YouTube IFrame API integration (`yt_player.js` wrapper for `<video>` AND YouTube iframes — transcript click and mindmap jump now work for both backends; resume-from-last-position via localStorage). Commits `115444d` + `9e79c36`.
+- **Day 9**: Buffer → real hotfix day after 10-min phone smoke test caught 3 bugs. Commit `6765fad`.
+- **Days 9-14**: Real-video testing, security hardening, soft launch, public beta.
+
+## [2.1.0.7] - 2026-09-05/06 — Usage pages, admin analytics, telemetry & retention (8-commit batch)
+
+✨ **The usage + analytics plan (decided 2026-09-05, 6 commits) + live-testing hardening (2 commits).** All numbers come from the `events` table (worker-independent truth — the in-memory quota trackers are per-gunicorn-worker and would show 1-of-4 slices; see `app/services/usage.py` docstring).
+
+### ✨ Features
+
+- **Telemetry pipeline (2 commits)** — `POST /api/telemetry` (auth'd, `ui.*` source-allowlisted so `services.*` audit events can't be client-forged, batch/context caps, video_id tier-visibility checks to block catalog-probe oracles) + batched JS beacon (10s flush, `sendBeacon` on page-hide, seek debounce) hooking play/pause/seek/ended, materials tabs, transcribe/generate clicks, chat sends, and logins. Privacy disclosure line in the sidebar footer.
+- **`/usage` page** — FREE: plain-words daily claim + bar; PAID: dual bars (50 per rolling 7h + 100 per fixed Mon–Sun week, display-only for soft launch; per-user per `e2f4aa8`). Failed calls and `ui.*` events never count.
+- **`/admin/analytics`** — counters (unique users, logins, plays/pauses/seeks, chats, tab clicks, LLM ok/fail), pure-CSS daily-activity chart, top videos (LEFT JOIN so deleted videos degrade), most-active users. Bounded `?days=` window (clamped 1–90).
+- **`/admin/usage`** — per-user quota monitor: 7h + week bars, color-coded, role badges — the "this user is done for the week" at-a-glance view.
+- **`/activity` (PAID+)** — personal event feed (summary cards + 100-row recent feed), strictly own-events (service takes the authenticated uid; no query param selects others).
+- **`/pricing`** — beta-flavored plans page (the dashboard's "See plans" previously 404'd). Two cards, tier-aware CTAs (FREE → mailto contact, PAID/ADMIN → "You're in 🎉"), honest beta copy; no provider names on the page.
+- **90-day retention** — `scripts/prune_events.py`: archive-first (events → `Storage-Backup-HDD/video-learning-app-data/events-archive-YYYY-MM.jsonl`, kept forever, `_exported` marker dedupe) then batched delete; HDD unmountable → prunes nothing. Nightly 00:30 launchd (after backup-daily).
+
+### 🐛 Fixes (live-testing batch)
+
+- **Beacon never fired** — `isSignedIn()` read the httpOnly `fb_token` cookie via `document.cookie` (JS can never see it), so zero `ui.*` events ever landed. Fixed via a server-rendered `<meta name="app-signed-in">` + login-page meta injection.
+- **Admin mislabeled FREE on the usage monitor** — the `int(role or 2)` falsy bug (ADMIN=0 → FREE). Tier-aware bars added: FREE rows show the 15/day claim, not the paid 50/100 bars.
+- **Transcribe/Generate buttons** were clickable for users the API 403s (PAID on catalog videos, FREE everywhere) — now greyed with tier-specific tooltips ("not allowed on admin-curated videos" / upgrade hint).
+
+### 📋 Verified
+
+- Full suite **1312 passing** (42+ new tests across the batch: telemetry contract, week-bounds, aggregation, tier greying, prune safety, pricing rendering).
+
+## [2.1.0.6] - 2026-09-05 — MLX transcription: 4-day crash saga → subprocess isolation 🚀
+
+🐛 **Every `local-large-turbo` (MLX Whisper) transcribe killed a gunicorn worker with SIGABRT ("Python quit unexpectedly"), or intermittently failed with `[metal::Device] XPC_ERROR_CONNECTION_INVALID`.** Over 09-03→09-05 four stacked issues were uncovered and fixed one by one. Full root-cause chain in [`doc/mlx-fork-crash-postmortem.md`](doc/mlx-fork-crash-postmortem.md).
+
+**The four stacked root causes:**
+1. **Silent pip failure** — `mlx-whisper` was missing from the venv (no Py3.14 wheel at venv-creation time; `setup.sh`'s `pip install -q | tail -1` swallowed it). Reinstalled + full `pip install -r requirements.txt` run.
+2. **`huggingface.co` DNS poisoning** — a stale VPN left system DNS (114DNS/AliDNS) answering HF with fake IPs, so model downloads hung forever with no job error. Stopped the stale VPN; **all 5 whisper models now pre-cached** (transcription never contacts HF).
+3. **MLX + gunicorn fork-safety SIGABRT** (the big one) — MLX works fine in fresh processes on Python 3.14, but gunicorn workers are forked children (`preload_app=True`); forking ffmpeg for language detection while Metal/MLX state is live trips macOS's fork-safety abort. **A laptop restart does NOT fix it.**
+4. **Stale-code gotcha** — after the fix was written, the pre-09:59 master kept serving old preloaded code; a `restart.sh` was required for it to take effect.
+
+### 🔧 Changed
+
+- **`scripts/mlx_transcribe_worker.py` (NEW)** — standalone MLX transcriber subprocess: CLI in (`path`, `--model`, `--language`, `--initial-prompt`), JSON out on stdout. Owns the anti-drift kwargs (`condition_on_previous_text=False`, `compression_ratio_threshold=1.8`).
+- **`app/services/transcription.py`** — `transcribe_with_backend()` mlx branch now **spawns the worker as a subprocess** instead of importing `mlx_whisper` in-process. Metal/GPU state lives and dies entirely in the child process; a crash there can never take down gunicorn, and the fork-safety abort can't happen (the worker is a fresh `exec`, not a fork-with-Metal-state). `detect_audio_language()` now **always uses CPU `tiny`** (75 MB, cached, Metal-free) instead of MLX turbo — detection only needs the language token.
+- **`tests/test_whisper_picker.py`** — the 3 mlx-path tests assert the new subprocess contract (mock `subprocess.run`, verify CLI argv + JSON parsing). 43/43 passing.
+- **`scripts/fix_stuck_transcribe.py` (NEW)** — ops tool: marks `'transcribing'` rows stuck past a threshold (default 15 min) as `error` with a clear message. Dry-run by default, `--apply` to write.
+- **`scripts/install_local_whisper_model.py` (NEW)** — offline installer: wires manually-downloaded model files into the HF cache for machines where HF is unreachable.
+
+### 📋 Verified
+
+- **Live test**: 30-min "Call with Hugh" video — CPU-tiny language detection (~10s) → MLX turbo transcription (~2 min) → 27k-char transcript saved, transcribe job `completed`. (Generate step needed Ollama restarted post-reboot — see postmortem §3.1.)
+- **Test suite**: `test_whisper_picker.py` 43/43.
+
+## [2.1.0.5] - 2026-08-29 — Silent BackgroundTask failure on stuck `'generating'`
+
+🐛 **A fresh upload or "Retry all failed" click would leave a video stuck at `status='generating'` forever, with no error in the `events` table and 0% CPU on the gunicorn workers.** First encountered during the DIY catalog-curation smoke test (a Rick Astley YouTube submission). Root cause: two call sites passed `video_id` only to `_run_generate_job(video_id, user_id, user_role)`. FastAPI `BackgroundTasks` silently swallows the resulting `TypeError`. The original test mocks (`fake_worker(video_id)`) matched the buggy 1-arg shape, so CI never noticed.
+
+### 🐛 Bug fixes
+
+- **`app/routers/courses.py:452`** — retry-all handler now passes `user.get("uid", ""), user.get("role", 2)`. Comment at the call site documents the full arg list.
+- **`app/routers/videos.py:681`** — auto-pipeline chain now looks up the owner's uid + role from `video.section.course.user_id` (the request context is gone in a BackgroundTask). Added `User` to the import.
+- **`tests/test_courses.py`** — new `test_retry_failed_section_generate_worker_called_with_three_args` asserts the worker is called with exactly `(video_id, user_id, user_role)`. Stub `fake_worker` updated to the real signature.
+- **`tests/test_videos.py`** — new `test_auto_pipeline_passes_uid_and_role_to_generate_worker` is the parallel guard for the auto-pipeline path. Existing `fake_generate` stubs updated to accept the extra args.
+- **`Prod-Must-do.md §9`** — full "Day-12 silent BackgroundTask failure" lesson: symptom → root cause → fix → detection checklist. Future engineers should never lose another hour to this.
+
+### 📋 Verified
+
+- **Live test**: Rick Astley YouTube submission (`dQw4w9WgXcQ`) — caption download → first LLM call worked, then the buggy retry hung for 3.5 min with no events. After the fix, `_run_generate_job(VIDEO_ID, ADMIN_UID, 0)` returned in 16.9s with all 6 assets (summary, mindmap, flashcards, quiz, topic_timestamps, transcript) and `status='ready'`. `generated_at` populated.
+- **Test suite**: 1249 passing (up from 1247, +2 regression tests).

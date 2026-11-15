@@ -12,7 +12,40 @@
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
         <h1 class="text-2xl font-bold mb-2">{{ course.title }}</h1>
         <p class="text-gray-500 dark:text-gray-400">{{ course.description or 'No description' }}</p>
-        <button onclick="showCreateSection()" class="mt-4 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ Add Section</button>
+        {% if user_capabilities and "manage_own_course" in user_capabilities %}
+        <div class="mt-4 flex gap-2">
+            <button onclick="showCreateSection()" class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">+ Add Section</button>
+            <!-- Edit course (2026-09-12): the PUT /api/courses/{id}
+                 endpoint existed but no UI called it. -->
+            <button onclick="showEditCourseModal('{{ course.id }}', '{{ course.title|e }}', '{{ (course.description or '')|e }}')"
+                    class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 text-sm rounded-lg hover:border-indigo-500 hover:text-indigo-500"
+                    title="Edit course name and description">
+                ✏️ Edit Course
+            </button>
+            <button
+                id="course-sort-btn"
+                onclick="sortCourseSections()"
+                class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 text-sm rounded-lg hover:border-indigo-500 hover:text-indigo-500"
+                title="Toggle section order (A→Z / Z→A)"
+            >
+                ↑ asc
+            </button>
+        </div>
+        {% else %}
+        {# Viewers get the sort too — it only reorders THEIR view
+           (client-side + localStorage), exactly like the per-section
+           video sort, which is also ungated. #}
+        <div class="mt-4">
+            <button
+                id="course-sort-btn"
+                onclick="sortCourseSections()"
+                class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 text-sm rounded-lg hover:border-indigo-500 hover:text-indigo-500"
+                title="Toggle section order (A→Z / Z→A)"
+            >
+                ↑ asc
+            </button>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Create section form -->
@@ -27,10 +60,24 @@
     </div>
 
     <!-- Sections -->
-    <div class="space-y-3">
+    <div class="space-y-3" id="course-sections">
         {% for section in course.sections %}
         {% set failed_count = section.videos | selectattr('status', 'equalto', 'error') | list | length %}
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
+        {% set queued_count = section.videos | selectattr('status', 'equalto', 'queued') | list | length %}
+        {# 2026-09-19: orphan_count — rows stuck in transcribing/pending
+           older than 15 min (a worker restart ate the in-memory job).
+           Computed server-side (same rule as the recover-orphans
+           endpoint) so badge and endpoint can never disagree. #}
+        {% set orphan_count = section_orphan_counts.get(section.id, 0) %}
+        {# 2026-09-13: stuck_count now comes from the server (computed via
+           the shared _is_stuck_video — the full 4-form taxonomy:
+           queued>10min / transcribing job>30min / generating job>30min /
+           ready-without-materials). The old Jinja one-liner only knew
+           the queued form and had drifted from the endpoint. #}
+        {% set stuck_count = section_stuck_counts.get(section.id, 0) %}
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden"
+             data-section-card
+             data-sort-key="{{ section.title | natural_sort_key_str }}">
             <button onclick="toggleSection('{{ section.id }}')" class="w-full flex items-center justify-between p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50">
                 <span class="font-medium">📂 {{ section.title }}</span>
                 <span class="flex items-center space-x-3">
@@ -40,9 +87,61 @@
                         ↻ Retry {{ failed_count }} failed
                     </button>
                     {% endif %}
+                    {# Stuck-queue recovery (2026-09-12): queued videos
+                       whose in-memory pipeline died with a server restart
+                       sit forever — this button re-queues them via the
+                       admin endpoint. Admin-gated: the endpoint checks
+                       CURATE_CATALOG; hiding for non-admins avoids a
+                       dead control. #}
+                    {% if queued_count > 0 and is_admin %}
+                    <button onclick="event.stopPropagation(); requeueStuck(this)" data-requeue-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue stuck videos (status=queued but nothing processing them — usually a server restart ate the in-memory job)">
+                        ⏳ {{ queued_count }} queued — re-queue
+                    </button>
+                    {% endif %}
+                    {# Orphan recovery (2026-09-19): rows stuck in
+                       transcribing/pending whose in-memory job died with
+                       a worker restart — they also hold the 2-slot
+                       transcribe queue hostage. The endpoint re-checks
+                       the 15-min age server-side, so a stale render can
+                       at worst get a friendly 'nothing stuck' toast. #}
+                    {% if orphan_count > 0 and is_admin %}
+                    <button onclick="event.stopPropagation(); recoverOrphans(this)" data-recover-orphans-btn class="text-xs px-2 py-0.5 rounded border border-purple-300 dark:border-purple-700 text-purple-600 dark:text-purple-400 hover:border-purple-500 hover:text-purple-700" title="Recover orphaned videos (stuck in transcribing/pending after a server restart — frees the processing queue and re-dispatches them)">
+                        🩹 {{ orphan_count }} orphaned — recover
+                    </button>
+                    {% endif %}
+                    {# Owner self-service stuck retry (2026-09-12): same
+                       amber treatment as the admin button, but scoped to
+                       THIS section's OWN videos only (the endpoint is
+                       ownership-checked like retry-failed). Stuck =
+                       queued >10min with no job; the grace window keeps
+                       this hidden during normal bulk-upload processing.
+                       NOTE: unlike rename/edit (capability-only gating),
+                       this ALSO requires ownership — a recovery button
+                       on someone else's course that 403s on click is
+                       worse than a dead control, so we hide it outright. #}
+                    {% if stuck_count > 0 and user and course.user_id == user.get("uid", "") and user_capabilities and "manage_own_course" in user_capabilities %}
+                    <button onclick="event.stopPropagation(); retryStuckVideos('{{ course.id }}', '{{ section.id }}', this)" data-retry-stuck-btn class="text-xs px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:border-amber-500 hover:text-amber-700" title="Re-queue your stuck videos in this section (queued a long time, or processing interrupted by a server restart / crash — e.g. 'ready' but no materials). Click to re-run what's missing.">
+                        ↻ Retry {{ stuck_count }} stuck
+                    </button>
+                    {% endif %}
                     <button onclick="event.stopPropagation(); sortSection('{{ section.id }}')" id="sort-btn-{{ section.id }}" class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500" title="Toggle sort direction">
                         ↑ asc
                     </button>
+                    <!-- Rename section (2026-09-12): sections were
+                         create-once with no edit path; this opens the
+                         same modal pattern as delete. Capability-gated
+                         (manage_own_course) — the API 403s too, but
+                         hiding the button for FREE users is cleaner
+                         UX than a dead control. -->
+                    {% if user_capabilities and "manage_own_course" in user_capabilities %}
+                    <button
+                        onclick="event.stopPropagation(); showRenameSectionModal('{{ section.id }}', '{{ section.title|e }}')"
+                        class="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:border-indigo-500 hover:text-indigo-500"
+                        title="Rename this section"
+                    >
+                        ✏️
+                    </button>
+                    {% endif %}
                     <!-- Delete section button (MVP2.0, manualTodo #5
                          extension). Confirmation modal lives at the
                          bottom of this template. -->
@@ -58,31 +157,126 @@
             <div id="section-{{ section.id }}" class="hidden border-t border-gray-200 dark:border-gray-700">
                 <div class="p-4 space-y-2" data-video-list>
                     {% for video in section.videos %}
-                    <a href="/video/{{ video.id }}"
-                       data-sort-key="{{ video.title | natural_sort_key_str }}"
-                       data-title="{{ video.title | lower }}"
-                       class="video-row flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                        <span class="flex items-center space-x-2">
-                            <span>🎬</span>
-                            <span>{{ video.title }}</span>
-                        </span>
-                        <span class="text-xs px-2 py-1 rounded
-                            {% if video.status == 'ready' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
-                            {% elif video.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                            {% elif video.status in ('transcribing', 'generating', 'queued') %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
-                            {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
-                            {{ video.status }}{% if video.status == 'ready' and video.generated_at %}{% if video.transcribe_started_at and video.transcribed_at %} · T:{{ (video.transcribed_at - video.transcribe_started_at).total_seconds() | format_duration }}, G:{{ (video.generated_at - video.transcribed_at).total_seconds() | format_duration }}{% elif video.created_at %} · {{ (video.generated_at - video.created_at).total_seconds() | format_duration }}{% endif %}{% endif %}
-                        </span>
-                    </a>
+                    <div class="video-row flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <a href="/video/{{ video.id }}"
+                           data-sort-key="{{ video.title | natural_sort_key_str }}"
+                           data-title="{{ video.title | lower }}"
+                           class="flex-1 flex items-center justify-between min-w-0 hover:no-underline">
+                            <span class="flex items-center space-x-2 min-w-0">
+                                <span>🎬</span>
+                                <span class="truncate">{{ video.title }}</span>
+                            </span>
+                            <span class="text-xs px-2 py-1 rounded
+                                {% if video.status == 'ready' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400
+                                {% elif video.status == 'error' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                                {% elif video.status in ('transcribing', 'generating', 'queued') %}bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400
+                                {% else %}bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400{% endif %}">
+                                {{ video.status }}{% if video.status == 'ready' and video.generated_at %}{% if video.transcribe_started_at and video.transcribed_at %} · T:{{ (video.transcribed_at - video.transcribe_started_at).total_seconds() | format_duration }}, G:{{ (video.generated_at - video.transcribed_at).total_seconds() | format_duration }}{% elif video.created_at %} · {{ (video.generated_at - video.created_at).total_seconds() | format_duration }}{% endif %}{% endif %}
+                            </span>
+                        </a>
+                        {# Queued-cancel (2026-09-17, decision #9): a
+                           queued video hasn't started transcribing —
+                           deleting it wastes NOTHING (no GPU spent yet)
+                           and frees the queue + the in-flight cap.
+                           Once transcribing, NO cancel (GPU already
+                           burning; killing a thread mid-Metal is
+                           dangerous — let it finish). Uses the
+                           existing DELETE endpoint (row + file). #}
+                        {% if video.status == 'queued' and video.youtube_id is none %}
+                        <button
+                            onclick="cancelQueuedVideo('{{ video.id }}', '{{ video.title|e }}', this)"
+                            class="ml-2 flex-shrink-0 text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-400 hover:border-red-400 hover:text-red-500"
+                            {# 2026-09-22: EN-first for the beta launch. Chinese original kept for future i18n:
+                               取消排队（还没开始转写，删掉不浪费任何处理） #}
+                            title="Remove from queue — it hasn't started transcribing yet, so deleting it wastes no processing"
+                        >✕</button>
+                        {% endif %}
+                    </div>
                     {% else %}
                     <p class="text-sm text-gray-400 py-2">No videos in this section</p>
                     {% endfor %}
-                    <!-- Upload button -->
+                    <!-- Upload button + progress (2026-09-08: real upload
+                         feedback — before this the button gave NO signal
+                         while the file POSTed, so users clicked again /
+                         navigated away mid-upload). -->
                     <div class="pt-2">
                         <input type="file" id="upload-{{ section.id }}" class="hidden" accept="video/*" multiple onchange="uploadVideo('{{ section.id }}', this)">
-                        <button onclick="document.getElementById('upload-{{ section.id }}').click()" class="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
+                        <button id="upload-btn-{{ section.id }}"
+                                onclick="document.getElementById('upload-{{ section.id }}').click()"
+                                class="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-400 hover:border-indigo-500 hover:text-indigo-500">
                             + Upload Video
                         </button>
+                        <div id="upload-progress-{{ section.id }}" class="hidden mt-2">
+                            <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                <svg id="upload-spinner-{{ section.id }}" class="animate-spin h-4 w-4 text-indigo-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                </svg>
+                                <span id="upload-progress-label-{{ section.id }}" class="truncate flex-1">Uploading…</span>
+                                <span id="upload-progress-pct-{{ section.id }}" class="font-mono text-indigo-600 dark:text-indigo-400"></span>
+                                <button id="upload-cancel-{{ section.id }}"
+                                        onclick="if (window._cancelUpload) window._cancelUpload()"
+                                        class="hidden text-xs px-2 py-0.5 rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                                        title="Cancel this upload — frees your storage space immediately">✕ Cancel</button>
+                            </div>
+                            <div class="mt-1.5 h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                <div id="upload-progress-bar-{{ section.id }}" class="h-full bg-indigo-500 rounded-full transition-all duration-150" style="width: 0%"></div>
+                            </div>
+                            {# 2026-09-29: the stay-on-tab hint — the upload runs from
+                               THIS tab's JS; navigating away (same tab) kills it.
+                               The beforeunload guard + this copy are the honest
+                               answer to "why did my upload stop?" (the 9/29
+                               incident: owner browsed to Dashboard mid-batch,
+                               loop died at 4/15 chunks). New tab = safe. #}
+                            <div id="upload-progress-hint-{{ section.id }}" class="hidden mt-1 text-[10px] text-gray-500 dark:text-gray-400">
+                                Keep this tab open — the upload runs from here. Want to browse other pages? Open them in a new tab.
+                            </div>
+                        </div>
+                        {# 2026-09-21 (13a, §3a): the interrupted-upload
+                           banner — shows if the user's last upload session
+                           was swept/cancelled (auto-cleaned after 1h of
+                           inactivity). Dismissable; clears on the next
+                           successful upload (which navigates away anyway).
+                           Populated by JS on page load (fetches
+                           /api/upload-sessions/last-cancelled). #}
+                        <div id="upload-interrupted-{{ section.id }}" class="hidden mt-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                            <span class="flex-1">
+                                <strong>Previous upload cleaned up.</strong>
+                                <span id="upload-interrupted-detail-{{ section.id }}"></span>
+                                Nothing was lost — just upload again.
+                            </span>
+                            <button onclick="dismissInterrupted('{{ section.id }}')"
+                                    class="text-amber-500 hover:text-amber-700"
+                                    title="Dismiss">✕</button>
+                        </div>
+                        {# 2026-09-27 (known-issues §6): the RESUME card —
+                           shows on page load when /me reports an ACTIVE
+                           session targeting THIS section. The upload keeps
+                           running in the background while the tab is open
+                           (even on other pages); if it got interrupted
+                           (tab/laptop closed), re-selecting the same file
+                           continues from the first missing chunk — nothing
+                           re-uploads. Rendered by loadResumeCard() below. #}
+                        <div id="upload-resume-{{ section.id }}" class="hidden mt-2 p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 text-xs">
+                            <div class="flex items-start gap-2">
+                                <span class="text-indigo-500" aria-hidden="true">⏳</span>
+                                <div class="flex-1">
+                                    <strong id="upload-resume-title-{{ section.id }}"></strong>
+                                    <div id="upload-resume-detail-{{ section.id }}" class="mt-0.5 text-indigo-700 dark:text-indigo-300"></div>
+                                    <div class="mt-1.5 flex gap-2 flex-wrap">
+                                        <button id="upload-resume-btn-{{ section.id }}"
+                                                onclick="resumePick('{{ section.id }}')"
+                                                class="px-2.5 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-500">Resume</button>
+                                        <button id="upload-resume-other-{{ section.id }}"
+                                                onclick="resumeOtherDevice('{{ section.id }}')"
+                                                class="px-2.5 py-1 rounded border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 hidden">Continuing on another device</button>
+                                        <button onclick="resumeCancel('{{ section.id }}')"
+                                                class="px-2.5 py-1 rounded border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20">Cancel and remove</button>
+                                    </div>
+                                    <div id="upload-resume-note-{{ section.id }}" class="mt-1.5 text-[10px] text-gray-500 dark:text-gray-400"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -92,6 +286,72 @@
             No sections yet. Add a section to start uploading videos.
         </div>
         {% endfor %}
+    </div>
+</div>
+
+<!-- Rename section modal (2026-09-12) — hidden by default.
+     User report: sections were create-once; the title couldn't be
+     changed. PUT /api/courses/{cid}/sections/{sid} is the backend. -->
+<div id="rename-section-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h2 class="text-lg font-semibold mb-4">✏️ Rename section</h2>
+        <input type="text" id="rename-section-input"
+               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 mb-4"
+               placeholder="Section title">
+        <div class="flex justify-end gap-2">
+            <button
+                onclick="hideRenameSectionModal()"
+                class="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="confirmRenameSection()"
+                id="rename-section-save-btn"
+                class="px-4 py-2 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg"
+            >
+                Save
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Edit course modal (2026-09-12) — hidden by default.
+     User report: course name/description couldn't be edited after
+     creation. The PUT /api/courses/{id} endpoint already existed;
+     this modal is the first UI calling it. -->
+<div id="edit-course-modal" class="hidden fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+        <h2 class="text-lg font-semibold mb-4">✏️ Edit course</h2>
+        <div class="space-y-3 mb-4">
+            <div>
+                <label class="block text-sm font-medium mb-1">Course name</label>
+                <input type="text" id="edit-course-title-input"
+                       class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+                       placeholder="Course title">
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1">Description</label>
+                <textarea id="edit-course-desc-input" rows="3"
+                          class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700"
+                          placeholder="What is this course about?"></textarea>
+            </div>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button
+                onclick="hideEditCourseModal()"
+                class="px-4 py-2 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg"
+            >
+                Cancel
+            </button>
+            <button
+                onclick="confirmEditCourse()"
+                id="edit-course-save-btn"
+                class="px-4 py-2 text-sm bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg"
+            >
+                Save
+            </button>
+        </div>
     </div>
 </div>
 
@@ -247,6 +507,232 @@ if (document.readyState === 'loading') {
 } else {
     applyStoredSortOnLoad();
 }
+
+// ── Course-level section sort (2026-09-12) ─────────────────────────────
+// Sorts the SECTION CARDS (not videos) A→Z / Z→A by title — the
+// course-level twin of sortSection(). Purely client-side (view-only
+// preference, like the per-section video sort) and persisted per
+// course in localStorage. Reuses the server-computed data-sort-key
+// on each section card (natural sort: "week 10" > "week 2").
+const COURSE_SORT_KEY_PREFIX = 'courseSectionSort:';
+
+function getStoredCourseSort(courseId) {
+    try {
+        const v = localStorage.getItem(COURSE_SORT_KEY_PREFIX + courseId);
+        return v === 'desc' ? 'desc' : 'asc';
+    } catch (e) {
+        return 'asc';
+    }
+}
+
+function setStoredCourseSort(courseId, direction) {
+    try {
+        localStorage.setItem(COURSE_SORT_KEY_PREFIX + courseId, direction);
+    } catch (e) {
+        // localStorage blocked — skip persistence
+    }
+}
+
+function _sortCourseSectionCards(dir) {
+    const container = document.getElementById('course-sections');
+    if (!container) return;
+    const cards = Array.from(container.querySelectorAll('[data-section-card]'));
+    if (cards.length < 2) return;
+
+    cards.sort((a, b) => {
+        const ka = a.getAttribute('data-sort-key') || '';
+        const kb = b.getAttribute('data-sort-key') || '';
+        if (dir === 'asc') return ka.localeCompare(kb);
+        return kb.localeCompare(ka);
+    });
+    cards.forEach(c => container.appendChild(c));
+
+    const btn = document.getElementById('course-sort-btn');
+    if (btn) btn.textContent = dir === 'asc' ? '↑ asc' : '↓ desc';
+}
+
+function sortCourseSections() {
+    const newDir = getStoredCourseSort(courseId) === 'asc' ? 'desc' : 'asc';
+    setStoredCourseSort(courseId, newDir);
+    _sortCourseSectionCards(newDir);
+}
+
+function applyStoredCourseSortOnLoad() {
+    // ALWAYS apply the stored direction — including the default asc.
+    // Previously only 'desc' sorted on load; first open rendered DB
+    // order (created_at) while the button already said "↑ asc" — the
+    // label lied (user report 2026-09-12). Sorting both directions
+    // keeps the view and the label truthful. _sortCourseSectionCards
+    // is a no-op below 2 cards and sets the label itself.
+    _sortCourseSectionCards(getStoredCourseSort(courseId));
+}
+// Register after applyStoredSortOnLoad's own wiring so both run on
+// DOM ready (order between them doesn't matter — different DOM
+// subtrees).
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyStoredCourseSortOnLoad);
+} else {
+    applyStoredCourseSortOnLoad();
+}
+
+// ── Interrupted-upload banner (13a, registry §3a Round 2) ─────────────
+// On page load, ask the server whether the user's most recent upload
+// session was swept (1h inactivity) or cancelled — and if so, show
+// the friendly "nothing was lost, just upload again" notice on every
+// section's upload widget. Server-computed (the endpoint reads the
+// upload_sessions table) so the banner and reality can't diverge.
+// Dismissal is localStorage-only (the row stays as history — a later
+// NEW sweep overwrites it and re-shows, correctly).
+async function loadInterruptedBanner() {
+    try {
+        const resp = await fetch('/api/upload-sessions/last-cancelled', {
+            credentials: 'include',
+        });
+        if (!resp.ok) return;   // non-uploaders (FREE tier) → 403, ignore
+        const data = await resp.json();
+        if (!data.has_cancelled) return;
+
+        // One dismissal per cancelled session id… we don't get the id
+        // from the endpoint, so key on filename+size — good enough for
+        // a UX banner (the goal: don't nag after the user saw it).
+        const key = 'uploadBannerDismissed:' + data.filename + ':' + data.declared_size;
+        try {
+            if (localStorage.getItem(key) === '1') return;
+        } catch (_) { /* localStorage blocked — just show it */ }
+
+        document.querySelectorAll('[id^="upload-interrupted-"]').forEach(el => {
+            el.classList.remove('hidden');
+            // 2026-09-22: stash the EXACT dismissal key on the element.
+            // The old dismiss handler re-derived its key from the
+            // detail span's DISPLAY text (" (name, X MB)"), which never
+            // matched this load-time key (filename:declared_size) —
+            // dismissals never stuck and the banner nagged on every
+            // course-page load (5 last-cancelled GETs in one morning's
+            // log alone).
+            el.dataset.dismissKey = key;
+            const detail = el.querySelector('[id^="upload-interrupted-detail-"]');
+            if (detail) {
+                const mb = (data.declared_size / 1048576).toFixed(0);
+                detail.textContent = ` (${data.filename}, ${mb} MB)`;
+            }
+        });
+    } catch (e) {
+        // Network hiccup — no banner, no noise. Non-essential UX.
+    }
+}
+
+function dismissInterrupted() {
+    document.querySelectorAll('[id^="upload-interrupted-"]').forEach(el => {
+        el.classList.add('hidden');
+        // Persist using the load-time key stashed on the element by
+        // loadInterruptedBanner — both sides now agree by construction
+        // (same string, same source), so a dismissal actually sticks.
+        try {
+            if (el.dataset.dismissKey) {
+                localStorage.setItem(el.dataset.dismissKey, '1');
+            }
+        } catch (_) { /* blocked — re-shows next load, acceptable */ }
+    });
+}
+
+// ── Resume card (known-issues §6, 2026-09-27) ───────────────────────
+// The chunks-are-sacred recovery path: on page load, ask /me whether
+// the user has an ACTIVE session. If yes and it targets a section on
+// THIS page, render the card: filename, chunks received, TTL
+// countdown, and the honest browser-open note. "Resume" re-opens the
+// file picker; when the user re-selects the SAME file (name+size
+// match), only the missing chunks fly — nothing re-uploads.
+// If the session belongs to a section NOT on this page, we render a
+// pointer card instead (so the user can find it).
+let _resumeState = null;   // the /me payload, cached for resumePick()
+
+function _fmtMb(bytes) {
+    return (bytes / 1048576).toFixed(0) + ' MB';
+}
+
+function _ttlLeftText(expiresAt) {
+    if (!expiresAt) return '';
+    const mins = Math.round((new Date(expiresAt).getTime() - Date.now()) / 60000);
+    if (mins <= 0) return 'about to auto-cancel';
+    if (mins < 60) return `auto-cancels in ~${mins} min if nothing arrives`;
+    return `auto-cancels in ~${(mins / 60).toFixed(1)} h if nothing arrives`;
+}
+
+async function loadResumeCard() {
+    try {
+        const resp = await fetch('/api/upload-sessions/me', { credentials: 'include' });
+        if (!resp.ok) return;   // non-uploaders (FREE) → 403, ignore
+        const data = await resp.json();
+        if (!data || !data.active_session) return;
+        const s = data.active_session;
+        _resumeState = s;
+
+        // Find the card for THIS session's section (only the owning
+        // section shows the full card).
+        const card = document.getElementById('upload-resume-' + s.section_id);
+        if (card) {
+            const got = (s.received_chunks || []).length;
+            const done = got === s.total_chunks;
+            document.getElementById('upload-resume-title-' + s.section_id).textContent =
+                `${s.filename} — ${done ? 'all chunks received' : got + '/' + s.total_chunks + ' chunks'}`;
+            document.getElementById('upload-resume-detail-' + s.section_id).textContent =
+                `${_fmtMb(s.received_bytes || 0)} of ${_fmtMb(s.declared_size)} · ${_ttlLeftText(s.expires_at)}`;
+            document.getElementById('upload-resume-note-' + s.section_id).textContent =
+                'Uploads continue while your browser is open. Closing the tab or laptop pauses it — but your progress is preserved for 1 hour.';
+            card.classList.remove('hidden');
+        }
+        // Sessions for sections NOT on this page get no card (the
+        // course they belong to shows it). Nothing else to do here —
+        // the user's other course page is where the card renders.
+    } catch (_) { /* non-essential UX — never block page load */ }
+}
+
+// "Resume" on the card → open the file picker. The user re-selects
+// the SAME file; uploadVideo()'s chunked path + resumeState picks up
+// from the first missing chunk.
+function resumePick(sectionId) {
+    const input = document.getElementById('upload-' + sectionId);
+    if (input) {
+        input._resume = _resumeState;
+        input.click();
+    }
+}
+
+// "Cancel and remove" on the card → DELETE the session, hide the card.
+async function resumeCancel(sectionId) {
+    if (!_resumeState) return;
+    try {
+        await fetch('/api/upload-sessions/' + encodeURIComponent(_resumeState.id), {
+            method: 'DELETE', credentials: 'include',
+        });
+    } catch (_) { /* network — the card will just re-render on reload */ }
+    const card = document.getElementById('upload-resume-' + sectionId);
+    if (card) card.classList.add('hidden');
+    _resumeState = null;
+    location.reload();   // honest state: the picker is back to fresh
+}
+
+// Placeholder for the cross-device case: the session lives on, the
+// user might be uploading from another browser. We don't render an
+// active spinner for that (can't know), so this stays unused for
+// now but keeps the template's button contract honest.
+function resumeOtherDevice(sectionId) {
+    const card = document.getElementById('upload-resume-' + sectionId);
+    if (card) card.classList.add('hidden');
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadResumeCard);
+} else {
+    loadResumeCard();
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadInterruptedBanner);
+} else {
+    loadInterruptedBanner();
+}
+
 async function createSection(e) {
     e.preventDefault();
     const title = document.getElementById('section-title').value;
@@ -258,35 +744,416 @@ async function createSection(e) {
     if (resp.ok) { location.reload(); }
     else { alert('Failed to create section'); }
 }
+// 2026-09-22: report a client-side upload failure to the server's
+// audit trail (events table via the telemetry beacon). The point:
+// failures that happen BEFORE the request reaches the server
+// (Cloudflare edge 413s on oversized bodies, mid-POST network drops)
+// previously left ZERO server-side trace — the user saw "some error"
+// while our logs stayed silent. The beacon body is tiny, so it always
+// fits the tunnel's 100MB edge cap. Best-effort only — telemetry
+// must never break the upload UI.
+function reportUploadError(path, ctx) {
+    try {
+        if (window.Telemetry && window.Telemetry.trackUploadError) {
+            window.Telemetry.trackUploadError(path, ctx);
+        }
+    } catch (_) { /* never break the upload UI */ }
+}
+
 async function uploadVideo(sectionId, input) {
     const files = Array.from(input.files || []);
     if (files.length === 0) return;
 
-    if (files.length === 1) {
-        // Single file: use the regular endpoint and redirect to video page
-        const form = new FormData();
-        form.append('file', files[0]);
-        const resp = await fetch('/api/videos/upload/' + sectionId, { method: 'POST', body: form });
-        const { ok, data } = await safeJsonParse(resp);
-        if (ok) {
-            window.location.href = '/video/' + data.video_id;
-        } else {
-            alert('Upload failed: ' + (data.detail || 'Unknown error'));
+    // 2026-09-08: upload feedback. The old code gave zero signal while
+    // the file POSTed (a 500 MB upload can take minutes on slow wifi),
+    // so users clicked again / navigated away and broke the upload.
+    // Now: spinner + label + real % progress (via XHR upload.onprogress
+    // for single files; per-file steps for bulk), button disabled
+    // while in flight, UI restored on error. On success we navigate
+    // away anyway (single) or reload (bulk), so no success state is
+    // needed — the label switches to "Finishing up…" when the request
+    // body is fully sent and we're waiting for the server's 202.
+    const btn = document.getElementById('upload-btn-' + sectionId);
+    const progressBox = document.getElementById('upload-progress-' + sectionId);
+    const label = document.getElementById('upload-progress-label-' + sectionId);
+    const pct = document.getElementById('upload-progress-pct-' + sectionId);
+    const bar = document.getElementById('upload-progress-bar-' + sectionId);
+    const hint = document.getElementById('upload-progress-hint-' + sectionId);
+
+    const totalBytes = files.reduce((n, f) => n + f.size, 0);
+    const describe = files.length === 1
+        ? files[0].name
+        : `${files.length} files (${(totalBytes / 1048576).toFixed(1)} MB)`;
+
+    const setProgress = (fraction, text) => {
+        const p = Math.min(100, Math.max(0, Math.round(fraction * 100)));
+        if (bar) bar.style.width = p + '%';
+        if (pct) pct.textContent = p > 0 && p < 100 ? p + '%' : '';
+        if (label && text) label.textContent = text;
+    };
+    const startUi = () => {
+        if (btn) { btn.disabled = true; btn.classList.add('opacity-50', 'cursor-not-allowed'); btn.textContent = '⏳ Uploading…'; }
+        if (progressBox) progressBox.classList.remove('hidden');
+        if (hint) hint.classList.remove('hidden');
+        window._uploadInFlight = true;   // the beforeunload guard's flag
+        setProgress(0, `Uploading ${describe}…`);
+    };
+    const resetUi = () => {
+        if (btn) { btn.disabled = false; btn.classList.remove('opacity-50', 'cursor-not-allowed'); btn.textContent = '+ Upload Video'; }
+        if (progressBox) progressBox.classList.add('hidden');
+        if (hint) hint.classList.add('hidden');
+        window._uploadInFlight = false;
+        setProgress(0, '');
+        input.value = '';
+        const cancelBtn = document.getElementById('upload-cancel-' + sectionId);
+        if (cancelBtn) cancelBtn.classList.add('hidden');
+        window._cancelUpload = null;
+    };
+
+    // XHR wrapper (fetch can't report upload progress; XHR's
+    // upload.onprogress gives real bytes-sent events).
+    const postMultipart = (url, form, onFraction) => new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable && onFraction) onFraction(e.loaded / e.total);
+        };
+        xhr.onload = () => {
+            let data = null;
+            try { data = JSON.parse(xhr.responseText); } catch (_) { /* non-JSON */ }
+            resolve({ status: xhr.status, ok: xhr.status >= 200 && xhr.status < 300, data });
+        };
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(form);
+    });
+
+    // 2026-09-21 (13a): the CHUNKED uploader — files >100MB can't go
+    // through the Cloudflare tunnel as one request (the free plan's
+    // 100MB edge cap), so big files are sliced client-side into
+    // server-planned chunks (init → chunk×N → complete; the API is
+    // registry §3, live-verified by scripts/smoke_test_chunked_upload.py).
+    // Design decisions:
+    //   - ≤100MB keeps the legacy single-request path (fast, one hop)
+    //   - >100MB → chunked; the threshold is the EDGE cap, not our tier
+    //     limit — the SERVER enforces the tier wording either way
+    //   - per-chunk retry (3 attempts): a flaky wifi drop re-sends ONE
+    //     32MB chunk, never the whole file
+    //   - cancel button = the DELETE session endpoint (instant quota
+    //     release, registry §2's valve)
+    //   - the interrupted-upload banner (§3a) shows on page load if
+    //     the user's last session was swept/cancelled
+    const CHUNK_THRESHOLD = 100 * 1024 * 1024;  // the edge cap
+    const CHUNK_RETRIES = 3;
+
+    // 2026-09-26: handle the structured 400 from init when the user
+    // has another upload in flight (known-issues §6, the 9/26 incident
+    // where a stale "active" session soft-blocked a fresh upload for
+    // the full 1h TTL). The server now returns
+    //   {code: "active_session_in_progress",
+    //    message: "...",
+    //    session: {id, filename, declared_size, total_chunks,
+    //              started_at, last_chunk_at, expires_at}}
+    // — we render the active-session modal with the two honest
+    // choices (owner-ratified 2026-09-27): KEEP WAITING (the upload
+    // continues in the background — it's still receiving, don't kill
+    // it) or CANCEL IT (frees the space, this new file starts).
+    // OK/Cancel map: OK = cancel the previous + upload the new one;
+    // Cancel = keep waiting (the new pick is discarded).
+    function handleActiveSessionError(payload, onRetry) {
+        const sess = payload && payload.session;
+        const filename = sess ? sess.filename : 'another file';
+        const sizeMb = sess && sess.declared_size
+            ? (sess.declared_size / 1048576).toFixed(0) + ' MB'
+            : 'unknown size';
+        const got = sess ? (sess.received_chunks || []).length : null;
+        const chunkText = sess && got !== null
+            ? ` — ${got}/${sess.total_chunks} chunks received`
+            : '';
+        const ageMin = sess && sess.last_chunk_at
+            ? Math.max(0, Math.round((Date.now() - new Date(sess.last_chunk_at).getTime()) / 60000))
+            : null;
+        const ageText = ageMin === null
+            ? ''
+            : ageMin < 1
+                ? ' (active just now)'
+                : ageMin < 60
+                    ? ` (last activity ${ageMin} min ago)`
+                    : ` (last activity ${Math.round(ageMin / 60)} h ago)`;
+
+        const ok = window.confirm(
+            `Another upload is still in progress.\n\n` +
+            `File: ${filename} (${sizeMb})${chunkText}${ageText}\n\n` +
+            `It's still receiving — your progress is preserved.\n\n` +
+            `OK = cancel that upload and start this new one.\n` +
+            `Cancel = keep waiting (this new pick is discarded).`
+        );
+        if (!ok || !sess) {
+            throw new Error(payload.message || 'Another upload is in progress. Your new pick was not started.');
         }
-    } else {
-        // Multiple files: use bulk endpoint and reload to show results
-        const form = new FormData();
-        for (const f of files) form.append('files', f);
-        const resp = await fetch('/api/videos/upload-bulk/' + sectionId, { method: 'POST', body: form });
-        const { ok, data } = await safeJsonParse(resp);
-        if (ok) {
-            const msg = `Queued: ${data.queued}, Skipped: ${data.skipped}.`
-                + (data.skipped > 0 ? '\n\nSkipped files:\n' + data.results.filter(r => r.status === 'skipped').map(r => `${r.filename}: ${r.error}`).join('\n') : '');
+        // User chose OK — DELETE the active session, then retry init.
+        return fetch('/api/upload-sessions/' + encodeURIComponent(sess.id), {
+            method: 'DELETE', credentials: 'include',
+        }).then((r) => {
+            if (!r.ok) {
+                throw new Error('Could not cancel the previous upload (server said ' + r.status + ').');
+            }
+            return onRetry();
+        });
+    }
+
+    async function uploadChunked(sectionId, file, ui, resume = null) {
+        // 1. init — UNLESS we're resuming an existing session (the
+        //    Resume card path: session already exists, we only need
+        //    to send the missing chunks). All init validation ran
+        //    when the session was created.
+        let session_id, chunk_size, total_chunks, received = [];
+        if (resume) {
+            // NOTE: the /me payload carries the id as `id` (not
+            // `session_id` — the 9/28 incident was destructuring
+            // `session_id` here → PUT .../undefined/... → 404
+            // "Upload session not found" on the first chunk).
+            ({
+                id: session_id,
+                chunk_size,
+                total_chunks,
+                received_chunks: received,
+            } = resume);
+            if (!session_id || !chunk_size) {
+                throw new Error('Resume failed — the session data is incomplete. Reload the page and try again.');
+            }
+        } else {
+            let resp = await fetch('/api/upload-sessions/init', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    section_id: sectionId,
+                    filename: file.name,
+                    declared_size: file.size,
+                }),
+            });
+            const init = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                // Structured 400 (one-active-session rule, known-issues §6).
+                if (resp.status === 400 && init && init.code === 'active_session_in_progress') {
+                    return handleActiveSessionError(init, () => uploadChunked(sectionId, file, ui));
+                }
+                throw Object.assign(new Error(init.detail || init.message || `Server error (${resp.status})`), { status: resp.status });
+            }
+            ({ session_id, chunk_size, total_chunks } = init);
+        }
+
+        // The cancel affordance while chunks fly.
+        ui.setCancel(() => fetch('/api/upload-sessions/' + session_id, {
+            method: 'DELETE', credentials: 'include',
+        }).then(() => { cancelled = true; }));
+        const cancelBtn = document.getElementById('upload-cancel-' + sectionId);
+        if (cancelBtn) cancelBtn.classList.remove('hidden');
+
+        let cancelled = false;
+
+        // 2. chunks: slice + PUT. The LAST chunk is the remainder
+        //    (matches the server's declared-size verification).
+        //    On RESUME (known-issues §6, 2026-09-27): skip chunks the
+        //    server already has — only the missing ones fly.
+        const already = new Set(received);
+        for (let i = 0; i < total_chunks; i++) {
+            if (cancelled) throw new Error('Upload cancelled');
+            if (already.has(i)) continue;  // resume: nothing to re-send
+            const start = i * chunk_size;
+            const end = (i === total_chunks - 1)
+                ? file.size
+                : (i + 1) * chunk_size;
+            const blob = file.slice(start, end);
+
+            // Per-chunk retry — one flaky wifi moment re-sends ONE
+            // chunk (32MB), never the whole file.
+            let lastErr = null;
+            for (let attempt = 1; attempt <= CHUNK_RETRIES; attempt++) {
+                try {
+                    const r = await fetch(
+                        `/api/upload-sessions/${session_id}/chunk/${i}`,
+                        { method: 'PUT', credentials: 'include', body: blob },
+                    );
+                    if (r.ok) { lastErr = null; break; }
+                    const d = await r.json().catch(() => ({}));
+                    // 409: the session was swept/completed — not retryable.
+                    if (r.status === 409) throw Object.assign(
+                        new Error(d.detail || 'Session expired'), { fatal: true });
+                    lastErr = new Error(d.detail || `Chunk ${i + 1} failed (${r.status})`);
+                } catch (e) {
+                    if (e.fatal) throw e;
+                    lastErr = e;
+                }
+                if (attempt < CHUNK_RETRIES) {
+                    await new Promise(r => setTimeout(r, 500 * attempt));
+                }
+            }
+            if (lastErr) throw lastErr;
+
+            ui.progress((i + 1) / total_chunks,
+                `Uploading ${ui.describe || describe}… chunk ${i + 1}/${total_chunks}`);
+        }
+
+        // 3. complete: assemble + queue handoff → navigate like the
+        //    legacy path does.
+        ui.progress(1, 'Finishing up…');
+        const respC = await fetch(`/api/upload-sessions/${session_id}/complete`, {
+            method: 'POST', credentials: 'include',
+        });
+        const done = await respC.json().catch(() => ({}));
+        if (!respC.ok) {
+            throw new Error(done.detail || `Server error (${respC.status})`);
+        }
+        return done.video_id;
+    }
+
+    startUi();
+    try {
+        // RESUME path (known-issues §6, 2026-09-27): the Resume card's
+        // picker sets input._resume. The user re-selected the same
+        // file — verify name+size match the session, then continue
+        // from the first missing chunk. Nothing re-uploads.
+        const resume = input._resume;
+        if (resume) {
+            const f = files[0];
+            const sameFile = f
+                && f.name === resume.filename
+                && f.size === resume.declared_size;
+            if (!sameFile) {
+                delete input._resume;
+                alert(
+                    `To resume "${resume.filename}", re-select that same file ` +
+                    `(${_fmtMb(resume.declared_size)}).\n\n` +
+                    (f ? `You picked "${f.name}" (${_fmtMb(f.size)}) instead.` : '')
+                );
+                resetUi();
+                return;
+            }
+            delete input._resume;
+            const videoId = await uploadChunked(sectionId, f, {
+                progress: setProgress,
+                setCancel: (fn) => { window._cancelUpload = fn; },
+            }, resume);
+            window._uploadInFlight = false;   // our own nav — don't fire the guard
+            window.location.href = '/video/' + videoId;
+        } else if (files.length === 1 && files[0].size > CHUNK_THRESHOLD) {
+            // ONE BIG FILE → the chunked path.
+            const videoId = await uploadChunked(sectionId, files[0], {
+                progress: setProgress,
+                setCancel: (fn) => { window._cancelUpload = fn; },
+            });
+            window._uploadInFlight = false;   // our own nav — don't fire the guard
+            window.location.href = '/video/' + videoId;
+        } else if (files.length === 1) {
+            // Single small file: regular endpoint, redirect to video page.
+            const form = new FormData();
+            form.append('file', files[0]);
+            const resp = await postMultipart('/api/videos/upload/' + sectionId, form,
+                (f) => setProgress(f * 0.98)); // hold 2% for server processing
+            if (resp.ok) {
+                setProgress(1, 'Finishing up…');
+                window._uploadInFlight = false;   // our own nav — don't fire the guard
+                window.location.href = '/video/' + resp.data.video_id;
+            } else {
+                const reason = resp.data?.detail || `Server error (${resp.status})`;
+                reportUploadError('single', { filename: files[0].name, error: reason, file_count: 1 });
+                alert('Upload failed: ' + reason);
+                resetUi();
+            }
+        } else {
+            // Multiple files (2026-09-22 rewrite): per-file sequential
+            // uploads. The old code bundled every selected file into ONE
+            // bulk POST — through the Cloudflare tunnel the free plan's
+            // 100MB edge cap rejected the whole batch BEFORE it reached
+            // our server (two real incidents today: an 18-file ~18GB
+            // pick and an 8-file pick both "failed with some error"
+            // while the server log stayed perfectly clean — the request
+            // died at the edge, and no single file was over the per-file
+            // limit so nothing warned client-side). Now each file takes
+            // its own tunnel-safe path: >100MB → its own chunked
+            // session, ≤100MB → the single endpoint. One file failing
+            // never stops the rest; a 429 cap rejection stops the batch
+            // with the honest reason; every failure is beamed to the
+            // server (ui.upload telemetry) so edge/network failures
+            // finally leave a trace.
+            const results = [];
+            let aborted = null;   // a 429 cap reason stops the batch
+            for (let i = 0; i < files.length; i++) {
+                const f = files[i];
+                const base = i / files.length;      // this file's progress window
+                const span = 1 / files.length;
+                const label = `Uploading file ${i + 1}/${files.length}: ${f.name}`;
+                // The cancel affordance is per-file (chunked sessions
+                // only) — clear the previous file's before starting.
+                window._cancelUpload = null;
+                const prevCancel = document.getElementById('upload-cancel-' + sectionId);
+                if (prevCancel) prevCancel.classList.add('hidden');
+                try {
+                    if (f.size > CHUNK_THRESHOLD) {
+                        const videoId = await uploadChunked(sectionId, f, {
+                            progress: (frac, text) => setProgress(base + frac * span, text || label),
+                            setCancel: (fn) => { window._cancelUpload = fn; },
+                            describe: f.name,
+                        });
+                        results.push({ filename: f.name, ok: true, videoId });
+                    } else {
+                        const form = new FormData();
+                        form.append('file', f);
+                        const resp = await postMultipart('/api/videos/upload/' + sectionId, form,
+                            (frac) => setProgress(base + frac * span * 0.98, label));
+                        if (resp.ok) {
+                            setProgress(base + span, label);
+                            results.push({ filename: f.name, ok: true, videoId: resp.data.video_id });
+                        } else {
+                            const reason = resp.data?.detail || `Server error (${resp.status})`;
+                            results.push({ filename: f.name, ok: false, error: reason });
+                            reportUploadError('bulk', { filename: f.name, error: reason, file_count: files.length });
+                            // Daily/in-flight caps apply to the whole
+                            // batch — don't keep hammering; report why
+                            // and let the user retry the rest later.
+                            if (resp.status === 429) { aborted = reason; break; }
+                        }
+                    }
+                } catch (err) {
+                    if (/cancelled/i.test(err.message || '')) {
+                        resetUi();
+                        return;   // user pressed cancel — no scary alert;
+                                  // files already uploaded stay queued
+                    }
+                    const reason = err.message || 'Network error';
+                    results.push({ filename: f.name, ok: false, error: reason });
+                    reportUploadError('bulk', { filename: f.name, error: reason, file_count: files.length });
+                }
+            }
+            const okCount = results.filter(r => r.ok).length;
+            const failed = results.filter(r => !r.ok);
+            let msg = `Uploaded ${okCount} of ${files.length} file(s).`;
+            if (aborted) {
+                const skipped = files.length - results.length;
+                msg += `\n\nStopped early: ${aborted}`
+                    + (skipped > 0 ? `\n(${skipped} file(s) not attempted — upload them again later.)` : '');
+            }
+            if (failed.length) {
+                msg += '\n\nFailed:\n' + failed.map(r => `${r.filename}: ${r.error}`).join('\n');
+            }
             alert(msg);
-            location.reload();
-        } else {
-            alert('Bulk upload failed: ' + (data.detail || 'Unknown error'));
+            window._uploadInFlight = false;   // our own reload — don't fire the guard
+            if (okCount > 0) location.reload(); else resetUi();
         }
+    } catch (err) {
+        if (/cancelled/i.test(err.message || '')) {
+            resetUi();
+            return;   // user pressed cancel — no scary alert
+        }
+        // The single-big-file chunked path (and any loop-level
+        // surprise) lands here; the multi-file loop reports per-file.
+        reportUploadError(
+            (files.length === 1 && files[0].size > CHUNK_THRESHOLD) ? 'chunked' : 'single',
+            { filename: files.length === 1 ? files[0].name : null,
+              error: err.message || 'Network error', file_count: files.length });
+        alert('Upload failed: ' + (err.message || 'Network error'));
+        resetUi();
     }
 }
 
@@ -361,9 +1228,183 @@ async function retryAllFailed(courseId, sectionId, btn) {
     }
 }
 
-// ── Delete section (MVP2.0, manualTodo #5 extension) ───────────────
-// Mirrors the video-delete pattern: show a confirmation modal that
-// lists what will be deleted, then call DELETE on the section.
+// ── Stuck-queue recovery (2026-09-12) ──────────────────────────────────
+// Videos uploaded right before a server restart can sit in
+// status='queued' forever: the transcribe→generate pipeline runs as
+// an in-memory BackgroundTask that died with the restart, but the DB
+// row still says queued (nothing errors, nothing processes). This
+// calls the admin endpoint that re-queues every stuck video app-wide
+// (not just this section — the stagger makes one batch safe). Same
+// feedback pattern as retryAllFailed.
+async function requeueStuck(btn) {
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+        btn.textContent = '⏳ Re-queueing...';
+    }
+    try {
+        const resp = await fetch('/api/admin/videos/requeue-stuck', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || `Re-queued ${data.requeued} video(s)`, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Re-queue failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                btn.textContent = originalLabel;
+            }
+        }
+    } catch (exc) {
+        showToast('Network error: ' + exc, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            btn.textContent = originalLabel;
+        }
+    }
+}
+
+// ── Owner self-service stuck retry (2026-09-12) ─────────────────────────
+// Same visual treatment as the admin re-queue button, but scoped to
+// THIS section's own videos via the ownership-checked section
+// endpoint (mirrors retryAllFailed's shape). Shown only when the
+// section has queued videos older than the 10-minute grace window —
+// the server re-checks the same condition, so a stale render can
+// at worst get a friendly "no stuck videos" toast.
+
+// ── Admin orphan recovery (2026-09-19) ───────────────────────────────
+// Rows stuck in transcribing/pending after a worker restart ate
+// their in-memory BackgroundTask. The endpoint marks them error
+// (frees the 2-slot queue) and re-dispatches the right pipeline per
+// video type. One click = the whole incident runbook.
+async function recoverOrphans(btn) {
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+        btn.textContent = '🩹 Recovering...';
+    }
+    try {
+        const resp = await fetch('/api/admin/videos/recover-orphans', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            showToast(data.message || `Recovered ${data.recovered} video(s)`, 'success');
+            setTimeout(() => location.reload(), 4000);
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Recovery failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                btn.textContent = originalLabel;
+            }
+        }
+    } catch (exc) {
+        showToast('Network error: ' + exc, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            btn.textContent = originalLabel;
+        }
+    }
+}
+async function retryStuckVideos(courseId, sectionId, btn) {
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('opacity-60', 'cursor-not-allowed');
+        btn.textContent = '⏳ Re-queueing...';
+    }
+    try {
+        const resp = await fetch(
+            `/api/courses/${courseId}/sections/${sectionId}/retry-stuck`,
+            { method: 'POST', headers: {'Content-Type': 'application/json'} }
+        );
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.retried === 0) {
+                showToast(data.message || 'No stuck videos in this section.', 'info');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                    btn.textContent = originalLabel;
+                }
+                return;
+            }
+            showToast(data.message || `Re-queued ${data.retried} stuck video(s)`, 'success');
+            setTimeout(() => location.reload(), 3000);
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Retry failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                btn.textContent = originalLabel;
+            }
+        }
+    } catch (exc) {
+        showToast('Network error: ' + exc, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            btn.textContent = originalLabel;
+        }
+    }
+}
+
+// ── Queued-video cancel (2026-09-17, decision #9) ─────────────────────
+// A queued video hasn't started transcribing — deleting it wastes
+// nothing (no GPU spent) and frees the queue + the 6-in-flight cap.
+// Reuses the existing DELETE endpoint (row + on-disk file). A
+// confirm dialog names the video — this is a destructive action on
+// user content, same pattern as the video-page delete.
+async function cancelQueuedVideo(videoId, title, btn) {
+    // 2026-09-22: EN-first for the beta launch. Chinese original kept for future i18n:
+    //   删除排队中的视频 "${title}"？\n它还没开始转写——现在删除不浪费任何处理资源，也会释放你的上传额度。
+    if (!confirm(`Remove the queued video "${title}" from the queue?\nIt hasn't started transcribing yet — deleting it now wastes no processing resources and frees up your upload allowance.`)) {
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳';
+    }
+    try {
+        const resp = await fetch(`/api/videos/${videoId}`, { method: 'DELETE' });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            showToast('Delete failed: ' + (err.detail || resp.statusText), 'error');
+            if (btn) { btn.disabled = false; btn.textContent = '✕'; }
+            return;
+        }
+        const data = await resp.json();
+        const parts = [];
+        const d = data.deleted || {};
+        if (d.files > 0) parts.push(`${d.files} file${d.files > 1 ? 's' : ''}`);
+        if (d.videos) parts.push('1 video');
+        // 2026-09-22: EN-first for the beta launch. Chinese original kept for future i18n:
+        //   showToast(`已取消排队${parts.length ? '（删除 ' + parts.join(' + ') + '）' : ''}`, 'success');
+        showToast(`Removed from queue${parts.length ? ' (deleted ' + parts.join(' + ') + ')' : ''}`, 'success');
+        // Remove the row without a full reload (the queue position of
+        // siblings shifts server-side on the next poll).
+        const row = btn.closest('.video-row');
+        if (row) row.remove();
+    } catch (e) {
+        // 2026-09-22: EN-first. Chinese original: showToast('网络错误: ' + e.message, 'error');
+        showToast('Network error: ' + e.message, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '✕'; }
+    }
+}
+
 // On success, reload the page so the section disappears from the
 // list. The 1.2s delay before reload lets the user see the toast.
 //
@@ -389,6 +1430,126 @@ function hideDeleteSectionModal() {
     const modal = document.getElementById('delete-section-modal');
     if (modal) modal.classList.add('hidden');
 }
+
+// ── Rename section / edit course (2026-09-12) ─────────────────────────
+// User report: course name/description and section names were
+// create-once. Backend: PUT /api/courses/{id} (existed) +
+// PUT /api/courses/{cid}/sections/{sid} (new). Both save flows reload
+// the page on success so SSR + client state stay in sync — simplest
+// correct persistence model (same pattern the create flows use).
+let _pendingRenameSection = null;
+let _pendingEditCourse = null;
+
+function showRenameSectionModal(sectionId, currentTitle) {
+    _pendingRenameSection = { id: sectionId };
+    const input = document.getElementById('rename-section-input');
+    if (input) {
+        input.value = currentTitle;
+        // Enter key saves (input has no form, so wire it explicitly)
+        input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmRenameSection(); } };
+        input.focus();
+        input.select();
+    }
+    const modal = document.getElementById('rename-section-modal');
+    if (modal) modal.classList.remove('hidden');
+}
+
+function hideRenameSectionModal() {
+    _pendingRenameSection = null;
+    const modal = document.getElementById('rename-section-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function confirmRenameSection() {
+    if (!_pendingRenameSection) return;
+    const input = document.getElementById('rename-section-input');
+    const title = input ? input.value.trim() : '';
+    if (!title) { alert('Section title cannot be empty'); return; }
+    const saveBtn = document.getElementById('rename-section-save-btn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving...'; }
+    try {
+        const resp = await fetch(
+            `/api/courses/${courseId}/sections/${_pendingRenameSection.id}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: title }),
+            }
+        );
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            alert('Rename failed: ' + (data.detail || resp.statusText));
+            return;
+        }
+        location.reload();  // SSR re-renders with the new title
+    } catch (err) {
+        alert('Rename failed: ' + err.message);
+    } finally {
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+        hideRenameSectionModal();
+    }
+}
+
+function showEditCourseModal(courseId, currentTitle, currentDesc) {
+    _pendingEditCourse = { id: courseId };
+    const titleInput = document.getElementById('edit-course-title-input');
+    const descInput = document.getElementById('edit-course-desc-input');
+    if (titleInput) titleInput.value = currentTitle;
+    if (descInput) descInput.value = currentDesc;
+    if (titleInput) {
+        titleInput.focus();
+        titleInput.select();
+        titleInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); confirmEditCourse(); } };
+    }
+    const modal = document.getElementById('edit-course-modal');
+    if (modal) modal.classList.remove('hidden');
+}
+
+function hideEditCourseModal() {
+    _pendingEditCourse = null;
+    const modal = document.getElementById('edit-course-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function confirmEditCourse() {
+    if (!_pendingEditCourse) return;
+    const titleInput = document.getElementById('edit-course-title-input');
+    const descInput = document.getElementById('edit-course-desc-input');
+    const title = titleInput ? titleInput.value.trim() : '';
+    if (!title) { alert('Course name cannot be empty'); return; }
+    const saveBtn = document.getElementById('edit-course-save-btn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving...'; }
+    try {
+        const resp = await fetch(
+            `/api/courses/${_pendingEditCourse.id}`,
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: title,
+                    description: descInput ? descInput.value : '',
+                }),
+            }
+        );
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            alert('Update failed: ' + (data.detail || resp.statusText));
+            return;
+        }
+        location.reload();  // SSR + breadcrumb + sidebar all refresh
+    } catch (err) {
+        alert('Update failed: ' + err.message);
+    } finally {
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+        hideEditCourseModal();
+    }
+}
+
+// Click outside the modals closes them (same UX as delete-modal).
+document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'rename-section-modal') hideRenameSectionModal();
+    if (e.target && e.target.id === 'edit-course-modal') hideEditCourseModal();
+});
 
 async function confirmDeleteSection() {
     if (!_pendingDeleteSection) return;
@@ -436,6 +1597,21 @@ document.addEventListener('keydown', (e) => {
         if (modal && !modal.classList.contains('hidden')) {
             hideDeleteSectionModal();
         }
+    }
+});
+
+// ── beforeunload guard (2026-09-29) ────────────────────────────────────────
+// The chunked/bulk upload loops live in THIS page's JS. Navigating away
+// in the same tab kills them mid-flight (the 9/29 incident: the batch
+// died at 4/15 chunks because Dashboard was opened in the same tab).
+// While an upload is in flight, ask the browser to confirm navigation.
+// Our OWN success navigations clear the flag first (see the four
+// `window._uploadInFlight = false` sites above), so this only fires
+// for user-initiated navigation away.
+window.addEventListener('beforeunload', (e) => {
+    if (window._uploadInFlight) {
+        e.preventDefault();
+        e.returnValue = '';   // required by Chrome/Safari/Edge for the dialog
     }
 });
 </script>

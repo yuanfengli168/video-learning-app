@@ -211,3 +211,107 @@ uvicorn app.main:app --reload
 ```
 
 Visit `http://localhost:8000` — everything works on your machine without any deployment.
+
+---
+
+## Day 6 (Aug 2026): Self-Hosted on Mac Studio (Current Setup)
+
+As of Day 6, the production deployment shifted from "Render.com + Neon PostgreSQL"
+(planned in the section above) to **self-hosted on the Mac Studio running
+24/7 at Yuanfengs-Mac-Studio.local**. This pivot was driven by:
+
+- Single-user soft launch doesn't need cloud elasticity
+- Mac Studio has 10 cores / 64 GB — more than enough for our workload
+- One less moving piece (no DB server to maintain)
+- Chat + LLM calls work better on local Ollama (no egress cost)
+
+### Components
+
+| Component | Process manager | Port | Logs |
+|---|---|---|---|
+| FastAPI app | gunicorn (4 workers × 2 threads) | 8000 | `logs/server.log` |
+| Ollama | `ollama serve` (homebrew-managed) | 11434 | homebrew logs |
+| Cloudflare Tunnel | `cloudflared` (launchd service) | n/a (outbound) | `/var/log/cloudflared.log` |
+
+### Day-to-day operations
+
+```bash
+# Start everything
+bash scripts/start.sh                                  # app (gunicorn)
+brew services start ollama                             # Ollama (if not already)
+sudo launchctl kickstart -kp system/com.cloudflare.cloudflared  # tunnel
+
+# Health check
+curl http://localhost:8000/api/health                  # liveness
+curl http://localhost:8000/api/ready                   # readiness (DB + Ollama)
+
+# Stop the app
+bash scripts/stop.sh
+
+# View logs
+tail -f logs/server.log                                # app access + error
+tail -f /var/log/cloudflared.log                        # tunnel
+
+# Restart workers (e.g. after config change)
+sudo kill -HUP $(cat /tmp/gunicorn.pid 2>/dev/null)    # graceful worker reload
+```
+
+### Capacity (Mac Studio: 10 cores / 64 GB RAM)
+
+- gunicorn: 4 workers × 2 threads = 8 concurrent requests
+- ~300 MB per worker = 1.2 GB total
+- Soft-launch scale (10-20 users): comfortable headroom
+- Bottleneck is rate limits (Day 4/5), not CPU
+
+### Cloudflare Tunnel
+
+The tunnel gives us a real https://*.trycloudflare.com URL without
+port forwarding. Two modes:
+
+```bash
+# Quick (no account, URL changes on restart) — good for testing
+bash scripts/install-cloudflare-tunnel.sh --quick
+
+# Permanent (free Cloudflare account, fixed URL) — for soft launch
+bash scripts/install-cloudflare-tunnel.sh --permanent
+```
+
+The permanent tunnel is installed as a `launchd` system service that
+auto-starts on reboot. Verify with `sudo launchctl list | grep cloudflared`.
+
+### Why not Render anymore
+
+- Day 1-5 doc assumed Render + Neon (cloud). Mac Studio self-hosting
+  is simpler and free. We can re-evaluate at scale (100+ DAU).
+- One caveat: Mac Studio is a single point of failure. Offsite
+  backups via `scripts/setup-backups.sh` are essential.
+
+### Firebase Authorized Domains (Day 9 addendum)
+
+When you expose the app to a new domain (Cloudflare Tunnel, custom
+DNS, etc.), that domain must be added to Firebase's Authorized
+Domains list — otherwise login fails with:
+
+  This domain is not authorized for sign-in.
+  Add localhost to the authorized domains in
+  Firebase Console → Authentication → Settings.
+
+**How to add a new domain**:
+
+1. Open https://console.firebase.google.com/project/video-learning-app-3cf41/authentication/settings
+2. Scroll to **Authorized domains**
+3. Click **Add domain**
+4. For Cloudflare quick tunnels: add `trycloudflare.com` (Firebase
+   treats this as a wildcard prefix)
+5. For permanent custom domains: add each FQDN (e.g. `app.example.com`)
+6. Click **Add**
+
+This must be done in the Firebase Console (not in our code). The
+list survives across deploys — you only need to add each new domain
+once. The Day 6 + Day 8 verification flow hit this gap on first
+phone-test (2026-08-27) because `*.trycloudflare.com` wasn't on the
+list; a 30-second Firebase Console fix unblocked the test.
+
+If you add new deployment targets (custom domain, Render, etc.),
+update this list. The default `localhost` is always there.
+

@@ -65,6 +65,28 @@ class TestExtractYoutubeIdStandardFormats:
             "https://www.youtube.com/embed/dQw4w9WgXcQ"
         ) == "dQw4w9WgXcQ"
 
+    # ── /live/ URLs (2026-09-20: user report — live-stream links didn't parse)
+
+    def test_live_url(self):
+        """youtube.com/live/VIDEO_ID (live-stream URL — user-reported
+        2026-09-20: 'https://www.youtube.com/live/jw_o0xr8MWU?si=...'
+        was rejected with 'Could not extract a valid YouTube ID')"""
+        assert extract_youtube_id(
+            "https://www.youtube.com/live/jw_o0xr8MWU"
+        ) == "jw_o0xr8MWU"
+
+    def test_live_url_with_si_tracking_param(self):
+        """The exact URL from the 2026-09-20 report."""
+        assert extract_youtube_id(
+            "https://www.youtube.com/live/jw_o0xr8MWU?si=dZ9HZmesPAeRsir5"
+        ) == "jw_o0xr8MWU"
+
+    def test_live_url_with_dQw_id(self):
+        """Sanity: the dQw test ID works in /live/ form too."""
+        assert extract_youtube_id(
+            "https://www.youtube.com/live/dQw4w9WgXcQ"
+        ) == "dQw4w9WgXcQ"
+
     def test_mobile_youtube_url(self):
         """m.youtube.com (mobile variant)"""
         assert extract_youtube_id(

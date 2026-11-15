@@ -1,6 +1,16 @@
 # Web framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
+# Gunicorn (Day 6) — production process manager. Spawns 4 workers,
+# each running uvicorn. Workers get auto-restarted on crash, graceful
+# reload, proper SIGTERM handling, access logging, and PID file.
+# In dev we still use `uvicorn --reload` directly (see scripts/start.sh
+# SERVER env var: SERVER=gunicorn for prod, SERVER=uvicorn for dev).
+# Why 'uvicorn.workers.UvicornWorker': gives us uvicorn's fast ASGI
+# loop (httptools) inside gunicorn's process management. The alternative
+# (sync gunicorn worker) would block on the call_llm_with_fallback()
+# Groq latency and starve other requests in the same worker.
+gunicorn>=23.0.0
 jinja2>=3.1.0
 python-multipart>=0.0.20
 # HTMX is loaded via CDN in templates — no pip package needed
@@ -16,11 +26,38 @@ pydantic-settings>=2.7.0
 firebase-admin>=6.2.0
 
 # Transcription
+# - faster-whisper: cross-platform (Intel Mac + Apple Silicon + Linux),
+#   CPU-only via CTranslate2. Always installed.
+# - mlx-whisper: Apple-Silicon-only, uses ANE + Metal GPU (~5-10x faster
+#   than faster-whisper base). The PEP 508 marker below makes pip skip
+#   the install on any non-arm64-darwin machine (Intel Macs, Linux CI,
+#   Codespaces, etc.) — so `pip install -r requirements.txt` still works
+#   everywhere. The app's is_mlx_available() gate returns False on
+#   platforms where this marker skipped the install, and the smart pick
+#   silently falls back to faster-whisper base. See Readme.md and
+#   app/services/transcription.py::is_mlx_available() for details.
 faster-whisper>=1.1.0
+mlx-whisper>=0.4.0; sys_platform == "darwin" and platform_machine == "arm64"
+
+# YouTube captions (Day 3) — replaces Whisper for the auto-fire path when
+# YouTube captions are available (most videos). Much faster (~1-3s vs
+# 5-15min per hour) and free. Used by app/services/youtube_captions.py.
+# Falls back to Whisper when captions are missing/disabled.
+yt-dlp>=2025.1.0
 
 # LLM
 ollama>=0.4.4
 httpx>=0.27.0,<0.28.0
+# LiteLLM (Day 4) — unified API for 100+ LLM providers. Lets us swap
+# between Ollama, Groq, OpenAI with one function call. Reads API keys
+# from OPENAI_API_KEY / GROQ_API_KEY env vars automatically.
+# Tier-based chains configured in app/config.py:
+#   FREE users     → [groq]   (less powerful but free)
+#   PAID/ADMIN     → [ollama, openai]   (Ollama = powerful default,
+#                                       OpenAI = paid fallback when
+#                                       Ollama quota near cap)
+# Quota tracker lives in app/services/llm_quota.py.
+litellm>=1.40.0
 
 # Testing
 pytest>=8.3.0

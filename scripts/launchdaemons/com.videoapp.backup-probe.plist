@@ -26,10 +26,10 @@
     <dict>
         <key>VIDEOAPP_PROJECT_ROOT</key>
         <string>__PROJECT_DIR__</string>
-        <!-- Root's HOME is /var/root, not /Users/jackyli. Override so the
+        <!-- Root's HOME is /var/root, not the user's home. Override so the
              probe writes its status file where the app expects it. -->
         <key>HOME</key>
-        <string>/Users/jackyli</string>
+        <string>__HOME_DIR__</string>
         <!-- PATH must include the system locations so bash, sqlite3, etc.
              resolve. launchd default is too minimal. -->
         <key>PATH</key>

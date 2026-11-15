@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.admin import require_capability
 from app.auth.dependencies import get_current_user
+from app.auth.roles import Capability, user_can_access_video
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.jobs import (
@@ -23,7 +25,8 @@ from app.jobs import (
     set_progress,
     start_job,
 )
-from app.models import Asset, Course, Section, Video
+from app.models import Asset, Course, Section, User, Video
+from app.utils.validation import sanitize_filename
 from app.services.transcription import (
     AVAILABLE_MODELS,
     SMART_PICKS,
@@ -51,6 +54,34 @@ ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
 # 10 GB peaks at ~10 GB RAM during the upload. Tested with a synthetic
 # 10 GB upload in test_videos.py::test_upload_accepts_10_gb_file.
 MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB
+
+# 2026-09-18 (tunnel launch): Cloudflare's FREE plan caps request
+# bodies at 100 MB — anything bigger is rejected at the EDGE before
+# reaching this server, surfacing as an opaque "server error" in the
+# UI (hit with a real 700 MB upload through www.capysmart.com). So the
+# effective cap depends on the request PATH:
+#   - direct (localhost / LAN):      10 GB (admin's big-file workflow)
+#   - through the Cloudflare tunnel:  100 MB (platform limit, not ours)
+# Cloudflare stamps every tunneled request with a Cf-Connecting-Ip
+# header, which is the honest signal that the request traversed the
+# edge. See tests/test_videos.py::test_upload_cap_*_cloudflare*.
+TUNNEL_MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB — Cloudflare free plan
+TUNNEL_SIZE_HINT = (
+    "Cloudflare (the free tunnel plan) caps uploads at 100 MB, so this "
+    "can't go through the public site. Upload the file directly from the "
+    "server machine (http://localhost:8000) or split/compress it."
+)
+
+
+def _effective_max_file_size(request: Request) -> int:
+    """Per-request upload cap: 100 MB via the Cloudflare tunnel, 10 GB direct.
+
+    Cloudflare sets Cf-Connecting-Ip on every request it proxies; a
+    direct localhost/LAN request has no such header.
+    """
+    if request.headers.get("cf-connecting-ip") is not None:
+        return TUNNEL_MAX_FILE_SIZE
+    return MAX_FILE_SIZE
 
 
 @router.get("/models")
@@ -99,11 +130,12 @@ async def list_whisper_models() -> dict[str, Any]:
 
 @router.post("/upload/{section_id}", status_code=202)
 async def upload_video(
+    request: Request,
     section_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(require_capability(Capability.UPLOAD_VIDEO)),
 ) -> dict[str, Any]:
     """Upload a video and queue auto-transcribe + auto-generate.
 
@@ -131,6 +163,20 @@ async def upload_video(
             detail=f"File type '{ext}' not allowed. Allowed: {ALLOWED_EXTENSIONS}",
         )
 
+    # 2026-09-17 (launch hardening #5, audit decision #9): the two
+    # upload caps BEFORE any disk write — 15/day (created_at-based,
+    # no cross-day rollover) + 6 unfinished in-flight. 429 with the
+    # cap-specific reason so the UI can show an actionable message.
+    from app.services.transcribe_queue import (
+        UPLOAD_DAILY_LIMIT,
+        congestion_notice,
+        upload_caps_check,
+    )
+
+    caps = upload_caps_check(db, user.get("uid", ""))
+    if not caps["allowed"]:
+        raise HTTPException(status_code=429, detail=caps["reason"])
+
     # Generate unique filename
     video_id = str(uuid.uuid4())
     saved_filename = f"{video_id}{ext}"
@@ -154,18 +200,46 @@ async def upload_video(
             status_code=400,
             detail="File is empty (0 bytes). The upload may have been cancelled or the source file is broken.",
         )
-    if file_size > MAX_FILE_SIZE:
+    # 2026-09-21 (13a): the tier/override resolver — same limit logic
+    # as the chunked path, so nobody can dodge the per-file cap by
+    # choosing the legacy endpoint. Checked BEFORE the path-based
+    # tunnel/direct cap (the tier limit is the product promise; the
+    # 100MB tunnel cap is the platform constraint beneath it).
+    from app.models import User as _User
+    from app.services.upload_limits import (
+        UploadLimitError as _UploadLimitError,
+        check_file_size as _check_file_size,
+        check_quota_headroom as _check_quota_headroom,
+    )
+
+    _user_row = db.get(_User, user.get("uid", ""))
+    try:
+        _check_file_size(_user_row, file_size)
+        _check_quota_headroom(db, _user_row, file_size)
+    except _UploadLimitError as exc:
         os.remove(file_path)
+        raise HTTPException(status_code=413, detail=exc.message)
+    if file_size > _effective_max_file_size(request):
+        os.remove(file_path)
+        if request.headers.get("cf-connecting-ip") is not None:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large ({file_size / (1024**2):.0f} MB). {TUNNEL_SIZE_HINT}",
+            )
         raise HTTPException(
             status_code=413,
             detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024**3)} GB",
         )
 
-    # Create video record and queue auto-pipeline
+    # Create video record — the row IS the queue entry
+    # Sanitize filename for display — strip path components, control chars,
+    # and cap length. The on-disk file already uses a UUID name, so this
+    # only affects the title (UI) and filename (DB row) fields.
+    safe_filename = sanitize_filename(file.filename or "")
     video = Video(
         id=video_id,
-        title=Path(file.filename).stem,
-        filename=file.filename,
+        title=Path(safe_filename).stem or "upload",
+        filename=safe_filename,
         file_path=str(file_path),
         file_size=file_size,
         section_id=section_id,
@@ -179,8 +253,10 @@ async def upload_video(
         whisper_model=get_default_model_choice(),
     )
     # Start the transcribe job tracker so the UI can poll /status
-    # immediately after the upload completes, before the background
-    # task has a chance to update it.
+    # immediately after the upload completes, before the scheduler
+    # has claimed the row (2026-09-16: the mini-queue now owns the
+    # dispatch — no more in-memory BackgroundTask that dies with
+    # restarts; the scheduler claims this row within ~3s).
     transcribe_job = start_job(
         video_id,
         "transcribe",
@@ -191,18 +267,33 @@ async def upload_video(
     db.add(video)
     db.commit()
 
-    background_tasks.add_task(_run_auto_pipeline, video_id, get_default_model_choice())
+    # NO background_tasks.add_task here — the mini-queue scheduler
+    # (app/services/transcribe_queue.py, started in main.py lifespan)
+    # claims 'queued' rows under the 2-slot cap with per-user
+    # fairness. This is the 9/12 fix: N uploads can no longer start
+    # N Whisper pipelines; restarts no longer evaporate work.
 
-    return {"video_id": video_id, "status": "queued", "auto_process": True}
+    return {
+        "video_id": video_id,
+        "status": "queued",
+        "auto_process": True,
+        # 2026-09-17 (decision #9): the congestion notice (public
+        # queue state, never the user's own usage) + remaining caps —
+        # the UI shows the notice next to the upload button and uses
+        # caps_left to warn proactively.
+        "congestion": congestion_notice(db),
+        "caps_left_today": UPLOAD_DAILY_LIMIT - (caps.get("used_today", 0) + 1),
+    }
 
 
 @router.post("/upload-bulk/{section_id}")
 async def upload_bulk_videos(
+    request: Request,
     section_id: str,
     files: list[UploadFile],
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(require_capability(Capability.UPLOAD_VIDEO)),
 ) -> dict[str, Any]:
     """Upload multiple videos at once and queue auto-processing for each.
 
@@ -230,9 +321,38 @@ async def upload_bulk_videos(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
+    # 2026-09-17 (audit decision #9): bulk uploads share the SAME two
+    # caps as single uploads — 15/day + 6 in-flight. Unlike the single
+    # upload (one 429), the bulk path reports PER-FILE outcomes so a
+    # 15-file batch landing on a half-full day still delivers what
+    # fits — each file is evaluated against the PROJECTED totals
+    # (existing + accepted-so-far in this batch). No batch-level
+    # rejection: a wholly-capped batch returns every file skipped
+    # with its cap reason (the UI's per-file error display).
+    from app.services.transcribe_queue import upload_caps_check
+
+    caps = upload_caps_check(db, user.get("uid", ""))
+
+    # 2026-09-21 (13a): the resolver handles for the per-file tier
+    # checks inside the loop (skip-with-reason, same wording as the
+    # single + chunked paths).
+    from app.models import User as _User
+    from app.services.upload_limits import (
+        UploadLimitError as _UploadLimitError,
+        check_file_size as _check_file_size,
+    )
+
+    _user_row = db.get(_User, user.get("uid", ""))
+
     results: list[dict[str, Any]] = []
     queued = 0
     skipped = 0
+
+    # Projected caps for the batch (existing + this batch's accepted
+    # files must respect both limits — evaluated per file so partial
+    # batches still deliver what fits).
+    in_flight_base = int(caps.get("in_flight", 0))
+    today_base = int(caps.get("used_today", 0))
 
     for upload_file in files:
         filename = upload_file.filename or ""
@@ -243,6 +363,29 @@ async def upload_bulk_videos(
                 "filename": filename,
                 "status": "skipped",
                 "error": f"File type '{ext}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+            })
+            skipped += 1
+            continue
+
+        # Projected caps (decision #9): existing + accepted-so-far
+        # must stay within BOTH limits — a 15-file batch landing on a
+        # half-full day gets partially accepted, each remaining file
+        # reported as skipped with the exact cap reason.
+        if today_base + queued + 1 > 15:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": "Daily upload limit reached (15/day). The rest of "
+                         "this batch can be uploaded after midnight UTC.",
+            })
+            skipped += 1
+            continue
+        if in_flight_base + queued + 1 > 6:
+            results.append({
+                "filename": filename,
+                "status": "skipped",
+                "error": "Too many videos still processing (6 at once). "
+                         "Re-upload the rest once some finish.",
             })
             skipped += 1
             continue
@@ -276,14 +419,35 @@ async def upload_bulk_videos(
             })
             skipped += 1
             continue
-        if file_size > MAX_FILE_SIZE:
+        # 2026-09-21 (13a): the tier/override resolver on the bulk path
+        # too — skip-with-reason (the audit #9 pattern), same wording
+        # as every other path. Checked before the path-based cap.
+        try:
+            _check_file_size(_user_row, file_size)
+        except _UploadLimitError as exc:
             os.remove(file_path)
-            gb = file_size / (1024 ** 3)
             results.append({
                 "filename": filename,
                 "status": "skipped",
-                "error": f"File too large ({gb:.1f} GB). Max: {MAX_FILE_SIZE // (1024 ** 3)} GB",
+                "error": exc.message,
             })
+            skipped += 1
+            continue
+        if file_size > _effective_max_file_size(request):
+            os.remove(file_path)
+            if request.headers.get("cf-connecting-ip") is not None:
+                results.append({
+                    "filename": filename,
+                    "status": "skipped",
+                    "error": f"File too large ({file_size / (1024**2):.0f} MB). {TUNNEL_SIZE_HINT}",
+                })
+            else:
+                gb = file_size / (1024 ** 3)
+                results.append({
+                    "filename": filename,
+                    "status": "skipped",
+                    "error": f"File too large ({gb:.1f} GB). Max: {MAX_FILE_SIZE // (1024 ** 3)} GB",
+                })
             skipped += 1
             continue
 
@@ -309,7 +473,9 @@ async def upload_bulk_videos(
         db.add(video)
         db.commit()
 
-        background_tasks.add_task(_run_auto_pipeline, video_id, get_default_model_choice())
+        # 2026-09-16: NO add_task — the mini-queue scheduler owns
+        # dispatch for bulk uploads too (same rationale as the
+        # single-upload endpoint above).
 
         results.append({
             "filename": filename,
@@ -333,9 +499,18 @@ async def transcribe(
     model_name: str = "base",
     language: str = "auto",
     db: Session = Depends(get_db),
-    user: dict[str, Any] = Depends(get_current_user),
+    user: dict[str, Any] = Depends(
+        require_capability(Capability.REGEN_MATERIALS)
+    ),
 ) -> dict[str, Any]:
     """Kick off transcription in the background. Returns 202 immediately.
+
+    MVP2.1 patch (Day 13): gated on REGEN_MATERIALS (admin + paid
+    only). Previously any signed-in user could re-run whisper on a
+    catalog video — same blast radius as REGEN_MATERIALS (transcribe
+    chains into generate), so they share a capability. FREE users get
+    a 403 + the UI shows an "Upgrade to regenerate" tooltip instead of
+    the button.
 
     The actual work (loading Whisper, running it on the audio, writing
     the Asset) happens in a FastAPI BackgroundTask — see
@@ -355,6 +530,15 @@ async def transcribe(
     course = db.get(Course, section.course_id)
     if course.user_id != user.get("uid", ""):
         raise HTTPException(status_code=403, detail="Not your video")
+
+    # 2026-09-21 (abuse prevention, layers A+C): the re-run guard —
+    # 409 while in-flight (with the >30min staleness escape so dead
+    # pipelines stay recoverable) + the 3/day manual cap. Single
+    # enforcement point shared with the generate endpoint
+    # (app/services/rerun_guards.py).
+    from app.services.rerun_guards import guard_rerun
+
+    guard_rerun(db, video, action="transcribe")
 
     # MVP3.0 #2: accept any of the new model-choice keys (manual
     # picks like "base" + smart picks like "local-best-and-fast").
@@ -668,10 +852,31 @@ def _run_auto_pipeline(video_id: str, model_name: str | None = None) -> None:
     finally:
         db.close()
 
+    # Look up the owner + role from the DB. The request context is
+    # gone (this runs in a BackgroundTask after the response), so we
+    # can't read user/role from a Depends(). The video's section →
+    # course → user_id chain is the source of truth.
+    owner_uid = ""
+    owner_role = 2  # UserRole.FREE — safe default
+    db2 = SessionLocal()
+    try:
+        v = db2.get(Video, video_id)
+        if v and v.section and v.section.course and v.section.course.user_id:
+            owner_uid = v.section.course.user_id
+            owner_user = db2.get(User, owner_uid)
+            if owner_user and owner_user.role is not None:
+                owner_role = owner_user.role
+    finally:
+        db2.close()
+
     # Lazy import avoids coupling videos.py to generation.py at module
     # load time while still sharing the implementation cleanly.
     from app.routers.generation import _run_generate_job
-    _run_generate_job(video_id)
+    # MVP2.1 patch: pass uid + role. Earlier this was called with
+    # only (video_id,) which silently TypeError'd inside the
+    # background task chain — same silent-failure pattern as the
+    # retry-all endpoint in courses.py.
+    _run_generate_job(video_id, owner_uid, owner_role)
 
 @router.get("/{video_id}/status")
 async def get_video_status(
@@ -705,9 +910,27 @@ async def get_video_status(
     transcribe_job = get_job(video_id, "transcribe")
     generate_job = get_job(video_id, "generate")
 
+    # 2026-09-16 (mini-queue): while the video sits in the queue, give
+    # the UI its position + ETA so the user sees 'queued, ~3 ahead,
+    # ~5 min' instead of a frozen 0% bar. Position is an honest FIFO
+    # estimate — the two-pass fairness can start a later video first
+    # if its owner is idle; the ETA uses the measured average
+    # transcribe duration (see transcribe_queue.queue_position).
+    queue_info = None
+    if video.status == "queued" and not video.youtube_id:
+        from app.services.transcribe_queue import queue_position
+
+        try:
+            queue_info = queue_position(db, video_id)
+        except Exception:
+            # Queue math must never break the status poll — worst case
+            # the UI shows the plain 'queued' state it always showed.
+            queue_info = None
+
     return {
         "video_id": video_id,
         "video_status": video.status,
+        "queue": queue_info,
         "transcribe_job": transcribe_job,
         "generate_job": generate_job,
         "eta_text": {
@@ -854,11 +1077,13 @@ async def get_transcript(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Verify ownership
-    section = db.get(Section, video.section_id)
-    course = db.get(Course, section.course_id)
-    if course.user_id != user.get("uid", ""):
-        raise HTTPException(status_code=403, detail="Not your video")
+    # Day 5 hotfix2: visibility-tier check.
+    if not user_can_access_video(user.get("role"), video.visibility):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to read this video's transcript "
+            f"(visibility={video.visibility}, your role={user.get('role')})",
+        )
 
     transcript_asset = db.execute(
         select(Asset).where(
@@ -913,11 +1138,13 @@ async def export_transcript(
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # Verify ownership
-    section = db.get(Section, video.section_id)
-    course = db.get(Course, section.course_id)
-    if course.user_id != user.get("uid", ""):
-        raise HTTPException(status_code=403, detail="Not your video")
+    # Day 5 hotfix2: visibility-tier check.
+    if not user_can_access_video(user.get("role"), video.visibility):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to export this video's transcript "
+            f"(visibility={video.visibility}, your role={user.get('role')})",
+        )
 
     transcript_asset = db.execute(
         select(Asset).where(

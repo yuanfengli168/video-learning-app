@@ -22,12 +22,113 @@ Tagline: *"I curate the best videos on the internet. You watch, learn, and chat.
 |---|---|---|
 | **App code** | `~/Desktop/Githubs/video-learning-app` | FastAPI + SQLite + LiteLLM |
 | **Branch** | `mvp2-production-patches` | (was `mvp3`, renamed 2026-08-22) |
-| **Machine (current)** | MBP M1 Max 32GB | Dev + production |
-| **Machine (future)** | Mac Studio | Will become production after git pull |
+| **Machine: DEV** | MacBook Pro M1 Max **64GB** | Where development + the 2026-09-12 audit actually ran. localhost:8000 today |
+| **Machine: PROD (verified 2026-09-16)** | Mac Studio 2023 (`Mac14,13`), M2 Max, **30-core GPU, 32GB RAM** | Verified on the machine itself: `system_profiler SPDisplaysDataType -json` (sppci_cores=30) + `sysctl hw.memsize hw.model`. Launch target |
 | **LLM provider (free users)** | Groq cloud | `openai/gpt-oss-120b` |
 | **LLM provider (admin)** | Ollama Pro cloud + local `qwen3:14b` | Paid + private |
 | **Auth** | Firebase AuthKit | Email/password, Google sign-in |
-| **Hosting (v1.1+)** | Cloudflare Tunnel | (planned) |
+| **Hosting** | Cloudflare Tunnel | Named tunnel for launch (GO-LIVE-INSTALL) |
+
+> ⚠️ **Machine-spec history (why this table was wrong twice)**: the 9/12
+> audit described a "Mac Studio 64GB" that never existed (it had audited
+> the dev MacBook); the earlier table here said "MBP M1 Max 32GB" (the
+> dev machine is 64GB). Every capacity number now cites the VERIFIED
+> spec above. If a doc/claim conflicts with this table, this table wins
+> unless re-verified on the hardware itself.
+
+---
+
+## 2.5 Deploying to the Mac Studio — what to expect from 2026-09-16's commits
+
+Three launch-hardening commits landed on the dev machine and must be
+verified on the Studio. They are machine-independent code (pure
+Python locks, SQLite pragmas, config values) — the full test suite
+covers their logic — but three things only the real deployment can
+prove (GPU stack, external-volume mmap, launchd chain). Run BOTH:
+
+### Step 1 — the suite (fast, catches logic regressions)
+
+```
+cd ~/Desktop/Githubs/video-learning-app && git pull
+venv/bin/python -m pytest -q        # expect 1509 passing
+```
+
+The suite is machine-agnostic (the conftest mocks transcription
+end-to-end), so a green run means the CODE behaves identically.
+
+### Step 2 — the live-fire checklist (catches what the suite cannot)
+
+```
+bash scripts/restart.sh            # or reinstall the LaunchDaemon
+
+# Layer 1: today's three commits, 1 minute
+sqlite3 /Volumes/Storage-Fast-NVMe/video_learning.db "PRAGMA journal_mode"
+#   → must say: wal                      (commit eec1f36, applied on
+#     first real connection; -wal/-shm files next to the DB are NORMAL
+#     — do not delete them)
+ps aux | grep "[g]unicorn"          # → 1 master + 4 workers
+for i in 1 2 3 4 5; do curl -s -o /dev/null -w "%{time_total}\n" http://localhost:8000/api/health; done
+#   → all sub-100ms, no stragglers     (threads=8 → 32 request slots)
+
+# Layer 2: the 9/12 regression test — needs one real video upload
+#   upload ONE video, then DURING transcription, every 30s:
+curl http://localhost:8000/api/health
+#   PASS = site stays responsive while whisper runs (9/12: it hung
+#   for 4h). Watch memory in Activity Monitor too: one turbo model
+#   + 1-2GB decode buffer is the expected peak, nowhere near swap.
+```
+
+If layer 1's `journal_mode` says anything other than `wal`, check
+that the DB path is the file-backed one from `.env` — the pragma
+listener only fires for file-backed SQLite.
+
+### What each commit changed (ops-facing summary)
+
+| Commit | Change | Ops impact on the Studio |
+|---|---|---|
+| `eec1f36` | SQLite → WAL + busy_timeout 5s + synchronous=NORMAL | Zero-migration: first connection after restart flips the mode. WAL files appear next to the DB. Reads stop stalling behind telemetry writes |
+| `f605486` | model-cache threading.Lock (faster-whisper side) | None visible; MLX side intentionally untouched (subprocess architecture) |
+| `821c8e4` | gunicorn threads 2 → 8 (32 slots); capacity docstring rewritten for the verified 32GB | Slightly higher per-worker memory (~64MB stacks × 4 workers) — well within budget |
+| `0f1cb30` | **Transcription mini-queue**: uploads no longer dispatch BackgroundTasks — `queued` DB rows are claimed by a per-worker scheduler thread (2 slots, two-pass per-user fairness, atomic claim, 5s stagger). Queue position + ETA in the /status poll | Uploads take up to ~3s to START transcribing (was instant). Restarts no longer lose work. **No user action needed if uploads seem briefly idle — the scheduler polls every 3s** |
+| `240b048` | **Upload caps**: 15/day/user (created_at-based, no cross-day rollover) + 6 unfinished in-flight; congestion soft notice on the 202 response | 429s with actionable messages; a fully-capped user sees "resets at midnight UTC". Bulk returns per-file outcomes (partial acceptance), never a batch-level rejection |
+| `ed4f004` | **Queued-video ✕ cancel** on the course page + **Upload activity card** on /admin/analytics (mean/median/max/top-5 + live queue gauge) | ✕ only on queued rows (deleting transcribing is disabled by design). The admin card is the launch-week cockpit — check queue depth there daily |
+
+### Live-fire checklist v2 (2026-09-17 — includes the queue/caps batch)
+
+Run Layer 1 + 2 as before, then:
+
+```
+# Layer 3: the mini-queue (new behavior — verify on the Studio)
+
+# 3a. Upload ONE small test video via the browser as a PAID user.
+#     Expected: 202 instant, video page shows
+#     'queued · 第 1 位' style position (or claimed within ~3s and
+#     the transcribe progress bar starts). If it sits at 0% forever
+#     with no queue info → the scheduler thread didn't start; check
+#     the server log for 'mini-queue scheduler started' (expect 4,
+#     one per worker).
+
+# 3b. While it transcribes: watch the COURSE page — the row badge
+#     flips queued → transcribing → (generating) → ready · T:.. G:..
+#     and the ✕ disappears once transcribing starts.
+
+# 3c. Queue a SECOND video while the first runs → confirm the
+#     status poll shows a queue position/ETA, and after the first
+#     completes the second starts within one scheduler tick (~3s).
+
+# 3d. Upload 3 tiny files in one bulk batch → all 3 queue; per-file
+#     results OK. Then check /admin/analytics → the Upload activity
+#     card shows your test uploads + the queue gauge (waiting/running).
+
+# 3e. With a queued row on the course page, click ✕ → confirm dialog
+#     → row disappears, DELETE removed file+row (check the section
+#     video count drops).
+```
+
+**Launch-day watch items (new):** the Upload activity card is the
+daily cockpit — queue `waiting` should drain within an hour of any
+burst; `mean ≈ median` means load is uniform; a red max/user/day
+>10 means investigate that user.
 
 ---
 

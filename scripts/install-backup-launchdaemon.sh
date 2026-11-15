@@ -28,6 +28,9 @@ RUNTIME_DIR="$HOME/Library/Application Support/VideoApp/scripts/backup"
 SYSTEM_PLIST_DIR="/Library/LaunchDaemons"
 
 # Backup-related plists we manage in the system domain.
+# (2026-09-12: added refresh-youtube-views — nightly YouTube view-count
+# snapshot for the dashboard Top Viewed tab; runs 00:10 SGT, after the
+# 00:00 backup-daily and before the 00:30 prune-events.)
 SYSTEM_PLISTS=(
     "com.videoapp.backup-db"
     "com.videoapp.backup-daily"
@@ -35,6 +38,7 @@ SYSTEM_PLISTS=(
     "com.videoapp.backup-verify"
     "com.videoapp.backup-probe"
     "com.videoapp.prune-events"
+    "com.videoapp.refresh-youtube-views"
 )
 
 # Same labels that we previously installed in the user domain — we unload
@@ -109,6 +113,12 @@ if [[ $DRY_RUN -eq 0 ]]; then
     mkdir -p "$PROBE_RUNTIME_DIR"
     cp -f "$PROJECT_DIR/app/services/backup_monitor.py" "$PROBE_RUNTIME_DIR/"
     ok "Synced probe module → $PROBE_RUNTIME_DIR"
+
+    # prune_events.py is referenced by the prune-events plist at
+    # __RUNTIME_DIR__/prune_events.py — the job runs as root and reads
+    # only from the TCC-clean runtime dir, so keep a copy in sync here.
+    cp -f "$PROJECT_DIR/scripts/prune_events.py" "$RUNTIME_DIR/"
+    ok "Synced prune_events.py → $RUNTIME_DIR"
 else
     echo "  (dry-run, no copy)"
 fi
@@ -181,6 +191,7 @@ for label in "${SYSTEM_PLISTS[@]}"; do
         /usr/bin/sed \
             -e "s|__RUNTIME_DIR__|${RUNTIME_DIR}|g" \
             -e "s|__PROJECT_DIR__|${PROJECT_DIR}|g" \
+            -e "s|__HOME_DIR__|${HOME}|g" \
             "$template" > "$rendered"
         sudo /bin/mv "$rendered" "$target"
         sudo /usr/sbin/chown root:wheel "$target"

@@ -205,6 +205,87 @@ def _parse_vtt_to_segments(vtt_text: str) -> list[dict[str, float | str]]:
     return segments
 
 
+def _dedupe_rolling_captions(
+    segments: list[dict],
+) -> list[dict]:
+    """Collapse YouTube ASR rolling-window duplicates (2026-09-20).
+
+    The auto-caption VTT format repeats content across overlapping
+    cues (verified on a live seoul-guide VTT, user report 2026-09-20):
+
+      cue N   : "Line A."                          (word-timed)
+      cue N+1 : "Line A."            [~10ms echo]
+      cue N+2 : "Line A. Line B."                  (A re-emitted as a
+                                                     rolling prefix + B)
+      cue N+3 : "Line B."            [~10ms echo]
+      cue N+4 : "Line B. Line C."    …and so on
+
+    So every line appears up to 3× in the raw parse. The two shapes:
+
+      1. ECHO: text exactly equals the last emitted line's text and
+         the cue is a ~10ms blip → drop, extend the kept line's end.
+      2. ROLLING PREFIX: text starts with the last emitted line's
+         text and adds new content (contiguous timing) → emit only
+         the DELTA as a new segment.
+
+    Result: one segment per real line, in speaking order, e.g.
+    "Line A." / "Line B." / "Line C." — no repeats, no merged lines.
+
+    Trade-off (auto tracks only): a speaker genuinely repeating a
+    line immediately ("I like it." → "I like it a lot.") collapses
+    the same way the rolling format does — accepted, since keeping
+    3× duplicates on every line is far worse. Manual subs never run
+    this (their repeats are meaningful).
+    """
+    if not segments:
+        return segments
+
+    out: list[dict] = []
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+
+        prev = out[-1] if out else None
+        if prev is None:
+            out.append(dict(seg, text=text))
+            continue
+        prev_text = (prev.get("text") or "").strip()
+        contiguous = float(seg["start"]) <= float(prev["end"]) + 0.5
+
+        # Shape 1: echo of the last emitted line (short contiguous
+        # blip). A repeated line with a real gap between the cues
+        # is genuine speech — keep both.
+        if text == prev_text and contiguous:
+            prev["end"] = max(prev["end"], seg["end"])
+            continue
+
+        # Shape 2: rolling prefix — the cue re-emits the last line
+        # and adds new words (contiguous). Emit only the delta.
+        if (
+            text.startswith(prev_text)
+            and len(text) > len(prev_text)
+            and contiguous
+        ):
+            delta = text[len(prev_text):].strip()
+            if not delta:
+                # Only punctuation/whitespace difference — keep the
+                # longer text on the existing segment.
+                prev["text"] = text
+                prev["end"] = max(prev["end"], seg["end"])
+                continue
+            out.append({
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": delta,
+            })
+            continue
+
+        # Unrelated to the previous line — a fresh line as-is.
+        out.append(dict(seg, text=text))
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Language selection
 # ─────────────────────────────────────────────────────────────────────────────
@@ -477,6 +558,16 @@ def fetch_youtube_captions(
                 f"Caption file for {youtube_id!r} parsed to 0 segments. "
                 f"File may be malformed or contain only metadata."
             )
+
+        # 2026-09-20: de-duplicate YouTube ASR "rolling window" captions.
+        # Auto-caption VTT cues overlap on purpose: a word-timed cue is
+        # followed by a ~10ms echo cue repeating the same line, then the
+        # same line leads the next cue. Every sentence therefore appears
+        # up to 3× in the raw parse (user report 2026-09-20; verified on
+        # the seoul-guide VTT). Manual subs don't use the rolling
+        # pattern, so we only collapse AUTO tracks.
+        if source == "auto":
+            segments = _dedupe_rolling_captions(segments)
 
         # Duration = last segment's end (YouTube's last cue usually
         # trails the video by 1-2s; we use it as a good-enough proxy).
